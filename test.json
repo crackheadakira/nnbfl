@@ -1,0 +1,83 @@
+{
+  "header": {
+    "magic": [
+      70,
+      76,
+      65,
+      78
+    ],
+    "endianness": 65279,
+    "header_size": 20,
+    "micro_version": 0,
+    "minor_version": 0,
+    "major_version": 9,
+    "file_size": 236,
+    "section_count": 2
+  },
+  "sections": [
+    {
+      "PaneAnimTag": {
+        "tag_order": 7,
+        "group_count": 1,
+        "name_offset": 32,
+        "group_array_offset": 44,
+        "user_data_section_offset": 0,
+        "start_frame": 6000,
+        "end_frame": 6030,
+        "is_descending_bind": 0,
+        "reserve0": 0,
+        "reserve1": 0,
+        "o_name": "MosaicRough",
+        "groups": [
+          {
+            "group_name": "Mosaic",
+            "flag": 0,
+            "reserve0": 0
+          }
+        ],
+        "user_data": null
+      }
+    },
+    {
+      "PaneAnimInfo": {
+        "frame_count": 30,
+        "is_looping": false,
+        "textures": [],
+        "contents": [
+          {
+            "name": "P_MosaicCaptureUse_00",
+            "anim_type": "User",
+            "infos": [
+              {
+                "ExtendedUserData": {
+                  "magic": "ExtendedUserDataAnim",
+                  "data": [
+                    {
+                      "block_size": 12,
+                      "unk_1": 0,
+                      "entry_count": 2,
+                      "entries_inside_entry": 2,
+                      "unk_2": 0,
+                      "block_size_2": 12,
+                      "unk_3": 0,
+                      "unk_4": 0,
+                      "unk_5": 0,
+                      "frame_count": 16608,
+                      "values": [
+                        9.0546665,
+                        30.0,
+                        278.63998,
+                        9.0546665
+                      ],
+                      "key": "__CUS_Float_0"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
