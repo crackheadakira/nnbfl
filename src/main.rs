@@ -1,4 +1,4 @@
-use std::env;
+use clap::{Parser, Subcommand};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,191 +11,114 @@ mod bflyt;
 mod core;
 mod ui2d;
 
-fn print_usage() {
-    println!("Usage:");
-    println!("\t./bflan extract <input_file_or_dir> <output_file_or_dir>",);
-    println!("\t./bflan pack <input_file_or_dir> <output_file_or_dir>",);
-    println!("\t./bflan test <input_file_or_dir>",);
+#[derive(Parser)]
+#[command(name = "nnbfl")]
+#[command(version)]
+struct Cli {
+    #[command(subcommand)]
+    format: Format,
 }
 
-fn find_files(dir: &Path, target_ext: &str, files: &mut Vec<PathBuf>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                find_files(&path, target_ext, files);
-            } else if path.is_file()
-                && let Some(ext) = path.extension()
-                && ext == target_ext
-            {
-                files.push(path);
-            }
-        }
-    }
+#[derive(Subcommand)]
+enum Format {
+    /// Work with BFLAN (Animation) files
+    Bflan {
+        #[command(subcommand)]
+        action: Action,
+    },
+
+    /// Work with BFLYT (Layout) files
+    Bflyt {
+        #[command(subcommand)]
+        action: Action,
+    },
 }
 
-fn extract_file(input_path: &Path, output_path: &Path) {
-    let file_in = match fs::read(input_path) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("Failed to read {:?}: {}", input_path, e);
-            return;
-        }
-    };
+#[derive(Subcommand)]
+enum Action {
+    /// Extracts a binary file to JSON
+    Extract { input: PathBuf, output: PathBuf },
 
-    let bflan_file = match Bflan::parse(&file_in) {
-        Ok(res) => res,
-        Err(e) => {
-            eprintln!("Failed to parse {:?}: {}", input_path, e);
-            return;
-        }
-    };
+    /// Packs a JSON file into binary
+    Pack { input: PathBuf, output: PathBuf },
 
-    let json_string = match serde_json::to_string_pretty(&bflan_file) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to serialize {:?}: {}", input_path, e);
-            return;
-        }
-    };
-
-    if let Err(e) = fs::write(output_path, json_string) {
-        eprintln!("Failed to write output {:?}: {}", output_path, e);
-    } else {
-        println!("Extracted: {:?}", input_path.file_name().unwrap());
-    }
-}
-
-fn pack_file(input_path: &Path, output_path: &Path) {
-    let json_string = match fs::read_to_string(input_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to read {:?}: {}", input_path, e);
-            return;
-        }
-    };
-
-    let json_data: Bflan = match serde_json::from_str(&json_string) {
-        Ok(data) => data,
-        Err(e) => {
-            eprintln!("Failed to deserialize {:?}: {}", input_path, e);
-            return;
-        }
-    };
-
-    let writer = json_data.serialize();
-    let file_out = writer.buffer;
-
-    if let Err(e) = fs::write(output_path, file_out) {
-        eprintln!("Failed to write output {:?}: {}", output_path, e);
-    } else {
-        println!("Packed: {:?}", input_path.file_name().unwrap());
-    }
-}
-
-fn process_batch(command: &str, in_dir: &Path, out_dir: &Path) {
-    if let Err(e) = fs::create_dir_all(out_dir) {
-        eprintln!("Failed to create output directory {:?}: {}", out_dir, e);
-        exit(1);
-    }
-
-    let mut target_files = Vec::new();
-    let ext = if command == "extract" {
-        "bflan"
-    } else {
-        "json"
-    };
-
-    find_files(in_dir, ext, &mut target_files);
-
-    if target_files.is_empty() {
-        println!("No .{} files found in {:?}", ext, in_dir);
-        return;
-    }
-
-    println!("Found {} files. Processing...", target_files.len());
-
-    for path in target_files {
-        let relative_path = path.strip_prefix(in_dir).unwrap_or(&path);
-        let mut out_path = out_dir.join(relative_path);
-
-        if command == "extract" {
-            out_path.set_extension("json");
-        } else {
-            out_path.set_extension("bflan");
-        }
-
-        if let Some(parent) = out_path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-
-        if command == "extract" {
-            extract_file(&path, &out_path);
-        } else {
-            pack_file(&path, &out_path);
-        }
-    }
-
-    println!("Batch {} complete!", command);
+    /// Runs a binary-accurate roundtrip test
+    Test { input: PathBuf },
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let cli = Cli::parse();
 
-    if args.len() < 3 {
-        print_usage();
-        exit(1);
-    }
-
-    let command = args[1].as_str();
-    let input_path = Path::new(&args[2]);
-
-    if !input_path.exists() {
-        eprintln!("Error: Input path does not exist.");
-        exit(1);
-    }
-
-    match command {
-        "extract" | "pack" => {
-            if args.len() < 4 {
-                eprintln!("No output dir specified");
-                print_usage();
-                exit(1);
-            }
-
-            let output_path = Path::new(&args[3]);
-            if input_path.is_dir() {
-                process_batch(command, input_path, output_path);
-            } else {
-                if let Some(parent) = output_path.parent() {
-                    let _ = fs::create_dir_all(parent);
-                }
-                if command == "extract" {
-                    extract_file(input_path, output_path);
-                } else {
-                    pack_file(input_path, output_path);
-                }
-            }
+    // Route the format first
+    match &cli.format {
+        Format::Bflan { action } => {
+            handle_action("bflan", action);
         }
-        "test" => {
-            let mut blan_files = Vec::new();
-            if input_path.is_dir() {
-                find_files(input_path, "bflan", &mut blan_files);
-            } else {
-                blan_files.push(input_path.into());
-            }
-
-            test_roundtrip(input_path, blan_files);
-        }
-        _ => {
-            eprintln!("Unknown command: {}", command);
-            print_usage();
-            exit(1);
+        Format::Bflyt { action } => {
+            handle_action("bflyt", action);
         }
     }
 }
 
-fn test_roundtrip(input_dir: &Path, bflan_files: Vec<PathBuf>) {
+fn handle_action(ext: &str, action: &Action) {
+    match action {
+        Action::Extract { input, output } => {
+            validate_input(input);
+            process_command("extract", ext, input, output);
+        }
+        Action::Pack { input, output } => {
+            validate_input(input);
+            process_command("pack", ext, input, output);
+        }
+        Action::Test { input } => {
+            validate_input(input);
+            let mut files = Vec::new();
+            if input.is_dir() {
+                find_files(input, ext, &mut files);
+            } else {
+                files.push(input.clone());
+            }
+
+            match ext {
+                "bflan" => test_roundtrip_bflan(input, files),
+                "bflyt" => {
+                    // test_roundtrip_bflyt(input, files)
+                    println!("BFLYT testing not yet implemented!");
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
+fn validate_input(input: &Path) {
+    if !input.exists() {
+        eprintln!("Error: Input path {:?} does not exist.", input);
+        exit(1);
+    }
+}
+
+fn process_command(command: &str, ext: &str, input_path: &Path, output_path: &Path) {
+    if input_path.is_dir() {
+        process_batch(command, input_path, output_path);
+    } else {
+        if let Some(parent) = output_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        match (command, ext) {
+            ("extract", "bflan") => extract_bflan_file(input_path, output_path),
+            ("pack", "bflan") => pack_bflan_file(input_path, output_path),
+
+            ("extract", "bflyt") => println!("BFLYT extract not yet implemented!"),
+            ("pack", "bflyt") => println!("BFLYT pack not yet implemented!"),
+
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn test_roundtrip_bflan(input_dir: &Path, bflan_files: Vec<PathBuf>) {
     let mut success_count = 0;
     let mut fail_count = 0;
 
@@ -277,4 +200,125 @@ fn test_roundtrip(input_dir: &Path, bflan_files: Vec<PathBuf>) {
 
     println!("Total successful:\t{success_count}");
     println!("Total failed:\t\t{fail_count}");
+}
+
+fn find_files(dir: &Path, target_ext: &str, files: &mut Vec<PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                find_files(&path, target_ext, files);
+            } else if path.is_file()
+                && let Some(ext) = path.extension()
+                && ext == target_ext
+            {
+                files.push(path);
+            }
+        }
+    }
+}
+
+fn extract_bflan_file(input_path: &Path, output_path: &Path) {
+    let file_in = match fs::read(input_path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("Failed to read {:?}: {}", input_path, e);
+            return;
+        }
+    };
+
+    let bflan_file = match Bflan::parse(&file_in) {
+        Ok(res) => res,
+        Err(e) => {
+            eprintln!("Failed to parse {:?}: {}", input_path, e);
+            return;
+        }
+    };
+
+    let json_string = match serde_json::to_string_pretty(&bflan_file) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to serialize {:?}: {}", input_path, e);
+            return;
+        }
+    };
+
+    if let Err(e) = fs::write(output_path, json_string) {
+        eprintln!("Failed to write output {:?}: {}", output_path, e);
+    } else {
+        println!("Extracted: {:?}", input_path.file_name().unwrap());
+    }
+}
+
+fn pack_bflan_file(input_path: &Path, output_path: &Path) {
+    let json_string = match fs::read_to_string(input_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to read {:?}: {}", input_path, e);
+            return;
+        }
+    };
+
+    let json_data: Bflan = match serde_json::from_str(&json_string) {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("Failed to deserialize {:?}: {}", input_path, e);
+            return;
+        }
+    };
+
+    let writer = json_data.serialize();
+    let file_out = writer.buffer;
+
+    if let Err(e) = fs::write(output_path, file_out) {
+        eprintln!("Failed to write output {:?}: {}", output_path, e);
+    } else {
+        println!("Packed: {:?}", input_path.file_name().unwrap());
+    }
+}
+
+fn process_batch(command: &str, in_dir: &Path, out_dir: &Path) {
+    if let Err(e) = fs::create_dir_all(out_dir) {
+        eprintln!("Failed to create output directory {:?}: {}", out_dir, e);
+        exit(1);
+    }
+
+    let mut target_files = Vec::new();
+    let ext = if command == "extract" {
+        "bflan"
+    } else {
+        "json"
+    };
+
+    find_files(in_dir, ext, &mut target_files);
+
+    if target_files.is_empty() {
+        println!("No .{} files found in {:?}", ext, in_dir);
+        return;
+    }
+
+    println!("Found {} files. Processing...", target_files.len());
+
+    for path in target_files {
+        let relative_path = path.strip_prefix(in_dir).unwrap_or(&path);
+        let mut out_path = out_dir.join(relative_path);
+
+        if command == "extract" {
+            out_path.set_extension("json");
+        } else {
+            out_path.set_extension("bflan");
+        }
+
+        if let Some(parent) = out_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        if command == "extract" {
+            extract_bflan_file(&path, &out_path);
+        } else {
+            pack_bflan_file(&path, &out_path);
+        }
+    }
+
+    println!("Batch {} complete!", command);
 }
