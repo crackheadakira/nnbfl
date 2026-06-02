@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{bflan_writer::Writer, tchar_code32};
+use crate::{
+    cursor::{Cursor, Writer},
+    tchar_code32,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[repr(u32)]
@@ -104,84 +107,6 @@ impl From<u8> for Ui2dUserDataType {
             3 => Self::SystemData,
             _ => Self::Invalid,
         }
-    }
-}
-
-pub struct Cursor<'a> {
-    pub data: &'a [u8],
-    pub pos: usize,
-}
-
-impl<'a> Cursor<'a> {
-    fn read<T: Copy>(&mut self) -> T {
-        let size = std::mem::size_of::<T>();
-        let end = self.pos + size;
-        let bytes = &self.data[self.pos..end];
-        self.pos = end;
-
-        unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const T) }
-    }
-
-    fn read_u32(&mut self) -> u32 {
-        u32::from_le(self.read::<u32>())
-    }
-
-    fn read_i32(&mut self) -> i32 {
-        i32::from_le(self.read::<i32>())
-    }
-
-    fn read_u16(&mut self) -> u16 {
-        u16::from_le(self.read::<u16>())
-    }
-
-    fn read_u8(&mut self) -> u8 {
-        u8::from_le(self.read::<u8>())
-    }
-
-    fn read_f32(&mut self) -> f32 {
-        let bytes = self.read_bytes(4);
-        let arr: [u8; 4] = bytes.try_into().unwrap();
-        f32::from_le_bytes(arr)
-    }
-
-    fn read_string(&mut self, len: usize) -> String {
-        let bytes = self.read_bytes(len);
-        String::from_utf8_lossy(bytes).into_owned()
-    }
-
-    fn read_fixed_string(&mut self, len: usize) -> String {
-        let bytes = self.read_bytes(len);
-        let end = bytes.iter().position(|&b| b == 0).unwrap_or(len);
-        String::from_utf8_lossy(&bytes[..end]).into_owned()
-    }
-
-    fn read_null_terminated_string(&mut self) -> String {
-        let start = self.pos;
-        let mut end = start;
-
-        while end < self.data.len() && self.data[end] != 0 {
-            end += 1;
-        }
-
-        let bytes = &self.data[start..end];
-
-        self.pos = if end < self.data.len() { end + 1 } else { end };
-
-        String::from_utf8_lossy(bytes).into_owned()
-    }
-
-    fn read_bytes(&mut self, len: usize) -> &[u8] {
-        let start = self.pos;
-        self.pos += len;
-        &self.data[start..start + len]
-    }
-
-    fn seek(&mut self, pos: usize) {
-        self.pos = pos;
-    }
-
-    fn seek_relative(&mut self, pos: usize) {
-        self.pos += pos;
     }
 }
 
@@ -532,7 +457,7 @@ pub struct PaneAnimInfo {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BflanHeader {
-    pub magic: [u8; 4],
+    pub magic: u32,
     pub endianness: u16,
     pub header_size: u16,
     pub micro_version: u16,
@@ -556,6 +481,35 @@ pub enum Sections {
     Unknown(SectionHeader),
 }
 
+impl Sections {
+    pub fn serialize(&self, writer: &mut Writer) {
+        let section_start = writer.pos();
+
+        writer.mark("Section (header)");
+        match self {
+            Sections::UserData(_) => writer.write_u32(SectionType::UserData as u32),
+            Sections::PaneAnimTag(_) => writer.write_u32(SectionType::PaneAnimTag as u32),
+            Sections::PaneAnimInfo(_) => writer.write_u32(SectionType::PaneAnimInfo as u32),
+            Sections::Unknown(header) => writer.write_u32(header.magic as u32),
+        }
+
+        let size_pos = writer.write_placeholder_u32();
+
+        writer.mark("Section (data)");
+        match self {
+            Sections::UserData(data) => data.serialize(writer),
+            Sections::PaneAnimTag(tag) => tag.serialize(writer, section_start),
+            Sections::PaneAnimInfo(info) => info.serialize(writer, section_start),
+            Sections::Unknown(_) => {}
+        }
+
+        writer.align(4);
+
+        let size = (writer.pos() - section_start) as u32;
+        writer.patch_u32(size_pos, size);
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ResUi2dUserDataSection {
     pub user_data_count: u16,
@@ -577,6 +531,16 @@ impl ResUi2dUserDataSection {
             user_data_count,
             reserve0,
             user_data,
+        }
+    }
+
+    pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("UserData (section)");
+        writer.write_u16(self.user_data.len() as u16);
+        writer.write_u16(self.reserve0);
+
+        for data in &self.user_data {
+            data.serialize(writer);
         }
     }
 }
@@ -646,6 +610,46 @@ impl ResUi2dUserData {
         cursor.seek(restore_point);
 
         data
+    }
+
+    pub fn serialize(&self, writer: &mut Writer) {
+        let base_offset = writer.pos();
+
+        writer.mark("UserData (data)");
+        let name_offset_pos = writer.write_placeholder_u32();
+        let data_array_offset_pos = writer.write_placeholder_u32();
+        writer.write_u16(self.data_count);
+
+        let data_type_val = match self.data_type {
+            Ui2dUserDataType::String => 0,
+            Ui2dUserDataType::S32 => 1,
+            Ui2dUserDataType::Float => 2,
+            Ui2dUserDataType::SystemData => 3,
+            Ui2dUserDataType::Invalid => 4,
+        };
+        writer.write_u8(data_type_val);
+        writer.write_u8(self.reserve0);
+
+        if !self.data_array.is_empty() {
+            writer.patch_u32(data_array_offset_pos, (writer.pos() - base_offset) as u32);
+
+            for item in &self.data_array {
+                match item {
+                    ResUi2dUserDataInner::Float(f) => writer.write_f32(*f),
+                    ResUi2dUserDataInner::S32(s) => writer.write_i32(*s),
+                    ResUi2dUserDataInner::String(s) => {
+                        writer.write_fixed_string(s, self.data_count as usize);
+                        writer.write_u8(0);
+                    }
+                    ResUi2dUserDataInner::SystemData(_) => {}
+                }
+            }
+        }
+
+        writer.patch_u32(name_offset_pos, (writer.pos() - base_offset) as u32);
+        writer.write_null_terminated_string(&self.o_name);
+
+        writer.align(4);
     }
 }
 
@@ -1192,6 +1196,47 @@ impl ResBflanPaneAnimTag {
 
         tag
     }
+
+    pub fn serialize(&self, writer: &mut Writer, section_start: usize) {
+        writer.mark("PaneAnimTag");
+        writer.write_u16(self.tag_order);
+        writer.write_u16(self.groups.len() as u16);
+
+        let name_offset_pos = writer.write_placeholder_u32();
+        let group_offset_pos = writer.write_placeholder_u32();
+        let user_data_offset_pos = writer.write_placeholder_u32();
+
+        writer.write_u16(self.start_frame);
+        writer.write_u16(self.end_frame);
+        writer.write_u8(self.is_descending_bind);
+        writer.write_u8(self.reserve0);
+        writer.write_u16(self.reserve1);
+
+        writer.patch_u32(name_offset_pos, (writer.pos() - section_start) as u32);
+        writer.write_null_terminated_string(&self.o_name);
+        writer.align(4);
+
+        writer.patch_u32(group_offset_pos, (writer.pos() - section_start) as u32);
+        for group in &self.groups {
+            writer.write_fixed_string(&group.group_name, 0x21);
+            writer.write_u8(group.flag);
+            writer.write_u16(group.reserve0);
+        }
+
+        if let Some(user_data) = &self.user_data {
+            writer.align(4);
+            writer.patch_u32(user_data_offset_pos, (writer.pos() - section_start) as u32);
+
+            let embed_start = writer.pos();
+            writer.write_u32(SectionType::UserData as u32);
+            let embed_size_pos = writer.write_placeholder_u32();
+
+            user_data.serialize(writer);
+
+            let embed_size = (writer.pos() - embed_start) as u32;
+            writer.patch_u32(embed_size_pos, embed_size);
+        }
+    }
 }
 
 impl BflanFile {
@@ -1204,9 +1249,33 @@ impl BflanFile {
         Ok(Self { header, sections })
     }
 
+    pub fn serialize_file(&self) -> Writer {
+        let mut writer = Writer::new();
+
+        writer.mark("File header");
+        writer.write_u32(self.header.magic);
+        writer.write_u16(self.header.endianness);
+        writer.write_u16(self.header.header_size);
+        writer.write_u16(self.header.micro_version);
+        writer.write_u8(self.header.minor_version);
+        writer.write_u8(self.header.major_version);
+
+        let file_size_pos = writer.write_placeholder_u32();
+        writer.write_u32(self.sections.len() as u32);
+
+        for section in &self.sections {
+            section.serialize(&mut writer);
+        }
+
+        let total_size = writer.pos() as u32;
+        writer.patch_u32(file_size_pos, total_size);
+
+        writer
+    }
+
     fn parse_header(cur: &mut Cursor) -> Result<BflanHeader, String> {
-        let magic = cur.read_bytes(4).try_into().unwrap();
-        if &magic != b"FLAN" {
+        let magic = cur.read_u32();
+        if magic != tchar_code32(b"FLAN") {
             return Err("bad magic".into());
         }
 

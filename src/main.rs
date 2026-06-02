@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 
 mod bflan;
-mod bflan_writer;
+mod bflyt;
+mod cursor;
 
 use bflan::BflanFile;
-use bflan_writer::serialize_bflan;
 
 pub const fn tchar_code32(b: &[u8; 4]) -> u32 {
     (b[0] as u32) | ((b[1] as u32) << 8) | ((b[2] as u32) << 16) | ((b[3] as u32) << 24)
@@ -87,7 +87,7 @@ fn pack_file(input_path: &Path, output_path: &Path) {
         }
     };
 
-    let writer = serialize_bflan(json_data);
+    let writer = json_data.serialize_file();
     let file_out = writer.buffer;
 
     if let Err(e) = fs::write(output_path, file_out) {
@@ -235,7 +235,7 @@ fn test_roundtrip(input_dir: &Path, bflan_files: Vec<PathBuf>) {
                 }
             };
 
-            let writer = serialize_bflan(file);
+            let writer = file.serialize_file();
             let file_out = writer.buffer;
 
             if file_in == file_out {
