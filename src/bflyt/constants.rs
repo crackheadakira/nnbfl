@@ -1,4 +1,4 @@
-use crate::core::tchar_code32;
+use crate::{bflyt::file::BflytSection, core::tchar_code32};
 
 pub const MAGIC_USERDATA: u32 = tchar_code32(b"usd1");
 pub const MAGIC_LAYOUT: u32 = tchar_code32(b"lyt1");
@@ -22,3 +22,27 @@ pub const MAGIC_GROUPSTART: u32 = tchar_code32(b"grs1");
 pub const MAGIC_GROUPEND: u32 = tchar_code32(b"gre1");
 pub const MAGIC_GROUP: u32 = tchar_code32(b"grp1");
 pub const MAGIC_CONTROLSOURCE: u32 = tchar_code32(b"cnt1");
+
+pub fn section_name(section: &BflytSection) -> &'static str {
+    match section {
+        BflytSection::UserData(_) => "User Data",
+        BflytSection::Layout(_) => "Layout",
+        BflytSection::TextureList(_) => "Texture List",
+        BflytSection::FontList(_) => "Font List",
+        BflytSection::MaterialList(_) => "Material List",
+        BflytSection::CaptureTextureList(_) => "Capture Texture List",
+        BflytSection::VectorGraphicsList(_) => "Vector Graphics List",
+        BflytSection::Pane(_) => "Pane",
+        BflytSection::PicturePane(_) => "Picture Pane",
+        BflytSection::TextBoxPane(_) => "Text Box Pane",
+        BflytSection::WindowPane(_) => "Window Pane",
+        BflytSection::PartsPane(_) => "Parts Pane",
+        BflytSection::AlignmentPane(_) => "Alignment Pane",
+        BflytSection::CapturePane(_) => "Capture Pane",
+        BflytSection::BoundingPane(_) => "Bounding Pane",
+        BflytSection::ScissorPane(_) => "Scissor Pane",
+        BflytSection::Group(_) => "Group",
+        BflytSection::ControlSource(_) => "Control Source",
+        BflytSection::Unknown(_, _) => "Unknown",
+    }
+}

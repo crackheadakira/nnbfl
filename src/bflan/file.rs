@@ -98,7 +98,7 @@ impl BflanSections {
 
             match header.magic {
                 MAGIC_USERDATA => {
-                    sections.push(Self::UserData(ResUi2dUserDataSection::parse(cursor)));
+                    sections.push(Self::UserData(ResUi2dUserDataSection::parse(cursor, false)));
                 }
                 MAGIC_ANIMTAG => {
                     sections.push(Self::PaneAnimTag(ResBflanPaneAnimTag::parse(

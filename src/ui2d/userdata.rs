@@ -23,7 +23,7 @@ pub struct ResUi2dUserData {
     pub o_name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ResUi2dUserDataInner {
     Float(f32),
     S32(i32),
@@ -32,13 +32,13 @@ pub enum ResUi2dUserDataInner {
 }
 
 impl ResUi2dUserDataSection {
-    pub fn parse(cursor: &mut Cursor) -> Self {
+    pub fn parse(cursor: &mut Cursor, is_pane: bool) -> Self {
         let user_data_count = cursor.read_u16();
         let reserve0 = cursor.read_u16();
         let mut user_data = Vec::new();
 
         for _ in 0..user_data_count {
-            user_data.push(ResUi2dUserData::parse(cursor))
+            user_data.push(ResUi2dUserData::parse(cursor, is_pane))
         }
 
         Self {
@@ -53,14 +53,59 @@ impl ResUi2dUserDataSection {
         writer.write_u16(self.user_data.len() as u16);
         writer.write_u16(self.reserve0);
 
+        let mut slots: Vec<(usize, usize, usize)> = Vec::new();
+
         for data in &self.user_data {
-            data.serialize(writer);
+            let entry_base = writer.pos();
+            let name_ph = writer.write_placeholder_u32();
+            let data_ph = writer.write_placeholder_u32();
+            writer.write_u16(data.data_count);
+
+            let data_type_val = match data.data_type {
+                Ui2dUserDataType::String => 0,
+                Ui2dUserDataType::S32 => 1,
+                Ui2dUserDataType::Float => 2,
+                Ui2dUserDataType::SystemData => 3,
+                Ui2dUserDataType::Invalid => 4,
+            };
+            writer.write_u8(data_type_val);
+            writer.write_u8(data.reserve0);
+
+            slots.push((entry_base, name_ph, data_ph));
         }
+
+        for (i, data) in self.user_data.iter().enumerate() {
+            let (entry_base, _name_ph, data_ph) = slots[i];
+
+            if !data.data_array.is_empty() {
+                writer.patch_u32(data_ph, (writer.pos() - entry_base) as u32);
+
+                for item in &data.data_array {
+                    match item {
+                        ResUi2dUserDataInner::Float(f) => writer.write_f32(*f),
+                        ResUi2dUserDataInner::S32(s) => writer.write_i32(*s),
+                        ResUi2dUserDataInner::String(s) => {
+                            writer.write_fixed_string(s, data.data_count as usize);
+                            writer.write_u8(0);
+                        }
+                        ResUi2dUserDataInner::SystemData(sys) => sys.serialize(writer),
+                    }
+                }
+            }
+        }
+
+        for (i, data) in self.user_data.iter().enumerate() {
+            let (entry_base, name_ph, _data_ph) = slots[i];
+            writer.patch_u32(name_ph, (writer.pos() - entry_base) as u32);
+            writer.write_null_terminated_string(&data.o_name);
+        }
+
+        writer.align(4);
     }
 }
 
 impl ResUi2dUserData {
-    pub fn parse(cursor: &mut Cursor) -> Self {
+    pub fn parse(cursor: &mut Cursor, is_pane: bool) -> Self {
         let base_offset = cursor.pos;
 
         let mut data = Self {
@@ -97,10 +142,9 @@ impl ResUi2dUserData {
                 }
                 Ui2dUserDataType::SystemData => {
                     for _ in 0..data.data_count {
-                        /*if let Some(sys_data) = ResUi2dSystemDataArray::parse(cursor) {
-                            data.data_array
-                                .push(ResUi2dUserDataInner::SystemData(sys_data));
-                        }*/
+                        let sys_data = ResUi2dSystemDataArray::parse(cursor, is_pane);
+                        data.data_array
+                            .push(ResUi2dUserDataInner::SystemData(sys_data));
                     }
                 }
                 _ => {}
@@ -113,45 +157,5 @@ impl ResUi2dUserData {
         cursor.seek(restore_point);
 
         data
-    }
-
-    pub fn serialize(&self, writer: &mut Writer) {
-        let base_offset = writer.pos();
-
-        writer.mark("UserData (data)");
-        let name_offset_pos = writer.write_placeholder_u32();
-        let data_array_offset_pos = writer.write_placeholder_u32();
-        writer.write_u16(self.data_count);
-
-        let data_type_val = match self.data_type {
-            Ui2dUserDataType::String => 0,
-            Ui2dUserDataType::S32 => 1,
-            Ui2dUserDataType::Float => 2,
-            Ui2dUserDataType::SystemData => 3,
-            Ui2dUserDataType::Invalid => 4,
-        };
-        writer.write_u8(data_type_val);
-        writer.write_u8(self.reserve0);
-
-        if !self.data_array.is_empty() {
-            writer.patch_u32(data_array_offset_pos, (writer.pos() - base_offset) as u32);
-
-            for item in &self.data_array {
-                match item {
-                    ResUi2dUserDataInner::Float(f) => writer.write_f32(*f),
-                    ResUi2dUserDataInner::S32(s) => writer.write_i32(*s),
-                    ResUi2dUserDataInner::String(s) => {
-                        writer.write_fixed_string(s, self.data_count as usize);
-                        writer.write_u8(0);
-                    }
-                    ResUi2dUserDataInner::SystemData(_) => {}
-                }
-            }
-        }
-
-        writer.patch_u32(name_offset_pos, (writer.pos() - base_offset) as u32);
-        writer.write_null_terminated_string(&self.o_name);
-
-        writer.align(4);
     }
 }

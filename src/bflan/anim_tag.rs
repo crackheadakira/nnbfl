@@ -65,8 +65,8 @@ impl ResBflanPaneAnimTag {
             let embed_magic = cursor.read_u32();
             let _embed_size = cursor.read_u32();
 
-            if embed_magic == tchar_code32(b"usd1") {
-                tag.user_data = Some(ResUi2dUserDataSection::parse(cursor));
+            if embed_magic == MAGIC_USERDATA {
+                tag.user_data = Some(ResUi2dUserDataSection::parse(cursor, false));
             }
         }
 
