@@ -24,12 +24,11 @@ fn find_files(dir: &Path, target_ext: &str, files: &mut Vec<PathBuf>) {
             let path = entry.path();
             if path.is_dir() {
                 find_files(&path, target_ext, files);
-            } else if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    if ext == target_ext {
-                        files.push(path);
-                    }
-                }
+            } else if path.is_file()
+                && let Some(ext) = path.extension()
+                && ext == target_ext
+            {
+                files.push(path);
             }
         }
     }
@@ -245,7 +244,8 @@ fn test_roundtrip(input_dir: &Path, bflan_files: Vec<PathBuf>) {
                 }
 
                 for i in 0..std::cmp::min(file_in.len(), file_out.len()) {
-                    if i >= 0x0C && i <= 0x0F {
+                    // skip header file size
+                    if (0x0C..=0x0F).contains(&i) {
                         continue;
                     }
 

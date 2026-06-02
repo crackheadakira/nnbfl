@@ -95,7 +95,7 @@ impl BflanSections {
             let section_start = cursor.pos;
 
             let header = SectionHeader {
-                magic: cursor.read_u32().into(),
+                magic: cursor.read_u32(),
                 size: cursor.read_u32(),
             };
 
@@ -136,7 +136,7 @@ impl BflanSections {
             Self::UserData(_) => writer.write_u32(MAGIC_USERDATA),
             Self::PaneAnimTag(_) => writer.write_u32(MAGIC_ANIMTAG),
             Self::PaneAnimInfo(_) => writer.write_u32(MAGIC_ANIMINFO),
-            Self::Unknown(header, _) => writer.write_u32(header.magic as u32),
+            Self::Unknown(header, _) => writer.write_u32(header.magic),
         }
 
         let size_pos = writer.write_placeholder_u32();
