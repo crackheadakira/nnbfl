@@ -94,10 +94,7 @@ impl BflanSections {
         for _ in 0..count {
             let section_start = cursor.pos;
 
-            let header = SectionHeader {
-                magic: cursor.read_u32(),
-                size: cursor.read_u32(),
-            };
+            let header = SectionHeader::parse(cursor);
 
             match header.magic {
                 MAGIC_USERDATA => {
