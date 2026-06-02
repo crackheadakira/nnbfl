@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use crate::bflan::file::Bflan;
+use crate::bflyt::file::Bflyt;
 
 mod bflan;
 mod bflyt;
@@ -110,7 +111,7 @@ fn process_command(command: &str, ext: &str, input_path: &Path, output_path: &Pa
             ("extract", "bflan") => extract_bflan_file(input_path, output_path),
             ("pack", "bflan") => pack_bflan_file(input_path, output_path),
 
-            ("extract", "bflyt") => println!("BFLYT extract not yet implemented!"),
+            ("extract", "bflyt") => extract_bflyt_file(input_path, output_path),
             ("pack", "bflyt") => println!("BFLYT pack not yet implemented!"),
 
             _ => unreachable!(),
@@ -236,6 +237,38 @@ fn extract_bflan_file(input_path: &Path, output_path: &Path) {
     };
 
     let json_string = match serde_json::to_string_pretty(&bflan_file) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to serialize {:?}: {}", input_path, e);
+            return;
+        }
+    };
+
+    if let Err(e) = fs::write(output_path, json_string) {
+        eprintln!("Failed to write output {:?}: {}", output_path, e);
+    } else {
+        println!("Extracted: {:?}", input_path.file_name().unwrap());
+    }
+}
+
+fn extract_bflyt_file(input_path: &Path, output_path: &Path) {
+    let file_in = match fs::read(input_path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("Failed to read {:?}: {}", input_path, e);
+            return;
+        }
+    };
+
+    let bflyt_file = match Bflyt::parse(&file_in) {
+        Ok(res) => res,
+        Err(e) => {
+            eprintln!("Failed to parse {:?}: {}", input_path, e);
+            return;
+        }
+    };
+
+    let json_string = match serde_json::to_string_pretty(&bflyt_file) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Failed to serialize {:?}: {}", input_path, e);
