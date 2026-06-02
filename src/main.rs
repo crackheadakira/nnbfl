@@ -100,7 +100,7 @@ fn validate_input(input: &Path) {
 
 fn process_command(command: &str, ext: &str, input_path: &Path, output_path: &Path) {
     if input_path.is_dir() {
-        process_batch(command, input_path, output_path);
+        process_batch(command, ext, input_path, output_path);
     } else {
         if let Some(parent) = output_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -277,23 +277,24 @@ fn pack_bflan_file(input_path: &Path, output_path: &Path) {
     }
 }
 
-fn process_batch(command: &str, in_dir: &Path, out_dir: &Path) {
+fn process_batch(command: &str, format_ext: &str, in_dir: &Path, out_dir: &Path) {
     if let Err(e) = fs::create_dir_all(out_dir) {
         eprintln!("Failed to create output directory {:?}: {}", out_dir, e);
         exit(1);
     }
 
     let mut target_files = Vec::new();
-    let ext = if command == "extract" {
-        "bflan"
+
+    let search_ext = if command == "extract" {
+        format_ext
     } else {
         "json"
     };
 
-    find_files(in_dir, ext, &mut target_files);
+    find_files(in_dir, search_ext, &mut target_files);
 
     if target_files.is_empty() {
-        println!("No .{} files found in {:?}", ext, in_dir);
+        println!("No .{} files found in {:?}", search_ext, in_dir);
         return;
     }
 
@@ -306,17 +307,21 @@ fn process_batch(command: &str, in_dir: &Path, out_dir: &Path) {
         if command == "extract" {
             out_path.set_extension("json");
         } else {
-            out_path.set_extension("bflan");
+            out_path.set_extension(format_ext);
         }
 
         if let Some(parent) = out_path.parent() {
             let _ = fs::create_dir_all(parent);
         }
 
-        if command == "extract" {
-            extract_bflan_file(&path, &out_path);
-        } else {
-            pack_bflan_file(&path, &out_path);
+        match (command, format_ext) {
+            ("extract", "bflan") => extract_bflan_file(&path, &out_path),
+            ("pack", "bflan") => pack_bflan_file(&path, &out_path),
+
+            ("extract", "bflyt") => println!("BFLYT extract not yet implemented for {:?}", path),
+            ("pack", "bflyt") => println!("BFLYT pack not yet implemented for {:?}", path),
+
+            _ => unreachable!(),
         }
     }
 
