@@ -4,15 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
+use crate::bflan::file::Bflan;
+
 mod bflan;
 mod bflyt;
-mod cursor;
-
-use bflan::BflanFile;
-
-pub const fn tchar_code32(b: &[u8; 4]) -> u32 {
-    (b[0] as u32) | ((b[1] as u32) << 8) | ((b[2] as u32) << 16) | ((b[3] as u32) << 24)
-}
+mod core;
+mod ui2d;
 
 fn print_usage() {
     println!("Usage:");
@@ -47,7 +44,7 @@ fn extract_file(input_path: &Path, output_path: &Path) {
         }
     };
 
-    let bflan_file = match BflanFile::parse_file(&file_in) {
+    let bflan_file = match Bflan::parse(&file_in) {
         Ok(res) => res,
         Err(e) => {
             eprintln!("Failed to parse {:?}: {}", input_path, e);
@@ -79,7 +76,7 @@ fn pack_file(input_path: &Path, output_path: &Path) {
         }
     };
 
-    let json_data: BflanFile = match serde_json::from_str(&json_string) {
+    let json_data: Bflan = match serde_json::from_str(&json_string) {
         Ok(data) => data,
         Err(e) => {
             eprintln!("Failed to deserialize {:?}: {}", input_path, e);
@@ -87,7 +84,7 @@ fn pack_file(input_path: &Path, output_path: &Path) {
         }
     };
 
-    let writer = json_data.serialize_file();
+    let writer = json_data.serialize();
     let file_out = writer.buffer;
 
     if let Err(e) = fs::write(output_path, file_out) {
@@ -226,7 +223,7 @@ fn test_roundtrip(input_dir: &Path, bflan_files: Vec<PathBuf>) {
                 }
             };
 
-            let file = match BflanFile::parse_file(&file_in) {
+            let file = match Bflan::parse(&file_in) {
                 Ok(res) => res,
                 Err(e) => {
                     eprintln!("Failed to parse: {e}");
@@ -235,16 +232,17 @@ fn test_roundtrip(input_dir: &Path, bflan_files: Vec<PathBuf>) {
                 }
             };
 
-            let writer = file.serialize_file();
+            let writer = file.serialize();
             let file_out = writer.buffer;
 
             if file_in == file_out {
-                // println!("\tRound trip successful");
                 success_count += 1;
             } else {
                 println!("{file_name:?}");
-                println!("Original length:\t{} bytes", file_in.len());
-                println!("New length:\t\t{} bytes", file_out.len());
+                if file_in.len() != file_out.len() {
+                    println!("Original length:\t{} bytes", file_in.len());
+                    println!("New length:\t\t{} bytes", file_out.len());
+                }
 
                 for i in 0..std::cmp::min(file_in.len(), file_out.len()) {
                     if i >= 0x0C && i <= 0x0F {
@@ -267,7 +265,7 @@ fn test_roundtrip(input_dir: &Path, bflan_files: Vec<PathBuf>) {
                             }
                         }
 
-                        println!("Struct Context: {last_mark}\n");
+                        println!("Context: {last_mark}\n");
 
                         break;
                     }

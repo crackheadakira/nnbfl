@@ -1,0 +1,24 @@
+use crate::core::tchar_code32;
+
+pub const MAGIC_USERDATA: u32 = tchar_code32(b"usd1");
+pub const MAGIC_LAYOUT: u32 = tchar_code32(b"lyt1");
+pub const MAGIC_TEXTURELIST: u32 = tchar_code32(b"txl1");
+pub const MAGIC_FONTLIST: u32 = tchar_code32(b"fnl1");
+pub const MAGIC_MATERIALLIST: u32 = tchar_code32(b"mat1");
+pub const MAGIC_CAPTURETEXTURELIST: u32 = tchar_code32(b"ctl1");
+pub const MAGIC_VECTORGRAPHICSLIST: u32 = tchar_code32(b"vgl1");
+pub const MAGIC_PANESTART: u32 = tchar_code32(b"pas1");
+pub const MAGIC_PANEEND: u32 = tchar_code32(b"pae1");
+pub const MAGIC_PANE: u32 = tchar_code32(b"pan1");
+pub const MAGIC_PICTUREPANE: u32 = tchar_code32(b"pic1");
+pub const MAGIC_TEXTBOXPANE: u32 = tchar_code32(b"txt1");
+pub const MAGIC_WINDOWPANE: u32 = tchar_code32(b"wnd1");
+pub const MAGIC_PARTSPANE: u32 = tchar_code32(b"prt1");
+pub const MAGIC_ALIGNMENTPANE: u32 = tchar_code32(b"ali1");
+pub const MAGIC_CAPTUREPANE: u32 = tchar_code32(b"cpt1");
+pub const MAGIC_BOUNDINGPANE: u32 = tchar_code32(b"bnd1");
+pub const MAGIC_SCISSORPANE: u32 = tchar_code32(b"scr1");
+pub const MAGIC_GROUPSTART: u32 = tchar_code32(b"grs1");
+pub const MAGIC_GROUPEND: u32 = tchar_code32(b"gre1");
+pub const MAGIC_GROUP: u32 = tchar_code32(b"grp1");
+pub const MAGIC_CONTROLSOURCE: u32 = tchar_code32(b"cnt1");
