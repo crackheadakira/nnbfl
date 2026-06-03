@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::core::{Cursor, Writer};
+use crate::{
+    bflyt::pane::PANE_NAME_LEN,
+    core::{Cursor, Writer},
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BflytLayout {
@@ -1034,76 +1037,90 @@ impl BflytGroup {
     }
 }
 
-pub const CONTROL_PANE_NAME_LEN: usize = 0x18;
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BflytControlSource {
     pub control_name: String,
+    pub reserve0_name: String,
     pub pane_names: Vec<String>,
     pub anim_names: Vec<String>,
 }
 
 impl BflytControlSource {
-    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Self {
-        let cnt_base = section_start + 8;
-        let _reserve0_offset = cursor.read_u32();
+    pub fn parse(cursor: &mut Cursor) -> Self {
+        let base_offset = cursor.pos - 8;
+
+        let reserve0_offset = cursor.read_u32();
         let name_array_offset = cursor.read_u32();
         let pane_count = cursor.read_u16();
         let anim_count = cursor.read_u16();
+
         let _pane_name_offset_array = cursor.read_u32();
         let _anim_name_offset_array = cursor.read_u32();
 
+        cursor.seek(base_offset + 0x8 + 0x14);
         let control_name = cursor.read_null_terminated_string();
 
-        let saved = cursor.pos;
+        cursor.seek(base_offset + reserve0_offset as usize);
+        let reserve0_name = cursor.read_null_terminated_string();
 
-        cursor.seek(cnt_base + name_array_offset as usize);
+        let restore_point = cursor.pos;
+        let name_offset = base_offset + name_array_offset as usize;
+        cursor.seek(name_offset);
+
         let mut pane_names = Vec::new();
+
         for _ in 0..pane_count {
-            pane_names.push(cursor.read_fixed_string(CONTROL_PANE_NAME_LEN));
-        }
-        let mut anim_names = Vec::new();
-        for _ in 0..anim_count {
-            anim_names.push(cursor.read_fixed_string(CONTROL_PANE_NAME_LEN));
+            pane_names.push(cursor.read_fixed_string(PANE_NAME_LEN));
         }
 
-        cursor.seek(saved);
+        let mut anim_names = Vec::new();
+
+        cursor.seek(name_offset + pane_count as usize * PANE_NAME_LEN);
+        for _ in 0..anim_count {
+            anim_names.push(cursor.read_fixed_string(PANE_NAME_LEN));
+        }
+
+        cursor.seek(restore_point);
 
         Self {
             control_name,
+            reserve0_name,
             pane_names,
             anim_names,
         }
     }
 
     pub fn serialize(&self, writer: &mut Writer, section_start: usize) {
-        let cnt_base = section_start + 8;
-
         let reserve0_pos = writer.write_placeholder_u32();
         let name_array_offset_pos = writer.write_placeholder_u32();
+
         writer.write_u16(self.pane_names.len() as u16);
         writer.write_u16(self.anim_names.len() as u16);
+
         let pane_name_offset_array_pos = writer.write_placeholder_u32();
         let anim_name_offset_array_pos = writer.write_placeholder_u32();
 
-        let _control_name_off = writer.pos() - cnt_base;
-        writer.patch_u32(reserve0_pos, 0);
         writer.write_null_terminated_string(&self.control_name);
+
+        let reserve0_off = writer.pos() - section_start;
+        writer.patch_u32(reserve0_pos, reserve0_off as u32);
+        writer.write_null_terminated_string(&self.reserve0_name);
+
         writer.align(4);
 
-        let name_array_off = writer.pos() - cnt_base;
+        let name_array_off = writer.pos() - section_start;
         writer.patch_u32(name_array_offset_pos, name_array_off as u32);
         writer.patch_u32(pane_name_offset_array_pos, name_array_off as u32);
 
         for name in &self.pane_names {
-            writer.write_fixed_string(name, CONTROL_PANE_NAME_LEN);
+            writer.write_fixed_string(name, PANE_NAME_LEN);
         }
 
-        let anim_start_off = writer.pos() - cnt_base;
+        let anim_start_off = writer.pos() - section_start;
         writer.patch_u32(anim_name_offset_array_pos, anim_start_off as u32);
 
         for name in &self.anim_names {
-            writer.write_fixed_string(name, CONTROL_PANE_NAME_LEN);
+            writer.write_fixed_string(name, PANE_NAME_LEN);
         }
     }
 }

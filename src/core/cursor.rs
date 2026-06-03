@@ -45,8 +45,16 @@ impl<'a> Cursor<'a> {
     }
 
     pub fn read_fixed_string(&mut self, len: usize) -> String {
-        let bytes = self.read_bytes(len);
-        let end = bytes.iter().position(|&b| b == 0).unwrap_or(len);
+        let remaining_bytes = self.data.len().saturating_sub(self.pos);
+        let actual_len = len.min(remaining_bytes);
+
+        if actual_len == 0 {
+            eprintln!("Found actual len 0 for a fixed string.");
+            return String::new();
+        }
+
+        let bytes = self.read_bytes(actual_len);
+        let end = bytes.iter().position(|&b| b == 0).unwrap_or(actual_len);
         String::from_utf8_lossy(&bytes[..end]).into_owned()
     }
 

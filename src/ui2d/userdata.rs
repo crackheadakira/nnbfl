@@ -77,25 +77,45 @@ impl ResUi2dUserDataSection {
         for (i, data) in self.user_data.iter().enumerate() {
             let (entry_base, _name_ph, data_ph) = slots[i];
 
-            if !data.data_array.is_empty() {
+            if !data.data_array.is_empty()
+                && data.data_type != Ui2dUserDataType::String
+                && data.data_type != Ui2dUserDataType::SystemData
+            {
                 writer.patch_u32(data_ph, (writer.pos() - entry_base) as u32);
 
                 for item in &data.data_array {
                     match item {
                         ResUi2dUserDataInner::Float(f) => writer.write_f32(*f),
                         ResUi2dUserDataInner::S32(s) => writer.write_i32(*s),
-                        ResUi2dUserDataInner::String(s) => {
-                            writer.write_fixed_string(s, data.data_count as usize);
-                            writer.write_u8(0);
-                        }
-                        ResUi2dUserDataInner::SystemData(sys) => sys.serialize(writer),
+                        _ => {}
                     }
                 }
             }
         }
 
         for (i, data) in self.user_data.iter().enumerate() {
-            let (entry_base, name_ph, _data_ph) = slots[i];
+            let (entry_base, name_ph, data_ph) = slots[i];
+
+            if !data.data_array.is_empty()
+                && (data.data_type == Ui2dUserDataType::String
+                    || data.data_type == Ui2dUserDataType::SystemData)
+            {
+                writer.patch_u32(data_ph, (writer.pos() - entry_base) as u32);
+
+                for item in &data.data_array {
+                    match item {
+                        ResUi2dUserDataInner::String(s) => {
+                            writer.write_fixed_string(s, data.data_count as usize);
+                            writer.write_u8(0);
+                        }
+                        ResUi2dUserDataInner::SystemData(sys) => sys.serialize(writer),
+                        _ => {}
+                    }
+                }
+            } else if data.data_array.is_empty() {
+                writer.patch_u32(data_ph, 0);
+            }
+
             writer.patch_u32(name_ph, (writer.pos() - entry_base) as u32);
             writer.write_null_terminated_string(&data.o_name);
         }

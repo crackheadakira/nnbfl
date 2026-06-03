@@ -222,16 +222,13 @@ impl ResUi2dLayoutData {
 
                 let bytes_written = writer.pos() - string_pool_start;
 
-                const FIXED_BUFFER_SIZE: usize = 128;
-                if bytes_written < FIXED_BUFFER_SIZE {
-                    let padding_needed = FIXED_BUFFER_SIZE - bytes_written;
-                    for _ in 0..padding_needed {
-                        writer.write_u8(0);
-                    }
-                } else if bytes_written > FIXED_BUFFER_SIZE {
-                    panic!("Strings exceed the fixed 128-byte layout editor buffer!");
+                const ALIGNMENT: usize = 64;
+                let padding_needed = (ALIGNMENT - (bytes_written % ALIGNMENT)) % ALIGNMENT;
+                for _ in 0..padding_needed {
+                    writer.write_u8(0);
                 }
             }
+
             ResUi2dLayoutData::Unknown => {
                 writer.write_u32(0xFFFFFFFF);
                 writer.write_u32(0);

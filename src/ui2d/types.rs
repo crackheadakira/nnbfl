@@ -30,7 +30,29 @@ impl Color4f {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct Vector2f {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Vector2f {
+    pub fn parse(cursor: &mut Cursor) -> Self {
+        Self {
+            x: cursor.read_f32(),
+            y: cursor.read_f32(),
+        }
+    }
+
+    pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("Vector2f");
+
+        writer.write_f32(self.x);
+        writer.write_f32(self.y);
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Ui2dUserDataType {
     String = 0,

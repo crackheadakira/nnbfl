@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     bflyt::file::BflytSection,
     core::{Cursor, Writer},
+    ui2d::types::Vector2f,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -445,7 +446,10 @@ pub struct WindowContent {
     pub material_index: u16,
     pub uv_coordinate_count: u8,
     pub reserve0: u8,
-    pub uvs: Vec<[f32; 2]>,
+    pub picture_uvs: Vec<Vector2f>,
+    pub unk_1: Vec<Vector2f>,
+    pub unk_2: Vec<Vector2f>,
+    pub unk_3: Vec<Vector2f>,
 }
 
 impl WindowContent {
@@ -457,10 +461,27 @@ impl WindowContent {
         let material_index = cursor.read_u16();
         let uv_coordinate_count = cursor.read_u8();
         let reserve0 = cursor.read_u8();
-        let mut uvs = Vec::new();
+        let mut picture_uvs = Vec::new();
+        let mut unk_1 = Vec::new();
+        let mut unk_2 = Vec::new();
+        let mut unk_3 = Vec::new();
+
         for _ in 0..uv_coordinate_count {
-            uvs.push([cursor.read_f32(), cursor.read_f32()]);
+            picture_uvs.push(Vector2f::parse(cursor));
         }
+
+        for _ in 0..uv_coordinate_count {
+            unk_1.push(Vector2f::parse(cursor));
+        }
+
+        for _ in 0..uv_coordinate_count {
+            unk_2.push(Vector2f::parse(cursor));
+        }
+
+        for _ in 0..uv_coordinate_count {
+            unk_3.push(Vector2f::parse(cursor));
+        }
+
         Self {
             top_left_vertex_color,
             top_right_vertex_color,
@@ -469,9 +490,13 @@ impl WindowContent {
             material_index,
             uv_coordinate_count,
             reserve0,
-            uvs,
+            picture_uvs,
+            unk_1,
+            unk_2,
+            unk_3,
         }
     }
+
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("WindowContent");
 
@@ -480,11 +505,23 @@ impl WindowContent {
         self.bottom_left_vertex_color.serialize(writer);
         self.bottom_right_vertex_color.serialize(writer);
         writer.write_u16(self.material_index);
-        writer.write_u8(self.uvs.len() as u8);
+        writer.write_u8(self.picture_uvs.len() as u8);
         writer.write_u8(self.reserve0);
-        for uv in &self.uvs {
-            writer.write_f32(uv[0]);
-            writer.write_f32(uv[1]);
+
+        for uv in &self.picture_uvs {
+            uv.serialize(writer);
+        }
+
+        for unk in &self.unk_1 {
+            unk.serialize(writer);
+        }
+
+        for unk in &self.unk_2 {
+            unk.serialize(writer);
+        }
+
+        for unk in &self.unk_3 {
+            unk.serialize(writer);
         }
     }
 }
@@ -533,9 +570,9 @@ pub struct BflytWindowPane {
 }
 
 impl BflytWindowPane {
-    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Self {
+    pub fn parse(cursor: &mut Cursor) -> Self {
+        let wnd_base = cursor.pos - 8;
         let base = BflytPane::parse(cursor);
-        let wnd_base = section_start + 8;
 
         let inflation_left = cursor.read_i16();
         let inflation_right = cursor.read_i16();
@@ -590,8 +627,8 @@ impl BflytWindowPane {
         }
     }
 
-    pub fn serialize(&self, writer: &mut Writer, section_start: usize) {
-        let wnd_base = section_start + 8;
+    pub fn serialize(&self, writer: &mut Writer) {
+        let wnd_base = writer.pos() - 8;
         self.base.serialize(writer);
         writer.mark("WindowPane");
 
@@ -630,8 +667,6 @@ impl BflytWindowPane {
         }
     }
 }
-
-pub const PARTS_PANE_NAME_LEN: usize = 0x18;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PartsPaneBasicInfo {

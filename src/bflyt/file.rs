@@ -130,7 +130,7 @@ impl BflytSection {
                 BflytSection::TextBoxPane(s)
             }
             MAGIC_WINDOWPANE => {
-                let s = BflytWindowPane::parse(cursor, section_start);
+                let s = BflytWindowPane::parse(cursor);
                 BflytSection::WindowPane(s)
             }
             MAGIC_PARTSPANE => {
@@ -158,7 +158,7 @@ impl BflytSection {
                 BflytSection::Group(s)
             }
             MAGIC_CONTROLSOURCE => {
-                let s = BflytControlSource::parse(cursor, section_start);
+                let s = BflytControlSource::parse(cursor);
                 BflytSection::ControlSource(s)
             }
             _ => {
@@ -203,7 +203,7 @@ impl BflytSection {
             Self::Pane(s) | Self::BoundingPane(s) | Self::ScissorPane(s) => s.serialize(writer),
             Self::PicturePane(s) => s.serialize(writer),
             Self::TextBoxPane(s) => s.serialize(writer, section_start),
-            Self::WindowPane(s) => s.serialize(writer, section_start),
+            Self::WindowPane(s) => s.serialize(writer),
             Self::PartsPane(s) => s.serialize(writer, section_start),
             Self::AlignmentPane(s) => s.serialize(writer),
             Self::CapturePane(s) => s.serialize(writer),
