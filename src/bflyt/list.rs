@@ -1041,6 +1041,8 @@ impl BflytGroup {
 pub struct BflytControlSource {
     pub control_name: String,
     pub reserve0_name: String,
+    pub core_name: String,
+    pub core_anim_names: Vec<String>,
     pub pane_names: Vec<String>,
     pub anim_names: Vec<String>,
 }
@@ -1049,42 +1051,71 @@ impl BflytControlSource {
     pub fn parse(cursor: &mut Cursor) -> Self {
         let base_offset = cursor.pos - 8;
 
-        let reserve0_offset = cursor.read_u32();
-        let name_array_offset = cursor.read_u32();
-        let pane_count = cursor.read_u16();
-        let anim_count = cursor.read_u16();
+        let reserve0_offset = cursor.read_u32() as usize;
+        let name_array_offset = cursor.read_u32() as usize;
+        let pane_count = cursor.read_u16() as usize;
+        let anim_count = cursor.read_u16() as usize;
 
-        let _pane_name_offset_array = cursor.read_u32();
-        let _anim_name_offset_array = cursor.read_u32();
+        let pane_name_offset_array = cursor.read_u32() as usize;
+        let anim_name_offset_array = cursor.read_u32() as usize;
 
-        cursor.seek(base_offset + 0x8 + 0x14);
+        cursor.seek(base_offset + 8 + 0x14);
         let control_name = cursor.read_null_terminated_string();
 
-        cursor.seek(base_offset + reserve0_offset as usize);
+        cursor.seek(base_offset + reserve0_offset);
         let reserve0_name = cursor.read_null_terminated_string();
 
-        let restore_point = cursor.pos;
-        let name_offset = base_offset + name_array_offset as usize;
-        cursor.seek(name_offset);
+        let name_pool_pos = base_offset + name_array_offset;
+        cursor.seek(name_pool_pos);
+        let core_name = cursor.read_null_terminated_string();
+
+        let core_table_pos = base_offset + name_array_offset + 0x28;
+        cursor.seek(core_table_pos);
+
+        let mut core_offsets = Vec::with_capacity(anim_count as usize);
+        for _ in 0..anim_count {
+            core_offsets.push(cursor.read_u32() as usize);
+        }
+
+        let mut core_anim_names = Vec::new();
+        for offset in core_offsets {
+            cursor.seek(core_table_pos + offset);
+            core_anim_names.push(cursor.read_null_terminated_string());
+        }
+
+        let pane_table_pos = base_offset + pane_name_offset_array;
+        cursor.seek(pane_table_pos);
+
+        let mut pane_offsets = Vec::with_capacity(pane_count as usize);
+        for _ in 0..pane_count {
+            pane_offsets.push(cursor.read_u32() as usize);
+        }
 
         let mut pane_names = Vec::new();
+        for offset in pane_offsets {
+            cursor.seek(pane_table_pos + offset);
+            pane_names.push(cursor.read_null_terminated_string());
+        }
 
-        for _ in 0..pane_count {
-            pane_names.push(cursor.read_fixed_string(PANE_NAME_LEN));
+        let anim_table_pos = base_offset + anim_name_offset_array;
+        cursor.seek(anim_table_pos);
+
+        let mut anim_offsets = Vec::with_capacity(anim_count as usize);
+        for _ in 0..anim_count {
+            anim_offsets.push(cursor.read_u32() as usize);
         }
 
         let mut anim_names = Vec::new();
-
-        cursor.seek(name_offset + pane_count as usize * PANE_NAME_LEN);
-        for _ in 0..anim_count {
-            anim_names.push(cursor.read_fixed_string(PANE_NAME_LEN));
+        for offset in anim_offsets {
+            cursor.seek(anim_table_pos + offset);
+            anim_names.push(cursor.read_null_terminated_string());
         }
-
-        cursor.seek(restore_point);
 
         Self {
             control_name,
             reserve0_name,
+            core_name,
+            core_anim_names,
             pane_names,
             anim_names,
         }
@@ -1110,17 +1141,57 @@ impl BflytControlSource {
 
         let name_array_off = writer.pos() - section_start;
         writer.patch_u32(name_array_offset_pos, name_array_off as u32);
-        writer.patch_u32(pane_name_offset_array_pos, name_array_off as u32);
 
-        for name in &self.pane_names {
-            writer.write_fixed_string(name, PANE_NAME_LEN);
+        writer.write_null_terminated_string(&self.core_name);
+        writer.align(4);
+
+        while (writer.pos() - section_start) < (name_array_off + 0x28) {
+            writer.write_u8(0x00);
         }
 
-        let anim_start_off = writer.pos() - section_start;
-        writer.patch_u32(anim_name_offset_array_pos, anim_start_off as u32);
-
-        for name in &self.anim_names {
-            writer.write_fixed_string(name, PANE_NAME_LEN);
+        let core_table_pos = writer.pos();
+        let mut core_placeholders = Vec::new();
+        for _ in &self.core_anim_names {
+            core_placeholders.push(writer.write_placeholder_u32());
         }
+
+        for (i, name) in self.core_anim_names.iter().enumerate() {
+            let str_off = writer.pos() - core_table_pos;
+            writer.patch_u32(core_placeholders[i], str_off as u32);
+            writer.write_null_terminated_string(name);
+        }
+        writer.align(4);
+
+        let pane_table_off = writer.pos() - section_start;
+        writer.patch_u32(pane_name_offset_array_pos, pane_table_off as u32);
+        let pane_table_pos = writer.pos();
+
+        let mut pane_placeholders = Vec::new();
+        for _ in &self.pane_names {
+            pane_placeholders.push(writer.write_placeholder_u32());
+        }
+
+        for (i, name) in self.pane_names.iter().enumerate() {
+            let str_off = writer.pos() - pane_table_pos;
+            writer.patch_u32(pane_placeholders[i], str_off as u32);
+            writer.write_null_terminated_string(name);
+        }
+        writer.align(4);
+
+        let anim_table_off = writer.pos() - section_start;
+        writer.patch_u32(anim_name_offset_array_pos, anim_table_off as u32);
+        let anim_table_pos = writer.pos();
+
+        let mut anim_placeholders = Vec::new();
+        for _ in &self.anim_names {
+            anim_placeholders.push(writer.write_placeholder_u32());
+        }
+
+        for (i, name) in self.anim_names.iter().enumerate() {
+            let str_off = writer.pos() - anim_table_pos;
+            writer.patch_u32(anim_placeholders[i], str_off as u32);
+            writer.write_null_terminated_string(name);
+        }
+        writer.align(4);
     }
 }

@@ -10,7 +10,7 @@ pub struct ResUi2dSystemDataArray {
     pub reserve0: u16,
     pub count: u16,
     pub offset: u32,
-    pub data: ResUi2dSystemDataInner,
+    pub data_array: Vec<ResUi2dSystemDataInner>,
 }
 
 impl ResUi2dSystemDataArray {
@@ -24,17 +24,22 @@ impl ResUi2dSystemDataArray {
         let post_header_point = cursor.pos;
         cursor.seek(base_offset + offset as usize);
 
-        let data = if is_pane {
-            ResUi2dSystemDataInner::Pane(ResUi2dPaneData::parse(cursor))
-        } else {
-            ResUi2dSystemDataInner::Layout(ResUi2dLayoutData::parse(cursor, post_header_point))
-        };
+        let mut data_array = Vec::new();
+
+        for _ in 0..count {
+            let data = if is_pane {
+                ResUi2dSystemDataInner::Pane(ResUi2dPaneData::parse(cursor))
+            } else {
+                ResUi2dSystemDataInner::Layout(ResUi2dLayoutData::parse(cursor, post_header_point))
+            };
+            data_array.push(data);
+        }
 
         Self {
             reserve0,
             count,
             offset,
-            data,
+            data_array,
         }
     }
 
@@ -43,18 +48,36 @@ impl ResUi2dSystemDataArray {
         let base_offset = writer.pos();
 
         writer.write_u16(self.reserve0);
-        writer.write_u16(self.count);
+        writer.write_u16(self.data_array.len() as u16);
         let offset_pos = writer.write_placeholder_u32();
+
+        let mut section_size_pos = None;
+        if self.count > 1 {
+            section_size_pos = Some(writer.write_placeholder_u32());
+        }
 
         writer.patch_u32(offset_pos, (writer.pos() - base_offset) as u32);
 
-        match &self.data {
-            ResUi2dSystemDataInner::Pane(pane) => {
-                pane.serialize(writer);
+        for data in &self.data_array {
+            match data {
+                ResUi2dSystemDataInner::Pane(pane) => {
+                    pane.serialize(writer);
+                }
+                ResUi2dSystemDataInner::Layout(layout) => {
+                    layout.serialize(writer);
+                }
             }
-            ResUi2dSystemDataInner::Layout(layout) => {
-                layout.serialize(writer);
-            }
+        }
+
+        if let Some(pos) = section_size_pos {
+            let calculated_size = writer.pos() - pos;
+
+            writer.patch_u32(pos, calculated_size as u32);
+        }
+
+        // workaround for Common_FooterKey_00.bflyt
+        if self.count > 1 {
+            writer.write_u32(0);
         }
 
         writer.align(4);
