@@ -21,6 +21,8 @@ impl Color4f {
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("Color4f");
+
         writer.write_f32(self.r);
         writer.write_f32(self.g);
         writer.write_f32(self.b);
@@ -57,6 +59,7 @@ impl VertexPos {
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("VertexPos");
         writer.write_f32(self.size_scale_width);
         writer.write_f32(self.size_scale_height);
         writer.write_f32(self.position_x_scale);

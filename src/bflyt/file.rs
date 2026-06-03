@@ -51,103 +51,8 @@ pub enum BflytSection {
     Unknown(SectionHeader, Vec<u8>),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Bflyt {
-    pub magic: u32,
-    pub endianness: u16,
-    pub header_size: u16,
-    pub micro_version: u16,
-    pub minor_version: u8,
-    pub major_version: u8,
-    pub file_size: u32,
-    pub section_count: u32,
-    pub sections: Vec<BflytSection>,
-    pub pane_tree: Vec<PaneNode>,
-    pub group_tree: Vec<GroupNode>,
-}
-
-impl Bflyt {
-    pub fn parse(file: &[u8]) -> Result<Self, String> {
-        let mut cursor = Cursor { data: file, pos: 0 };
-
-        let magic = cursor.read_u32();
-        if magic != tchar_code32(b"FLYT") {
-            return Err("bad magic: expected FLYT".into());
-        }
-
-        let endianness = cursor.read_u16();
-        let header_size = cursor.read_u16();
-        let micro_version = cursor.read_u16();
-        let minor_version = cursor.read_u8();
-        let major_version = cursor.read_u8();
-        let file_size = cursor.read_u32();
-        let section_count = cursor.read_u32();
-
-        cursor.seek(header_size as usize);
-
-        let sections = parse_flat_sections(&mut cursor, section_count, file.len());
-
-        let mut idx = 0;
-        let pane_tree = build_pane_tree(&sections, &mut idx);
-        idx = 0;
-        let group_tree = build_group_tree(&sections, &mut idx);
-
-        Ok(Self {
-            magic,
-            endianness,
-            header_size,
-            micro_version,
-            minor_version,
-            major_version,
-            file_size,
-            section_count,
-            sections,
-            pane_tree,
-            group_tree,
-        })
-    }
-
-    pub fn serialize(&self) -> Writer {
-        let mut writer = Writer::new();
-
-        writer.mark("File header");
-        writer.write_u32(self.magic);
-        writer.write_u16(self.endianness);
-        writer.write_u16(self.header_size);
-        writer.write_u16(self.micro_version);
-        writer.write_u8(self.minor_version);
-        writer.write_u8(self.major_version);
-
-        let file_size_pos = writer.write_placeholder_u32();
-        let section_count_pos = writer.write_placeholder_u32();
-
-        while writer.pos() < self.header_size as usize {
-            writer.write_u8(0);
-        }
-
-        let mut section_count = 0u32;
-        for section in &self.sections {
-            serialize_section(section, &mut writer);
-            section_count += 1;
-        }
-
-        let total = writer.pos() as u32;
-        writer.patch_u32(file_size_pos, total);
-        writer.patch_u32(section_count_pos, section_count);
-
-        writer
-    }
-}
-
-fn parse_flat_sections(cursor: &mut Cursor, count: u32, file_len: usize) -> Vec<BflytSection> {
-    let mut sections = Vec::new();
-    let mut last_was_pane = false;
-
-    for _ in 0..count {
-        if cursor.pos + 8 > file_len {
-            break;
-        }
-
+impl BflytSection {
+    pub fn parse(cursor: &mut Cursor, last_was_pane: &mut bool) -> Self {
         let section_start = cursor.pos;
         let magic = cursor.read_u32();
         let section_size = cursor.read_u32();
@@ -155,12 +60,12 @@ fn parse_flat_sections(cursor: &mut Cursor, count: u32, file_len: usize) -> Vec<
 
         let section = match magic {
             MAGIC_USERDATA => {
-                let s = ResUi2dUserDataSection::parse(cursor, last_was_pane);
+                let s = ResUi2dUserDataSection::parse(cursor, *last_was_pane);
                 BflytSection::UserData(s)
             }
             MAGIC_LAYOUT => {
                 let s = BflytLayout::parse(cursor);
-                last_was_pane = false;
+                *last_was_pane = false;
                 BflytSection::Layout(s)
             }
             MAGIC_TEXTURELIST => {
@@ -213,7 +118,7 @@ fn parse_flat_sections(cursor: &mut Cursor, count: u32, file_len: usize) -> Vec<
             ),
             MAGIC_PANE => {
                 let s = BflytPane::parse(cursor);
-                last_was_pane = true;
+                *last_was_pane = true;
                 BflytSection::Pane(s)
             }
             MAGIC_PICTUREPANE => {
@@ -229,7 +134,7 @@ fn parse_flat_sections(cursor: &mut Cursor, count: u32, file_len: usize) -> Vec<
                 BflytSection::WindowPane(s)
             }
             MAGIC_PARTSPANE => {
-                let s = BflytPartsPane::parse(cursor, section_start, section_size);
+                let s = BflytPartsPane::parse(cursor);
                 BflytSection::PartsPane(s)
             }
             MAGIC_ALIGNMENTPANE => {
@@ -257,6 +162,8 @@ fn parse_flat_sections(cursor: &mut Cursor, count: u32, file_len: usize) -> Vec<
                 BflytSection::ControlSource(s)
             }
             _ => {
+                println!("Got unknown pane w/ magic: {magic}");
+
                 let data_size = (section_size as usize).saturating_sub(8);
                 let data = cursor
                     .read_bytes(data_size.min(end.saturating_sub(cursor.pos)))
@@ -271,11 +178,136 @@ fn parse_flat_sections(cursor: &mut Cursor, count: u32, file_len: usize) -> Vec<
             }
         };
 
-        sections.push(section);
-        cursor.seek(end.min(file_len));
+        cursor.seek(end);
+
+        section
     }
 
-    sections
+    pub fn serialize(&self, writer: &mut Writer) {
+        let section_start = writer.pos();
+        let magic = section_magic(&self);
+
+        writer.write_u32(magic);
+        let size_pos = writer.write_placeholder_u32();
+
+        writer.mark(&format!("BflytSection {}", section_name(&self)));
+
+        match self {
+            Self::UserData(s) => s.serialize(writer),
+            Self::Layout(s) => s.serialize(writer),
+            Self::TextureList(s) => s.serialize(writer),
+            Self::FontList(s) => s.serialize(writer),
+            Self::MaterialList(s) => s.serialize(writer, section_start),
+            Self::CaptureTextureList(s) => s.serialize(writer, section_start),
+            Self::VectorGraphicsList(s) => s.serialize(writer, section_start),
+            Self::Pane(s) | Self::BoundingPane(s) | Self::ScissorPane(s) => s.serialize(writer),
+            Self::PicturePane(s) => s.serialize(writer),
+            Self::TextBoxPane(s) => s.serialize(writer, section_start),
+            Self::WindowPane(s) => s.serialize(writer, section_start),
+            Self::PartsPane(s) => s.serialize(writer, section_start),
+            Self::AlignmentPane(s) => s.serialize(writer),
+            Self::CapturePane(s) => s.serialize(writer),
+            Self::Group(s) => s.serialize(writer),
+            Self::ControlSource(s) => s.serialize(writer, section_start),
+            Self::Unknown(_, data) => writer.write_bytes(data),
+        }
+
+        writer.align(4);
+        let size = (writer.pos() - section_start) as u32;
+        writer.patch_u32(size_pos, size);
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Bflyt {
+    pub magic: u32,
+    pub endianness: u16,
+    pub header_size: u16,
+    pub micro_version: u16,
+    pub minor_version: u8,
+    pub major_version: u8,
+    pub file_size: u32,
+    pub section_count: u32,
+    pub sections: Vec<BflytSection>,
+    pub pane_tree: Vec<PaneNode>,
+    pub group_tree: Vec<GroupNode>,
+}
+
+impl Bflyt {
+    pub fn parse(file: &[u8]) -> Result<Self, String> {
+        let mut cursor = Cursor { data: file, pos: 0 };
+
+        let magic = cursor.read_u32();
+        if magic != tchar_code32(b"FLYT") {
+            return Err("bad magic: expected FLYT".into());
+        }
+
+        let endianness = cursor.read_u16();
+        let header_size = cursor.read_u16();
+        let micro_version = cursor.read_u16();
+        let minor_version = cursor.read_u8();
+        let major_version = cursor.read_u8();
+        let file_size = cursor.read_u32();
+        let section_count = cursor.read_u32();
+
+        cursor.seek(header_size as usize);
+
+        let mut sections = Vec::new();
+
+        let mut last_was_pane = false;
+        for _ in 0..section_count {
+            let section = BflytSection::parse(&mut cursor, &mut last_was_pane);
+
+            sections.push(section);
+        }
+
+        let mut idx = 0;
+        let pane_tree = build_pane_tree(&sections, &mut idx);
+        idx = 0;
+        let group_tree = build_group_tree(&sections, &mut idx);
+
+        Ok(Self {
+            magic,
+            endianness,
+            header_size,
+            micro_version,
+            minor_version,
+            major_version,
+            file_size,
+            section_count,
+            sections,
+            pane_tree,
+            group_tree,
+        })
+    }
+
+    pub fn serialize(&self) -> Writer {
+        let mut writer = Writer::new();
+
+        writer.mark("File header");
+        writer.write_u32(self.magic);
+        writer.write_u16(self.endianness);
+        writer.write_u16(self.header_size);
+        writer.write_u16(self.micro_version);
+        writer.write_u8(self.minor_version);
+        writer.write_u8(self.major_version);
+
+        let file_size_pos = writer.write_placeholder_u32();
+        writer.write_u32(self.sections.len() as u32);
+
+        while writer.pos() < self.header_size as usize {
+            writer.write_u8(0);
+        }
+
+        for section in &self.sections {
+            section.serialize(&mut writer);
+        }
+
+        let total = writer.pos() as u32;
+        writer.patch_u32(file_size_pos, total);
+
+        writer
+    }
 }
 
 fn build_pane_tree(sections: &[BflytSection], idx: &mut usize) -> Vec<PaneNode> {
@@ -342,41 +374,6 @@ fn build_group_tree(sections: &[BflytSection], idx: &mut usize) -> Vec<GroupNode
         }
     }
     nodes
-}
-
-fn serialize_section(section: &BflytSection, writer: &mut Writer) {
-    let section_start = writer.pos();
-    let magic = section_magic(section);
-    writer.write_u32(magic);
-    let size_pos = writer.write_placeholder_u32();
-
-    writer.mark(&format!("Section {}", section_name(section)));
-
-    match section {
-        BflytSection::UserData(s) => s.serialize(writer),
-        BflytSection::Layout(s) => s.serialize(writer),
-        BflytSection::TextureList(s) => s.serialize(writer),
-        BflytSection::FontList(s) => s.serialize(writer),
-        BflytSection::MaterialList(s) => s.serialize(writer, section_start),
-        BflytSection::CaptureTextureList(s) => s.serialize(writer, section_start),
-        BflytSection::VectorGraphicsList(s) => s.serialize(writer, section_start),
-        BflytSection::Pane(s) | BflytSection::BoundingPane(s) | BflytSection::ScissorPane(s) => {
-            s.serialize(writer)
-        }
-        BflytSection::PicturePane(s) => s.serialize(writer),
-        BflytSection::TextBoxPane(s) => s.serialize(writer, section_start),
-        BflytSection::WindowPane(s) => s.serialize(writer, section_start),
-        BflytSection::PartsPane(s) => s.serialize(writer, section_start),
-        BflytSection::AlignmentPane(s) => s.serialize(writer),
-        BflytSection::CapturePane(s) => s.serialize(writer),
-        BflytSection::Group(s) => s.serialize(writer),
-        BflytSection::ControlSource(s) => s.serialize(writer, section_start),
-        BflytSection::Unknown(_, data) => writer.write_bytes(data),
-    }
-
-    writer.align(4);
-    let size = (writer.pos() - section_start) as u32;
-    writer.patch_u32(size_pos, size);
 }
 
 fn section_magic(section: &BflytSection) -> u32 {

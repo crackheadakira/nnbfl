@@ -21,6 +21,10 @@ impl<'a> Cursor<'a> {
         i32::from_le(self.read::<i32>())
     }
 
+    pub fn read_i16(&mut self) -> i16 {
+        i16::from_le(self.read::<i16>())
+    }
+
     pub fn read_u16(&mut self) -> u16 {
         u16::from_le(self.read::<u16>())
     }

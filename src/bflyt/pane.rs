@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::core::{Cursor, Writer};
+use crate::{
+    bflyt::file::BflytSection,
+    core::{Cursor, Writer},
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Color4u8 {
@@ -73,6 +76,8 @@ impl BflytPane {
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("Pane (generic)");
+
         writer.write_u8(self.pane_flags);
         writer.write_u8(self.origin);
         writer.write_u8(self.alpha);
@@ -118,6 +123,8 @@ impl TextureUv {
         }
     }
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("TextureUv");
+
         writer.write_f32(self.top_left_x);
         writer.write_f32(self.top_left_y);
         writer.write_f32(self.top_right_x);
@@ -171,6 +178,8 @@ impl BflytPicturePane {
 
     pub fn serialize(&self, writer: &mut Writer) {
         self.base.serialize(writer);
+        writer.mark("PicturePane");
+
         self.top_left_vertex_color.serialize(writer);
         self.top_right_vertex_color.serialize(writer);
         self.bottom_left_vertex_color.serialize(writer);
@@ -208,6 +217,8 @@ impl PerCharacterTransform {
         }
     }
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("PerCharacterTransform");
+
         writer.write_f32(self.eval_time_offset);
         writer.write_f32(self.eval_time_width);
         writer.write_u8(self.loop_type);
@@ -364,6 +375,7 @@ impl BflytTextBoxPane {
     pub fn serialize(&self, writer: &mut Writer, section_start: usize) {
         let txt1_base = section_start + 8;
         self.base.serialize(writer);
+        writer.mark("TextBoxPane");
 
         writer.write_u16(self.text_buffer_size);
         writer.write_u16(self.text_length);
@@ -461,6 +473,8 @@ impl WindowContent {
         }
     }
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("WindowContent");
+
         self.top_left_vertex_color.serialize(writer);
         self.top_right_vertex_color.serialize(writer);
         self.bottom_left_vertex_color.serialize(writer);
@@ -491,6 +505,7 @@ impl WindowFrame {
         }
     }
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("WindowFrame");
         writer.write_u16(self.material_index);
         writer.write_u8(self.texture_flip_mode);
         writer.write_u8(self.reserve0);
@@ -522,22 +537,22 @@ impl BflytWindowPane {
         let base = BflytPane::parse(cursor);
         let wnd_base = section_start + 8;
 
-        let inflation_left = cursor.read_u16() as i16;
-        let inflation_right = cursor.read_u16() as i16;
-        let inflation_top = cursor.read_u16() as i16;
-        let inflation_bottom = cursor.read_u16() as i16;
-        let frame_size_left = cursor.read_u16() as i16;
-        let frame_size_right = cursor.read_u16() as i16;
-        let frame_size_top = cursor.read_u16() as i16;
-        let frame_size_bottom = cursor.read_u16() as i16;
+        let inflation_left = cursor.read_i16();
+        let inflation_right = cursor.read_i16();
+        let inflation_top = cursor.read_i16();
+        let inflation_bottom = cursor.read_i16();
+        let frame_size_left = cursor.read_i16();
+        let frame_size_right = cursor.read_i16();
+        let frame_size_top = cursor.read_i16();
+        let frame_size_bottom = cursor.read_i16();
+
         let frame_count = cursor.read_u8();
         let flag = cursor.read_u8();
         let reserve0 = cursor.read_u16();
         let content_offset = cursor.read_u32();
         let frame_offset_array_offset = cursor.read_u32();
 
-        let saved = cursor.pos;
-
+        let restore_point = cursor.pos;
         cursor.seek(wnd_base + content_offset as usize);
         let content = WindowContent::parse(cursor);
 
@@ -553,7 +568,7 @@ impl BflytWindowPane {
             frames.push(WindowFrame::parse(cursor));
         }
 
-        cursor.seek(saved);
+        cursor.seek(restore_point);
 
         Self {
             base,
@@ -578,6 +593,7 @@ impl BflytWindowPane {
     pub fn serialize(&self, writer: &mut Writer, section_start: usize) {
         let wnd_base = section_start + 8;
         self.base.serialize(writer);
+        writer.mark("WindowPane");
 
         writer.write_u16(self.inflation_left as u16);
         writer.write_u16(self.inflation_right as u16);
@@ -655,6 +671,7 @@ impl PartsPaneBasicInfo {
         }
     }
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("PaneBasicInfo");
         writer.write_fixed_string(&self.user_name, USER_NAME_LEN);
         writer.write_f32(self.translation_x);
         writer.write_f32(self.translation_y);
@@ -682,9 +699,69 @@ pub struct PartsProperty {
     pub pane_offset: u32,
     pub user_data_offset: u32,
     pub pane_basic_info_offset: u32,
-    pub basic_info: Option<PartsPaneBasicInfo>,
-    pub pane_data: Vec<u8>,
-    pub user_data_data: Vec<u8>,
+    pub o_section: Option<BflytSection>,
+    pub o_user_data: Option<BflytSection>,
+    pub o_basic_info: Option<PartsPaneBasicInfo>,
+}
+
+impl PartsProperty {
+    pub fn parse(cursor: &mut Cursor, last_parts_pane: usize) -> Self {
+        let mut property = Self {
+            property_name: cursor.read_fixed_string(PANE_NAME_LEN),
+            usage_flag: cursor.read_u8(),
+            basic_usage_flag: cursor.read_u8(),
+            material_usage_flag: cursor.read_u8(),
+            user_data_type: cursor.read_u8(),
+            pane_offset: cursor.read_u32(),
+            user_data_offset: cursor.read_u32(),
+            pane_basic_info_offset: cursor.read_u32(),
+            o_section: None,
+            o_user_data: None,
+            o_basic_info: None,
+        };
+
+        let restore_point = cursor.pos;
+
+        if property.pane_offset > 0 {
+            cursor.seek(last_parts_pane + property.pane_offset as usize);
+            let pane = BflytSection::parse(cursor, &mut false);
+
+            property.o_section = Some(pane);
+            cursor.seek(restore_point);
+        }
+
+        if property.user_data_offset > 0 {
+            cursor.seek(last_parts_pane + property.user_data_offset as usize);
+            let user_data = BflytSection::parse(cursor, &mut false);
+
+            property.o_user_data = Some(user_data);
+            cursor.seek(restore_point);
+        }
+
+        if property.pane_basic_info_offset > 0 {
+            cursor.seek(last_parts_pane + property.pane_basic_info_offset as usize);
+            let basic_info = PartsPaneBasicInfo::parse(cursor);
+
+            property.o_basic_info = Some(basic_info);
+            cursor.seek(restore_point);
+        }
+
+        property
+    }
+
+    pub fn serialize_header(&self, writer: &mut Writer) -> (usize, usize, usize) {
+        writer.write_fixed_string(&self.property_name, PANE_NAME_LEN);
+        writer.write_u8(self.usage_flag);
+        writer.write_u8(self.basic_usage_flag);
+        writer.write_u8(self.material_usage_flag);
+        writer.write_u8(self.user_data_type);
+
+        let pane_pos = writer.write_placeholder_u32();
+        let user_data_pos = writer.write_placeholder_u32();
+        let basic_info_pos = writer.write_placeholder_u32();
+
+        (pane_pos, user_data_pos, basic_info_pos)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -693,12 +770,12 @@ pub struct BflytPartsPane {
     pub magnify_x: f32,
     pub magnify_y: f32,
     pub properties: Vec<PartsProperty>,
-    pub layout_name: String,
+    pub o_layout_name: String,
 }
 
 impl BflytPartsPane {
-    pub fn parse(cursor: &mut Cursor, section_start: usize, section_size: u32) -> Self {
-        let prt1_base = section_start + 8;
+    pub fn parse(cursor: &mut Cursor) -> Self {
+        let base_offset = cursor.pos;
         let base = BflytPane::parse(cursor);
 
         let property_count = cursor.read_u32();
@@ -707,112 +784,60 @@ impl BflytPartsPane {
 
         let props_start = cursor.pos;
 
-        let mut raw_properties: Vec<(String, u8, u8, u8, u8, u32, u32, u32)> = Vec::new();
-        for _ in 0..property_count {
-            let property_name = cursor.read_fixed_string(PANE_NAME_LEN);
-            let usage_flag = cursor.read_u8();
-            let basic_usage_flag = cursor.read_u8();
-            let material_usage_flag = cursor.read_u8();
-            let user_data_type = cursor.read_u8();
-            let pane_offset = cursor.read_u32();
-            let user_data_offset = cursor.read_u32();
-            let pane_basic_info_offset = cursor.read_u32();
-            raw_properties.push((
-                property_name,
-                usage_flag,
-                basic_usage_flag,
-                material_usage_flag,
-                user_data_type,
-                pane_offset,
-                user_data_offset,
-                pane_basic_info_offset,
-            ));
-        }
-
-        let layout_name = cursor.read_null_terminated_string();
-        cursor.seek(props_start + 0x28 * property_count as usize + layout_name.len() + 1);
-
-        let saved = cursor.pos;
-
         let mut properties = Vec::new();
-        for (
-            property_name,
-            usage_flag,
-            basic_usage_flag,
-            material_usage_flag,
-            user_data_type,
-            pane_offset,
-            user_data_offset,
-            pane_basic_info_offset,
-        ) in raw_properties
-        {
-            let basic_info = if pane_basic_info_offset != 0 {
-                cursor.seek(prt1_base + pane_basic_info_offset as usize);
-                Some(PartsPaneBasicInfo::parse(cursor))
-            } else {
-                None
-            };
 
-            properties.push(PartsProperty {
-                property_name,
-                usage_flag,
-                basic_usage_flag,
-                material_usage_flag,
-                user_data_type,
-                pane_offset,
-                user_data_offset,
-                pane_basic_info_offset,
-                basic_info,
-                pane_data: Vec::new(),
-                user_data_data: Vec::new(),
-            });
+        for _ in 0..property_count {
+            let property = PartsProperty::parse(cursor, base_offset - 8);
+            properties.push(property);
         }
 
-        cursor.seek(saved);
+        let o_layout_name = cursor.read_null_terminated_string();
+        cursor.seek(props_start + 0x28 * property_count as usize + o_layout_name.len() + 1);
 
         Self {
             base,
             magnify_x,
             magnify_y,
             properties,
-            layout_name,
+            o_layout_name,
         }
     }
 
     pub fn serialize(&self, writer: &mut Writer, section_start: usize) {
-        let prt1_base = section_start + 8;
         self.base.serialize(writer);
+        writer.mark("PartsPane");
 
         writer.write_u32(self.properties.len() as u32);
         writer.write_f32(self.magnify_x);
         writer.write_f32(self.magnify_y);
 
-        let mut basic_info_offset_placeholders = Vec::new();
+        let mut patch_offsets = Vec::new();
         for prop in &self.properties {
-            writer.write_fixed_string(&prop.property_name, PANE_NAME_LEN);
-            writer.write_u8(prop.usage_flag);
-            writer.write_u8(prop.basic_usage_flag);
-            writer.write_u8(prop.material_usage_flag);
-            writer.write_u8(prop.user_data_type);
-            writer.write_u32(prop.pane_offset);
-            writer.write_u32(prop.user_data_offset);
-            basic_info_offset_placeholders
-                .push((prop.basic_info.is_some(), writer.write_placeholder_u32()));
+            let (p, u, b) = prop.serialize_header(writer);
+            patch_offsets.push((p, u, b, prop));
         }
 
-        writer.write_null_terminated_string(&self.layout_name);
+        writer.write_null_terminated_string(&self.o_layout_name);
         writer.align(4);
 
-        for (i, prop) in self.properties.iter().enumerate() {
-            let (has_info, placeholder) = basic_info_offset_placeholders[i];
-            if has_info {
-                if let Some(info) = &prop.basic_info {
-                    let offset = writer.pos() - prt1_base;
-                    writer.patch_u32(placeholder, offset as u32);
-                    info.serialize(writer);
-                }
-            } else {
-                writer.patch_u32(placeholder, 0);
+        for (p_pos, u_pos, b_pos, prop) in patch_offsets {
+            if let Some(section) = &prop.o_section {
+                let start = writer.pos();
+
+                section.serialize(writer);
+                writer.patch_u32(p_pos, (start - section_start) as u32);
+            }
+
+            if let Some(data) = &prop.o_user_data {
+                let start = writer.pos();
+                data.serialize(writer);
+                writer.patch_u32(u_pos, (start - section_start) as u32);
+            }
+
+            if let Some(info) = &prop.o_basic_info {
+                let start = writer.pos();
+                info.serialize(writer);
+                writer.patch_u32(b_pos, (start - section_start) as u32);
             }
         }
     }
@@ -842,6 +867,8 @@ impl BflytAlignmentPane {
     }
     pub fn serialize(&self, writer: &mut Writer) {
         self.base.serialize(writer);
+        writer.mark("AlignmentPane");
+
         writer.write_u32(self.direction);
         writer.write_f32(self.default_margin);
         writer.write_u8(self.is_align_last_pane);
@@ -899,6 +926,8 @@ impl BflytCapturePane {
     }
     pub fn serialize(&self, writer: &mut Writer) {
         self.base.serialize(writer);
+        writer.mark("CapturePane");
+
         for v in &self.reserve0 {
             writer.write_u32(*v);
         }

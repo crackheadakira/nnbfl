@@ -10,75 +10,54 @@ pub struct ResUi2dSystemDataArray {
     pub reserve0: u16,
     pub count: u16,
     pub offset: u32,
-    pub data_array: Vec<ResUi2dSystemDataInner>,
+    pub data: ResUi2dSystemDataInner,
 }
 
 impl ResUi2dSystemDataArray {
     pub fn parse(cursor: &mut Cursor, is_pane: bool) -> Self {
         let base_offset = cursor.pos;
+
         let reserve0 = cursor.read_u16();
         let count = cursor.read_u16();
         let offset = cursor.read_u32();
-        let mut data_array = Vec::new();
 
-        if offset > 0 {
-            let post_header_point = cursor.pos;
-            cursor.seek(base_offset + offset as usize);
+        let post_header_point = cursor.pos;
+        cursor.seek(base_offset + offset as usize);
 
-            let mut item_offsets = Vec::new();
-            for _ in 0..count {
-                item_offsets.push(cursor.read_u32());
-            }
-
-            for i in 0..count as usize {
-                cursor.seek(base_offset + offset as usize + item_offsets[i] as usize);
-
-                if is_pane {
-                    data_array.push(ResUi2dSystemDataInner::Pane(ResUi2dPaneData::parse(cursor)));
-                } else {
-                    data_array.push(ResUi2dSystemDataInner::Layout(ResUi2dLayoutData::parse(
-                        cursor,
-                        post_header_point,
-                    )));
-                }
-            }
-
-            /*if cursor.pos < (base_offset + offset as usize) {
-                cursor.seek(post_header_point);
-            }*/
+        let data = if is_pane {
+            ResUi2dSystemDataInner::Pane(ResUi2dPaneData::parse(cursor))
+        } else {
+            ResUi2dSystemDataInner::Layout(ResUi2dLayoutData::parse(cursor, post_header_point))
         };
 
         Self {
             reserve0,
             count,
             offset,
-            data_array,
+            data,
         }
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("Ui2dSystemDataArray");
         let base_offset = writer.pos();
 
         writer.write_u16(self.reserve0);
-        writer.write_u16(self.data_array.len() as u16);
+        writer.write_u16(self.count);
         let offset_pos = writer.write_placeholder_u32();
 
-        if !self.data_array.is_empty() {
-            writer.patch_u32(offset_pos, (writer.pos() - base_offset) as u32);
+        writer.patch_u32(offset_pos, (writer.pos() - base_offset) as u32);
 
-            for item in self.data_array.iter() {
-                match item {
-                    ResUi2dSystemDataInner::Pane(pane) => {
-                        pane.serialize(writer);
-                    }
-                    ResUi2dSystemDataInner::Layout(layout) => {
-                        layout.serialize(writer);
-                    }
-                }
-
-                writer.align(4);
+        match &self.data {
+            ResUi2dSystemDataInner::Pane(pane) => {
+                pane.serialize(writer);
+            }
+            ResUi2dSystemDataInner::Layout(layout) => {
+                layout.serialize(writer);
             }
         }
+
+        writer.align(4);
     }
 }
 
@@ -103,6 +82,7 @@ impl From<u32> for Ui2dLayoutSystemDataType {
     }
 }
 
+#[derive(Debug)]
 #[repr(u32)]
 pub enum Ui2dPaneSystemDataType {
     VertexPos0 = 0,
@@ -111,6 +91,7 @@ pub enum Ui2dPaneSystemDataType {
     MaskTexture = 3,
     DropShadow = 4,
     ProceduralShape = 6,
+    Invalid,
 }
 
 impl From<u32> for Ui2dPaneSystemDataType {
@@ -122,7 +103,7 @@ impl From<u32> for Ui2dPaneSystemDataType {
             3 => Self::MaskTexture,
             4 => Self::DropShadow,
             6 => Self::ProceduralShape,
-            _ => Self::VertexPos0,
+            _ => Self::Invalid,
         }
     }
 }
@@ -140,7 +121,6 @@ pub enum ResUi2dPaneData {
 impl ResUi2dPaneData {
     pub fn parse(cursor: &mut Cursor) -> Self {
         let data_type: Ui2dPaneSystemDataType = cursor.read_u32().into();
-        let _size = cursor.read_u32();
 
         match data_type {
             Ui2dPaneSystemDataType::VertexPos0 => Self::VertexPos0(VertexPos::parse(cursor)),
@@ -157,10 +137,13 @@ impl ResUi2dPaneData {
             Ui2dPaneSystemDataType::ProceduralShape => {
                 Self::ProceduralShape(ResUi2dSystemDataProceduralShape::parse(cursor))
             }
+            _ => panic!("Got invalid data type"),
         }
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("Ui2dPaneData");
+
         let type_id = match self {
             ResUi2dPaneData::VertexPos0(_) => 0,
             ResUi2dPaneData::VertexPos1(_) => 1,
@@ -171,9 +154,6 @@ impl ResUi2dPaneData {
         };
 
         writer.write_u32(type_id);
-        let size_pos = writer.write_placeholder_u32();
-
-        let payload_start = writer.pos();
 
         match self {
             ResUi2dPaneData::VertexPos0(v) | ResUi2dPaneData::VertexPos1(v) => v.serialize(writer),
@@ -182,9 +162,6 @@ impl ResUi2dPaneData {
             ResUi2dPaneData::DropShadow(d) => d.serialize(writer),
             ResUi2dPaneData::ProceduralShape(p) => p.serialize(writer),
         }
-
-        let payload_size = (writer.pos() - payload_start) as u32;
-        writer.patch_u32(size_pos, payload_size);
     }
 }
 
@@ -280,6 +257,7 @@ impl ResUi2dSystemDataAlignment {
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("System Data Alignment");
         writer.write_u32(self.options);
         writer.write_f32(self.margin);
     }
@@ -342,6 +320,8 @@ impl ResUi2dSystemDataDropShadow {
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("Drop Shadow");
+
         writer.write_u16(self.texture_id);
         writer.write_u8(self.u_options);
         writer.write_u8(self.v_options);
@@ -438,6 +418,8 @@ impl ResUi2dSystemDataMaskTexture {
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("Mask Texture");
+
         writer.write_u8(self.flags);
         for &byte in &self.reserve0 {
             writer.write_u8(byte);
@@ -548,6 +530,8 @@ impl ResUi2dSystemDataProceduralShape {
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("Procedural Shape");
+
         writer.write_u8(self.options);
         writer.write_u8(self.color0_options);
         writer.write_u8(self.inner_shadow_options);

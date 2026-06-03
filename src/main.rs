@@ -6,6 +6,7 @@ use std::process::exit;
 
 use crate::bflan::file::Bflan;
 use crate::bflyt::file::Bflyt;
+use crate::core::Writer;
 
 mod bflan;
 mod bflyt;
@@ -50,7 +51,6 @@ enum Action {
 fn main() {
     let cli = Cli::parse();
 
-    // Route the format first
     match &cli.format {
         Format::Bflan { action } => {
             handle_action("bflan", action);
@@ -121,7 +121,10 @@ fn test_roundtrip_bflan(input_dir: &Path, bflan_files: Vec<PathBuf>) {
     let mut fail_count = 0;
 
     for path in bflan_files {
-        let entry = path.strip_prefix(input_dir).unwrap_or(&path);
+        let mut entry = path.strip_prefix(input_dir).unwrap_or(&path);
+        if entry == "" {
+            entry = &path;
+        }
 
         if path.is_file() {
             if let Some(ext) = path.extension() {
@@ -153,51 +156,71 @@ fn test_roundtrip_bflan(input_dir: &Path, bflan_files: Vec<PathBuf>) {
             };
 
             let writer = file.serialize();
-            let file_out = writer.buffer;
 
-            if file_in == file_out {
-                success_count += 1;
-            } else {
-                println!("{file_name:?}");
-                if file_in.len() != file_out.len() {
-                    println!("Original length:\t{} bytes", file_in.len());
-                    println!("New length:\t\t{} bytes", file_out.len());
-                }
-
-                for i in 0..std::cmp::min(file_in.len(), file_out.len()) {
-                    // skip header file size
-                    if (0x0C..=0x0F).contains(&i) {
-                        continue;
-                    }
-
-                    if file_in[i] != file_out[i] {
-                        println!(
-                            "First difference at offset 0x{i:X}: expected 0x{:02X}, got 0x{:02X}",
-                            file_in[i], file_out[i]
-                        );
-
-                        let mut last_mark = "Unknown Location";
-
-                        for (pos, name) in &writer.breadcrumbs {
-                            if *pos <= i {
-                                last_mark = name;
-                            } else {
-                                break;
-                            }
-                        }
-
-                        println!("Context: {last_mark}\n");
-
-                        break;
-                    }
-                }
-                fail_count += 1;
-            }
+            compare_files(
+                writer,
+                file_name,
+                &file_in,
+                &mut success_count,
+                &mut fail_count,
+            );
         }
     }
 
     println!("Total successful:\t{success_count}");
     println!("Total failed:\t\t{fail_count}");
+}
+
+fn compare_files(
+    writer: Writer,
+    file_name: &OsStr,
+    file_in: &[u8],
+    success: &mut i32,
+    fail: &mut i32,
+) {
+    let file_out = writer.buffer;
+
+    if file_in == file_out {
+        *success += 1;
+    } else {
+        println!("{file_name:?}");
+        if file_in.len() != file_out.len() {
+            println!("Original length: {} bytes", file_in.len());
+            println!("New length: {} bytes", file_out.len());
+        }
+
+        for i in 0..std::cmp::min(file_in.len(), file_out.len()) {
+            // skip header file size
+            if (0x0C..=0x0F).contains(&i) {
+                continue;
+            }
+
+            if file_in[i] != file_out[i] {
+                println!(
+                    "First difference at offset 0x{i:X}: expected 0x{:02X}, got 0x{:02X}",
+                    file_in[i], file_out[i]
+                );
+
+                let mut last_marks: Vec<&str> = Vec::with_capacity(3);
+
+                for (pos, name) in &writer.breadcrumbs {
+                    if *pos <= i {
+                        if last_marks.len() >= 3 {
+                            last_marks.remove(0);
+                        }
+                        last_marks.push(name);
+                    } else {
+                        break;
+                    }
+                }
+
+                println!("Context: {}\n", last_marks.join(" -> "));
+
+                break;
+            }
+        }
+        *fail += 1;
+    }
 }
 
 fn find_files(dir: &Path, target_ext: &str, files: &mut Vec<PathBuf>) {
@@ -387,7 +410,10 @@ fn test_roundtrip_bflyt(input_dir: &Path, bflyt_files: Vec<PathBuf>) {
     let mut fail_count = 0;
 
     for path in bflyt_files {
-        let entry = path.strip_prefix(input_dir).unwrap_or(&path);
+        let mut entry = path.strip_prefix(input_dir).unwrap_or(&path);
+        if entry == "" {
+            entry = &path;
+        }
 
         if path.is_file() {
             if path.extension().map_or(true, |e| e != "bflyt") {
@@ -395,6 +421,7 @@ fn test_roundtrip_bflyt(input_dir: &Path, bflyt_files: Vec<PathBuf>) {
             }
 
             let file_name = entry.file_name().unwrap_or(OsStr::new("Unknown Name"));
+            println!("{file_name:?}");
 
             let file_in = match fs::read(&path) {
                 Ok(bytes) => bytes,
@@ -415,42 +442,14 @@ fn test_roundtrip_bflyt(input_dir: &Path, bflyt_files: Vec<PathBuf>) {
             };
 
             let writer = file.serialize();
-            let file_out = writer.buffer;
 
-            if file_in == file_out {
-                success_count += 1;
-            } else {
-                println!("{file_name:?}");
-                if file_in.len() != file_out.len() {
-                    println!("Original length:\t{} bytes", file_in.len());
-                    println!("New length:\t\t{} bytes", file_out.len());
-                }
-
-                for i in 0..std::cmp::min(file_in.len(), file_out.len()) {
-                    if (0x0C..=0x0F).contains(&i) {
-                        continue;
-                    }
-
-                    if file_in[i] != file_out[i] {
-                        println!(
-                            "First difference at offset 0x{i:X}: expected 0x{:02X}, got 0x{:02X}",
-                            file_in[i], file_out[i]
-                        );
-
-                        let mut last_mark = "Unknown Location";
-                        for (pos, name) in &writer.breadcrumbs {
-                            if *pos <= i {
-                                last_mark = name;
-                            } else {
-                                break;
-                            }
-                        }
-                        println!("Context: {last_mark}\n");
-                        break;
-                    }
-                }
-                fail_count += 1;
-            }
+            compare_files(
+                writer,
+                file_name,
+                &file_in,
+                &mut success_count,
+                &mut fail_count,
+            );
         }
     }
 

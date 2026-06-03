@@ -46,7 +46,6 @@ pub struct BflytTextureList {
 
 impl BflytTextureList {
     pub fn parse(cursor: &mut Cursor, section_start: usize) -> Self {
-        let txl_base = section_start + 8;
         let texture_count = cursor.read_u16();
         let _reserve0 = cursor.read_u16();
 
