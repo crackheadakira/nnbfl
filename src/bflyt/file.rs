@@ -56,7 +56,7 @@ pub enum BflytSection {
 }
 
 impl BflytSection {
-    pub fn parse(cursor: &mut Cursor, last_was_pane: &mut bool) -> Self {
+    pub fn parse(cursor: &mut Cursor, last_was_pane: &mut bool, is_embed: bool) -> Self {
         let section_start = cursor.pos;
         let magic = cursor.read_u32();
         let section_size = cursor.read_u32();
@@ -69,7 +69,9 @@ impl BflytSection {
             }
             MAGIC_LAYOUT => {
                 let s = BflytLayout::parse(cursor);
-                *last_was_pane = false;
+                if !is_embed {
+                    *last_was_pane = false;
+                }
                 BflytSection::Layout(s)
             }
             MAGIC_TEXTURELIST => {
@@ -98,7 +100,9 @@ impl BflytSection {
             MAGIC_GROUPEND => BflytSection::GroupEnd,
             MAGIC_PANE => {
                 let s = BflytPane::parse(cursor);
-                *last_was_pane = true;
+                if !is_embed {
+                    *last_was_pane = true;
+                }
                 BflytSection::Pane(s)
             }
             MAGIC_PICTUREPANE => {
@@ -114,7 +118,7 @@ impl BflytSection {
                 BflytSection::WindowPane(s)
             }
             MAGIC_PARTSPANE => {
-                let s = BflytPartsPane::parse(cursor);
+                let s = BflytPartsPane::parse(cursor, last_was_pane);
                 BflytSection::PartsPane(s)
             }
             MAGIC_ALIGNMENTPANE => {
@@ -236,7 +240,7 @@ impl Bflyt {
 
         let mut last_was_pane = false;
         for _ in 0..section_count {
-            let section = BflytSection::parse(&mut cursor, &mut last_was_pane);
+            let section = BflytSection::parse(&mut cursor, &mut last_was_pane, false);
 
             sections.push(section);
         }

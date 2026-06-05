@@ -64,7 +64,9 @@ impl ResUi2dUserDataSection {
             };
 
             if data_type_val == 0 {
-                if let ResUi2dUserDataInner::String(str) = &data.data_array[0] { writer.write_u16(str.len() as u16) }
+                if let ResUi2dUserDataInner::String(str) = &data.data_array[0] {
+                    writer.write_u16(str.len() as u16)
+                }
             } else {
                 writer.write_u16(data.data_array.len() as u16);
             }

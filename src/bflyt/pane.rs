@@ -763,7 +763,7 @@ pub struct PartsProperty {
 }
 
 impl PartsProperty {
-    pub fn parse(cursor: &mut Cursor, last_parts_pane: usize) -> Self {
+    pub fn parse(cursor: &mut Cursor, last_parts_pane: usize, is_pane: &mut bool) -> Self {
         let mut property = Self {
             property_name: cursor.read_fixed_string(PANE_NAME_LEN),
             usage_flag: cursor.read_u8(),
@@ -783,7 +783,7 @@ impl PartsProperty {
 
         if pane_offset > 0 {
             cursor.seek(last_parts_pane + pane_offset as usize);
-            let pane = BflytSection::parse(cursor, &mut false);
+            let pane = BflytSection::parse(cursor, is_pane, true);
 
             property.o_section = Some(pane);
             cursor.seek(restore_point);
@@ -791,7 +791,7 @@ impl PartsProperty {
 
         if user_data_offset > 0 {
             cursor.seek(last_parts_pane + user_data_offset as usize);
-            let user_data = BflytSection::parse(cursor, &mut false);
+            let user_data = BflytSection::parse(cursor, is_pane, true);
 
             property.o_user_data = Some(user_data);
             cursor.seek(restore_point);
@@ -833,7 +833,7 @@ pub struct BflytPartsPane {
 }
 
 impl BflytPartsPane {
-    pub fn parse(cursor: &mut Cursor) -> Self {
+    pub fn parse(cursor: &mut Cursor, is_pane: &mut bool) -> Self {
         let base_offset = cursor.pos;
         let base = BflytPane::parse(cursor);
 
@@ -846,7 +846,7 @@ impl BflytPartsPane {
         let mut properties = Vec::new();
 
         for _ in 0..property_count {
-            let property = PartsProperty::parse(cursor, base_offset - 8);
+            let property = PartsProperty::parse(cursor, base_offset - 8, is_pane);
             properties.push(property);
         }
 

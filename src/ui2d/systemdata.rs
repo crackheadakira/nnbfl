@@ -87,6 +87,7 @@ pub enum ResUi2dSystemDataInner {
     Pane(ResUi2dPaneData),
 }
 
+#[derive(Debug)]
 #[repr(u32)]
 pub enum Ui2dLayoutSystemDataType {
     AnimTagName = 0,
