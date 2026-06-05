@@ -185,8 +185,6 @@ pub struct ExtendedUserDataAnim {
     pub block_size: u32,
 
     pub unk_1: u16,
-    pub entry_count: u16,
-    pub entries_inside_entry: u16,
     pub unk_2: u16,
 
     pub block_size_2: u32,
@@ -196,7 +194,7 @@ pub struct ExtendedUserDataAnim {
     pub unk_5: u16,
     pub frame_count: u16,
 
-    pub values: Vec<f32>,
+    pub values: Vec<Vec<f32>>,
 
     pub key: String,
 }
@@ -217,11 +215,15 @@ impl ExtendedUserDataAnim {
         let unk_5 = cursor.read_u16();
         let frame_count = cursor.read_u16();
 
-        let count = entry_count * entries_inside_entry;
-
         let mut values = Vec::new();
-        for _ in 0..count {
-            values.push(cursor.read_f32());
+        for _ in 0..entry_count {
+            let mut inner_values = Vec::new();
+
+            for _ in 0..entries_inside_entry {
+                inner_values.push(cursor.read_f32())
+            }
+
+            values.push(inner_values);
         }
 
         let restore = cursor.pos;
@@ -235,8 +237,6 @@ impl ExtendedUserDataAnim {
         Self {
             block_size,
             unk_1,
-            entry_count,
-            entries_inside_entry,
             unk_2,
             block_size_2,
             unk_3,
@@ -254,8 +254,8 @@ impl ExtendedUserDataAnim {
 
         writer.write_u32(self.block_size);
         writer.write_u16(self.unk_1);
-        writer.write_u16(self.entry_count);
-        writer.write_u16(self.entries_inside_entry);
+        writer.write_u16(self.values.len() as u16);
+        writer.write_u16(self.values[0].len() as u16);
         writer.write_u16(self.unk_2);
         writer.write_u32(self.block_size_2);
         writer.write_u16(self.unk_3);
@@ -263,8 +263,10 @@ impl ExtendedUserDataAnim {
         writer.write_u16(self.unk_5);
         writer.write_u16(self.frame_count);
 
-        for val in &self.values {
-            writer.write_f32(*val);
+        for vec in &self.values {
+            for val in vec {
+                writer.write_f32(*val);
+            }
         }
 
         let offset_pos = writer.write_placeholder_u32();
