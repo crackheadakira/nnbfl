@@ -48,6 +48,10 @@ pub enum BflytSection {
     ScissorPane(BflytPane),
     Group(BflytGroup),
     ControlSource(BflytControlSource),
+    PaneStart,
+    PaneEnd,
+    GroupStart,
+    GroupEnd,
     Unknown(SectionHeader, Vec<u8>),
 }
 
@@ -88,34 +92,10 @@ impl BflytSection {
                 let s = BflytVectorGraphicsList::parse(cursor, section_start);
                 BflytSection::VectorGraphicsList(s)
             }
-            MAGIC_PANESTART => BflytSection::Unknown(
-                SectionHeader {
-                    magic,
-                    size: section_size,
-                },
-                Vec::new(),
-            ),
-            MAGIC_PANEEND => BflytSection::Unknown(
-                SectionHeader {
-                    magic,
-                    size: section_size,
-                },
-                Vec::new(),
-            ),
-            MAGIC_GROUPSTART => BflytSection::Unknown(
-                SectionHeader {
-                    magic,
-                    size: section_size,
-                },
-                Vec::new(),
-            ),
-            MAGIC_GROUPEND => BflytSection::Unknown(
-                SectionHeader {
-                    magic,
-                    size: section_size,
-                },
-                Vec::new(),
-            ),
+            MAGIC_PANESTART => BflytSection::PaneStart,
+            MAGIC_PANEEND => BflytSection::PaneEnd,
+            MAGIC_GROUPSTART => BflytSection::GroupStart,
+            MAGIC_GROUPEND => BflytSection::GroupEnd,
             MAGIC_PANE => {
                 let s = BflytPane::parse(cursor);
                 *last_was_pane = true;
@@ -210,6 +190,7 @@ impl BflytSection {
             Self::Group(s) => s.serialize(writer),
             Self::ControlSource(s) => s.serialize(writer, section_start),
             Self::Unknown(_, data) => writer.write_bytes(data),
+            Self::PaneStart | Self::PaneEnd | Self::GroupStart | Self::GroupEnd => {}
         }
 
         writer.align(4);
@@ -323,9 +304,10 @@ fn build_pane_tree(sections: &[BflytSection], idx: &mut usize) -> Vec<PaneNode> 
 
                     if *idx < sections.len()
                         && let BflytSection::Unknown(h, _) = &sections[*idx]
-                            && h.magic == MAGIC_PANEEND {
-                                *idx += 1;
-                            }
+                        && h.magic == MAGIC_PANEEND
+                    {
+                        *idx += 1;
+                    }
                     if let Some(pane) = pane_section {
                         nodes.push(PaneNode { pane, children });
                     }
@@ -349,17 +331,19 @@ fn build_group_tree(sections: &[BflytSection], idx: &mut usize) -> Vec<GroupNode
             BflytSection::Unknown(h, _) if h.magic == MAGIC_GROUPSTART => {
                 *idx += 1;
                 if *idx < sections.len()
-                    && let BflytSection::Group(g) = &sections[*idx] {
-                        let group = g.clone_group();
+                    && let BflytSection::Group(g) = &sections[*idx]
+                {
+                    let group = g.clone_group();
+                    *idx += 1;
+                    let children = build_group_tree(sections, idx);
+                    if *idx < sections.len()
+                        && let BflytSection::Unknown(h, _) = &sections[*idx]
+                        && h.magic == MAGIC_GROUPEND
+                    {
                         *idx += 1;
-                        let children = build_group_tree(sections, idx);
-                        if *idx < sections.len()
-                            && let BflytSection::Unknown(h, _) = &sections[*idx]
-                                && h.magic == MAGIC_GROUPEND {
-                                    *idx += 1;
-                                }
-                        nodes.push(GroupNode { group, children });
                     }
+                    nodes.push(GroupNode { group, children });
+                }
             }
             BflytSection::Unknown(h, _) if h.magic == MAGIC_GROUPEND => break,
             _ => {
@@ -390,6 +374,10 @@ fn section_magic(section: &BflytSection) -> u32 {
         BflytSection::ScissorPane(_) => MAGIC_SCISSORPANE,
         BflytSection::Group(_) => MAGIC_GROUP,
         BflytSection::ControlSource(_) => MAGIC_CONTROLSOURCE,
+        BflytSection::PaneStart => MAGIC_PANESTART,
+        BflytSection::PaneEnd => MAGIC_PANEEND,
+        BflytSection::GroupStart => MAGIC_GROUPSTART,
+        BflytSection::GroupEnd => MAGIC_GROUPEND,
         BflytSection::Unknown(h, _) => h.magic,
     }
 }

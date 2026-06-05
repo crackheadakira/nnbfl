@@ -43,6 +43,10 @@ pub fn section_name(section: &BflytSection) -> &'static str {
         BflytSection::ScissorPane(_) => "Scissor Pane",
         BflytSection::Group(_) => "Group",
         BflytSection::ControlSource(_) => "Control Source",
+        BflytSection::PaneStart => "Pane Start",
+        BflytSection::PaneEnd => "Pane End",
+        BflytSection::GroupStart => "Group Start",
+        BflytSection::GroupEnd => "Group End",
         BflytSection::Unknown(_, _) => "Unknown",
     }
 }
