@@ -229,7 +229,7 @@ fn find_files(dir: &Path, target_ext: &str, files: &mut Vec<PathBuf>) {
             let path = entry.path();
             if path.is_dir() {
                 find_files(&path, target_ext, files);
-            } else if path.is_file() && path.extension().map_or(false, |e| e == target_ext) {
+            } else if path.is_file() && path.extension().is_some_and(|e| e == target_ext) {
                 files.push(path);
             }
         }
@@ -416,7 +416,7 @@ fn test_roundtrip_bflyt(input_dir: &Path, bflyt_files: Vec<PathBuf>) {
         }
 
         if path.is_file() {
-            if path.extension().map_or(true, |e| e != "bflyt") {
+            if path.extension().is_none_or(|e| e != "bflyt") {
                 continue;
             }
 

@@ -633,7 +633,7 @@ impl DetailedCombinerColorFlags {
 
     pub fn to_u32(&self) -> u32 {
         let mut flags = 0u32;
-        flags |= (self.color_sources[0].to_u8() as u32 & 0xF) << 0;
+        flags |= self.color_sources[0].to_u8() as u32 & 0xF;
         flags |= (self.color_sources[1].to_u8() as u32 & 0xF) << 4;
         flags |= (self.color_sources[2].to_u8() as u32 & 0xF) << 8;
         flags |= (self.color_ops[0].to_u8() as u32 & 0xF) << 12;
@@ -676,7 +676,7 @@ impl DetailedCombinerAlphaFlags {
 
     pub fn to_i32(&self) -> i32 {
         let mut flags = 0u32;
-        flags |= (self.alpha_sources[0].to_u8() as u32 & 0xF) << 0;
+        flags |= self.alpha_sources[0].to_u8() as u32 & 0xF;
         flags |= (self.alpha_sources[1].to_u8() as u32 & 0xF) << 4;
         flags |= (self.alpha_sources[2].to_u8() as u32 & 0xF) << 8;
         flags |= (self.alpha_ops[0].to_u8() as u32 & 0xF) << 12;
@@ -855,7 +855,7 @@ pub struct MatMemCount {
 impl MatMemCount {
     pub fn decode(raw: u32) -> Self {
         Self {
-            tex_map_count: ((raw >> 0) & 0x3) as u8,
+            tex_map_count: (raw & 0x3) as u8,
             tex_srt_count: ((raw >> 2) & 0x3) as u8,
             tex_coord_gen_count: ((raw >> 4) & 0x3) as u8,
             tev_combiner_count: ((raw >> 6) & 0x7) as u8,
@@ -1101,7 +1101,7 @@ impl BflytMaterial {
 
         let n = self.colors.len();
         let mut cumulative_offset = (2 + n) as u8;
-        for (_, entry) in self.colors.iter().enumerate() {
+        for entry in self.colors.iter() {
             writer.write_u8(cumulative_offset);
             cumulative_offset += if entry.is_float { 16 } else { 4 };
         }

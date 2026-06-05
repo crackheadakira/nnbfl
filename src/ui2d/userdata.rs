@@ -64,10 +64,7 @@ impl ResUi2dUserDataSection {
             };
 
             if data_type_val == 0 {
-                match &data.data_array[0] {
-                    ResUi2dUserDataInner::String(str) => writer.write_u16(str.len() as u16),
-                    _ => {}
-                }
+                if let ResUi2dUserDataInner::String(str) = &data.data_array[0] { writer.write_u16(str.len() as u16) }
             } else {
                 writer.write_u16(data.data_array.len() as u16);
             }
@@ -93,7 +90,7 @@ impl ResUi2dUserDataSection {
                 if data.data_array.is_empty() {
                     continue;
                 }
-                if !data.data_array.iter().any(|item| type_check(item)) {
+                if !data.data_array.iter().any(type_check) {
                     continue;
                 }
 

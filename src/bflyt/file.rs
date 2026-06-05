@@ -185,12 +185,12 @@ impl BflytSection {
 
     pub fn serialize(&self, writer: &mut Writer) {
         let section_start = writer.pos();
-        let magic = section_magic(&self);
+        let magic = section_magic(self);
 
         writer.write_u32(magic);
         let size_pos = writer.write_placeholder_u32();
 
-        writer.mark(&format!("BflytSection {}", section_name(&self)));
+        writer.mark(&format!("BflytSection {}", section_name(self)));
 
         match self {
             Self::UserData(s) => s.serialize(writer),
@@ -321,13 +321,11 @@ fn build_pane_tree(sections: &[BflytSection], idx: &mut usize) -> Vec<PaneNode> 
                     *idx += 1;
                     let children = build_pane_tree(sections, idx);
 
-                    if *idx < sections.len() {
-                        if let BflytSection::Unknown(h, _) = &sections[*idx] {
-                            if h.magic == MAGIC_PANEEND {
+                    if *idx < sections.len()
+                        && let BflytSection::Unknown(h, _) = &sections[*idx]
+                            && h.magic == MAGIC_PANEEND {
                                 *idx += 1;
                             }
-                        }
-                    }
                     if let Some(pane) = pane_section {
                         nodes.push(PaneNode { pane, children });
                     }
@@ -350,21 +348,18 @@ fn build_group_tree(sections: &[BflytSection], idx: &mut usize) -> Vec<GroupNode
         match &sections[*idx] {
             BflytSection::Unknown(h, _) if h.magic == MAGIC_GROUPSTART => {
                 *idx += 1;
-                if *idx < sections.len() {
-                    if let BflytSection::Group(g) = &sections[*idx] {
+                if *idx < sections.len()
+                    && let BflytSection::Group(g) = &sections[*idx] {
                         let group = g.clone_group();
                         *idx += 1;
                         let children = build_group_tree(sections, idx);
-                        if *idx < sections.len() {
-                            if let BflytSection::Unknown(h, _) = &sections[*idx] {
-                                if h.magic == MAGIC_GROUPEND {
+                        if *idx < sections.len()
+                            && let BflytSection::Unknown(h, _) = &sections[*idx]
+                                && h.magic == MAGIC_GROUPEND {
                                     *idx += 1;
                                 }
-                            }
-                        }
                         nodes.push(GroupNode { group, children });
                     }
-                }
             }
             BflytSection::Unknown(h, _) if h.magic == MAGIC_GROUPEND => break,
             _ => {
