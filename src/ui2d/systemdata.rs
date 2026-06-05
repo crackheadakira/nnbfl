@@ -484,7 +484,7 @@ pub struct ResUi2dSystemDataProceduralShape {
     pub gradation_overlay_options: u8,
     pub drop_shadow_blend_mode: u8,
     pub drop_shadow_base_comp: u8,
-    pub reserve0: [u8; 4],
+    pub reserve0: [u32; 4],
     pub rounded_corner0: [f32; 4],
     pub rounded_corner1: [f32; 4],
     pub reserve1: f32,
@@ -512,10 +512,10 @@ impl ResUi2dSystemDataProceduralShape {
             drop_shadow_blend_mode: cursor.read_u8(),
             drop_shadow_base_comp: cursor.read_u8(),
             reserve0: [
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
+                cursor.read_u32(),
+                cursor.read_u32(),
+                cursor.read_u32(),
+                cursor.read_u32(),
             ],
             rounded_corner0: [
                 cursor.read_f32(),
@@ -570,7 +570,7 @@ impl ResUi2dSystemDataProceduralShape {
         writer.write_u8(self.drop_shadow_base_comp);
 
         for &b in &self.reserve0 {
-            writer.write_u8(b);
+            writer.write_u32(b);
         }
 
         for &f in &self.rounded_corner0 {

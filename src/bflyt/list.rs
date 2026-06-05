@@ -390,20 +390,355 @@ impl MaterialFontShadowColor {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MaterialDetailedCombiner {
-    pub data: [u32; 4],
+// MaterialDetailedCombiner & these enums are from KillzXGaming's LayoutLibrary repository!
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum TevSource {
+    Primary = 0,
+    Texture0 = 3,
+    Texture1 = 4,
+    Texture2 = 5,
+    Constant = 14,
+    Previous = 15,
+    Unknown(u8),
 }
-impl MaterialDetailedCombiner {
-    fn parse(c: &mut Cursor) -> Self {
-        Self {
-            data: [c.read_u32(), c.read_u32(), c.read_u32(), c.read_u32()],
+
+impl TevSource {
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::Primary,
+            3 => Self::Texture0,
+            4 => Self::Texture1,
+            5 => Self::Texture2,
+            14 => Self::Constant,
+            15 => Self::Previous,
+            other => Self::Unknown(other),
         }
     }
-    fn serialize(&self, w: &mut Writer) {
-        for v in &self.data {
-            w.write_u32(*v);
+
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::Primary => 0,
+            Self::Texture0 => 3,
+            Self::Texture1 => 4,
+            Self::Texture2 => 5,
+            Self::Constant => 14,
+            Self::Previous => 15,
+            Self::Unknown(other) => other,
         }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum TevScale {
+    Scale1 = 0,
+    Scale2 = 1,
+    Scale4 = 2,
+    Unknown(u8),
+}
+
+impl TevScale {
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::Scale1,
+            1 => Self::Scale2,
+            2 => Self::Scale4,
+            other => Self::Unknown(other),
+        }
+    }
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::Scale1 => 0,
+            Self::Scale2 => 1,
+            Self::Scale4 => 2,
+            Self::Unknown(other) => other,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum TevMode {
+    Replace = 0,
+    Modulate = 1,
+    Add = 2,
+    AddSigned = 3,
+    Interpolate = 4,
+    Subtract = 5,
+    AddMultiplicate = 6,
+    MultiplcateAdd = 7,
+    Overlay = 8,
+    Indirect = 9,
+    BlendIndirect = 10,
+    EachIndirect = 11,
+    Unknown(u8),
+}
+
+impl TevMode {
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::Replace,
+            1 => Self::Modulate,
+            2 => Self::Add,
+            3 => Self::AddSigned,
+            4 => Self::Interpolate,
+            5 => Self::Subtract,
+            6 => Self::AddMultiplicate,
+            7 => Self::MultiplcateAdd,
+            8 => Self::Overlay,
+            9 => Self::Indirect,
+            10 => Self::BlendIndirect,
+            11 => Self::EachIndirect,
+            other => Self::Unknown(other),
+        }
+    }
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::Replace => 0,
+            Self::Modulate => 1,
+            Self::Add => 2,
+            Self::AddSigned => 3,
+            Self::Interpolate => 4,
+            Self::Subtract => 5,
+            Self::AddMultiplicate => 6,
+            Self::MultiplcateAdd => 7,
+            Self::Overlay => 8,
+            Self::Indirect => 9,
+            Self::BlendIndirect => 10,
+            Self::EachIndirect => 11,
+            Self::Unknown(other) => other,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum TevColorOp {
+    RGB = 0,
+    InvRGB = 1,
+    Alpha = 2,
+    InvAlpha = 3,
+    RRR = 4,
+    InvRRR = 5,
+    GGG = 6,
+    InvGGG = 7,
+    BBB = 8,
+    InvBBB = 9,
+    Unknown(u8),
+}
+
+impl TevColorOp {
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::RGB,
+            1 => Self::InvRGB,
+            2 => Self::Alpha,
+            3 => Self::InvAlpha,
+            4 => Self::RRR,
+            5 => Self::InvRRR,
+            6 => Self::GGG,
+            7 => Self::InvGGG,
+            8 => Self::BBB,
+            9 => Self::InvBBB,
+            other => Self::Unknown(other),
+        }
+    }
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::RGB => 0,
+            Self::InvRGB => 1,
+            Self::Alpha => 2,
+            Self::InvAlpha => 3,
+            Self::RRR => 4,
+            Self::InvRRR => 5,
+            Self::GGG => 6,
+            Self::InvGGG => 7,
+            Self::BBB => 8,
+            Self::InvBBB => 9,
+            Self::Unknown(other) => other,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum TevAlphaOp {
+    Alpha = 0,
+    InvAlpha = 1,
+    R = 2,
+    InvR = 3,
+    G = 4,
+    InvG = 5,
+    B = 6,
+    InvB = 7,
+    Unknown(u8),
+}
+
+impl TevAlphaOp {
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::Alpha,
+            1 => Self::InvAlpha,
+            2 => Self::R,
+            3 => Self::InvR,
+            4 => Self::G,
+            5 => Self::InvG,
+            6 => Self::B,
+            7 => Self::InvB,
+            other => Self::Unknown(other),
+        }
+    }
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::Alpha => 0,
+            Self::InvAlpha => 1,
+            Self::R => 2,
+            Self::InvR => 3,
+            Self::G => 4,
+            Self::InvG => 5,
+            Self::B => 6,
+            Self::InvB => 7,
+            Self::Unknown(other) => other,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DetailedCombinerColorFlags {
+    pub color_sources: [TevSource; 3],
+    pub color_ops: [TevColorOp; 3],
+    pub color_mode: TevMode,
+    pub color_scale: TevScale,
+}
+
+impl DetailedCombinerColorFlags {
+    pub fn from_u32(flags: u32) -> Self {
+        let get_bits = |start: u8, len: u8| -> u8 { ((flags >> start) & ((1 << len) - 1)) as u8 };
+
+        Self {
+            color_sources: [
+                TevSource::from_u8(get_bits(0, 4)),
+                TevSource::from_u8(get_bits(4, 4)),
+                TevSource::from_u8(get_bits(8, 4)),
+            ],
+            color_ops: [
+                TevColorOp::from_u8(get_bits(12, 4)),
+                TevColorOp::from_u8(get_bits(16, 4)),
+                TevColorOp::from_u8(get_bits(20, 4)),
+            ],
+            color_mode: TevMode::from_u8(get_bits(24, 4)),
+            color_scale: TevScale::from_u8(get_bits(28, 3)),
+        }
+    }
+
+    pub fn to_u32(&self) -> u32 {
+        let mut flags = 0u32;
+        flags |= (self.color_sources[0].to_u8() as u32 & 0xF) << 0;
+        flags |= (self.color_sources[1].to_u8() as u32 & 0xF) << 4;
+        flags |= (self.color_sources[2].to_u8() as u32 & 0xF) << 8;
+        flags |= (self.color_ops[0].to_u8() as u32 & 0xF) << 12;
+        flags |= (self.color_ops[1].to_u8() as u32 & 0xF) << 16;
+        flags |= (self.color_ops[2].to_u8() as u32 & 0xF) << 20;
+        flags |= (self.color_mode.to_u8() as u32 & 0xF) << 24;
+        flags |= (self.color_scale.to_u8() as u32 & 0x7) << 28;
+        flags
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DetailedCombinerAlphaFlags {
+    pub alpha_sources: [TevSource; 3],
+    pub alpha_ops: [TevAlphaOp; 3],
+    pub alpha_mode: TevMode,
+    pub alpha_scale: TevScale,
+}
+
+impl DetailedCombinerAlphaFlags {
+    pub fn from_i32(flags: i32) -> Self {
+        let u_flags = flags as u32;
+        let get_bits = |start: u8, len: u8| -> u8 { ((u_flags >> start) & ((1 << len) - 1)) as u8 };
+
+        Self {
+            alpha_sources: [
+                TevSource::from_u8(get_bits(0, 4)),
+                TevSource::from_u8(get_bits(4, 4)),
+                TevSource::from_u8(get_bits(8, 4)),
+            ],
+            alpha_ops: [
+                TevAlphaOp::from_u8(get_bits(12, 4)),
+                TevAlphaOp::from_u8(get_bits(16, 4)),
+                TevAlphaOp::from_u8(get_bits(20, 4)),
+            ],
+            alpha_mode: TevMode::from_u8(get_bits(24, 4)),
+            alpha_scale: TevScale::from_u8(get_bits(28, 3)),
+        }
+    }
+
+    pub fn to_i32(&self) -> i32 {
+        let mut flags = 0u32;
+        flags |= (self.alpha_sources[0].to_u8() as u32 & 0xF) << 0;
+        flags |= (self.alpha_sources[1].to_u8() as u32 & 0xF) << 4;
+        flags |= (self.alpha_sources[2].to_u8() as u32 & 0xF) << 8;
+        flags |= (self.alpha_ops[0].to_u8() as u32 & 0xF) << 12;
+        flags |= (self.alpha_ops[1].to_u8() as u32 & 0xF) << 16;
+        flags |= (self.alpha_ops[2].to_u8() as u32 & 0xF) << 20;
+        flags |= (self.alpha_mode.to_u8() as u32 & 0xF) << 24;
+        flags |= (self.alpha_scale.to_u8() as u32 & 0x7) << 28;
+        flags as i32
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MaterialDetailedCombiner {
+    pub value: i32,
+    pub color1: Color4u8,
+    pub color2: Color4u8,
+    pub color3: Color4u8,
+    pub color4: Color4u8,
+    pub color5: Color4u8,
+    pub color: Color4u8,
+
+    pub color_flags: DetailedCombinerColorFlags,
+    pub alpha_flags: DetailedCombinerAlphaFlags,
+
+    pub unknown_1: u32,
+    pub unknown_2: u32,
+}
+
+impl MaterialDetailedCombiner {
+    pub fn parse(c: &mut Cursor) -> Self {
+        Self {
+            value: c.read_i32(),
+            color1: Color4u8::parse(c),
+            color2: Color4u8::parse(c),
+            color3: Color4u8::parse(c),
+            color4: Color4u8::parse(c),
+            color5: Color4u8::parse(c),
+            color: Color4u8::parse(c),
+
+            color_flags: DetailedCombinerColorFlags::from_u32(c.read_u32()),
+            alpha_flags: DetailedCombinerAlphaFlags::from_i32(c.read_i32()),
+
+            unknown_1: c.read_u32(),
+            unknown_2: c.read_u32(),
+        }
+    }
+
+    pub fn serialize(&self, w: &mut Writer) {
+        w.write_i32(self.value);
+        self.color1.serialize(w);
+        self.color2.serialize(w);
+        self.color3.serialize(w);
+        self.color4.serialize(w);
+        self.color5.serialize(w);
+        self.color.serialize(w);
+
+        w.write_u32(self.color_flags.to_u32());
+        w.write_i32(self.alpha_flags.to_i32());
+
+        w.write_u32(self.unknown_1);
+        w.write_u32(self.unknown_2);
     }
 }
 
@@ -1039,6 +1374,7 @@ impl BflytGroup {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BflytControlSource {
     pub control_name: String,
+    pub reserve0_name: String,
 
     pub name_array_offset: u32,
     pub pane_name_offset_array: u32,
@@ -1055,7 +1391,7 @@ impl BflytControlSource {
     pub fn parse(cursor: &mut Cursor) -> Self {
         let section_start = cursor.pos - 8;
 
-        let _reserve0_offset = cursor.read_u32() as usize;
+        let reserve0_offset = cursor.read_u32() as usize;
         let name_array_offset = cursor.read_u32() as usize;
         let pane_count = cursor.read_u16() as usize;
         let anim_count = cursor.read_u16() as usize;
@@ -1063,6 +1399,9 @@ impl BflytControlSource {
         let anim_name_offset_arr = cursor.read_u32() as usize;
 
         let control_name = cursor.read_null_terminated_string();
+
+        cursor.seek(section_start + reserve0_offset);
+        let reserve0_name = cursor.read_null_terminated_string();
 
         let na_base = section_start + name_array_offset;
         cursor.seek(na_base);
@@ -1116,6 +1455,7 @@ impl BflytControlSource {
 
         Self {
             control_name,
+            reserve0_name,
             name_array_offset: name_array_offset as u32,
             pane_name_offset_array: pane_name_offset_arr as u32,
             anim_name_offset_array: anim_name_offset_arr as u32,
@@ -1142,7 +1482,7 @@ impl BflytControlSource {
 
         let reserve0_off = writer.pos() - section_start;
         writer.patch_u32(reserve0_offset_pos, reserve0_off as u32);
-        writer.write_null_terminated_string(&self.control_name);
+        writer.write_null_terminated_string(&self.reserve0_name);
         writer.align(4);
 
         let name_array_off = writer.pos() - section_start;
