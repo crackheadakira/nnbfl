@@ -15,7 +15,6 @@ pub struct Bflan {
     pub micro_version: u16,
     pub minor_version: u8,
     pub major_version: u8,
-    pub file_size: u32,
     pub section_count: u32,
 
     pub sections: Vec<BflanSections>,
@@ -36,7 +35,7 @@ impl Bflan {
         let micro_version = cursor.read_u16();
         let minor_version = cursor.read_u8();
         let major_version = cursor.read_u8();
-        let file_size = cursor.read_u32();
+        let _file_size = cursor.read_u32();
         let section_count = cursor.read_u32();
 
         let sections = BflanSections::parse(&mut cursor, section_count);
@@ -48,7 +47,6 @@ impl Bflan {
             micro_version,
             minor_version,
             major_version,
-            file_size,
             section_count,
             sections,
         })

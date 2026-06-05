@@ -4,7 +4,7 @@ use crate::core::{Cursor, Writer};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BflytLayout {
-    pub is_centered: u8,
+    pub is_centered: bool,
     pub reserve0: u8,
     pub reserve1: u16,
     pub width: f32,
@@ -17,7 +17,7 @@ pub struct BflytLayout {
 impl BflytLayout {
     pub fn parse(cursor: &mut Cursor) -> Self {
         Self {
-            is_centered: cursor.read_u8(),
+            is_centered: cursor.read_u8() != 0,
             reserve0: cursor.read_u8(),
             reserve1: cursor.read_u16(),
             width: cursor.read_f32(),
@@ -29,7 +29,7 @@ impl BflytLayout {
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
-        writer.write_u8(self.is_centered);
+        writer.write_u8(self.is_centered.into());
         writer.write_u8(self.reserve0);
         writer.write_u16(self.reserve1);
         writer.write_f32(self.width);
@@ -905,7 +905,11 @@ pub const MATERIAL_NAME_LEN: usize = 0x1c;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MaterialColorEntry {
     pub is_float: bool,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub color_u8: Option<Color4u8>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub color_f32: Option<Color4f>,
 }
 
@@ -928,7 +932,10 @@ pub struct BflytMaterial {
     pub indirect_matrices: Vec<MaterialIndirectMatrix>,
     pub projection_tex_gens: Vec<MaterialProjectionTexGen>,
     pub font_shadow_colors: Vec<MaterialFontShadowColor>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub detailed_combiner: Option<MaterialDetailedCombiner>,
+
     pub user_combiners: Vec<MaterialUserCombiner>,
     pub vector_texture_infos: Vec<MaterialVectorTextureInfo>,
     pub brick_repeat_shader_infos: Vec<MaterialBrickRepeatShaderInfo>,

@@ -11,13 +11,14 @@ pub struct ResBflanPaneAnimTag {
     pub tag_order: u16,
     pub start_frame: u16,
     pub end_frame: u16,
-    pub is_descending_bind: u8,
+    pub is_descending_bind: bool,
     pub reserve0: u8,
     pub reserve1: u16,
 
     pub o_name: String,
     pub groups: Vec<ResBflanGroup>,
 
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub user_data: Option<ResUi2dUserDataSection>,
 }
 
@@ -30,7 +31,7 @@ impl ResBflanPaneAnimTag {
         let user_data_section_offset = cursor.read_u32();
         let start_frame = cursor.read_u16();
         let end_frame = cursor.read_u16();
-        let is_descending_bind = cursor.read_u8();
+        let is_descending_bind = cursor.read_u8() != 0;
         let reserve0 = cursor.read_u8();
         let reserve1 = cursor.read_u16();
 
@@ -89,7 +90,7 @@ impl ResBflanPaneAnimTag {
 
         writer.write_u16(self.start_frame);
         writer.write_u16(self.end_frame);
-        writer.write_u8(self.is_descending_bind);
+        writer.write_u8(self.is_descending_bind.into());
         writer.write_u8(self.reserve0);
         writer.write_u16(self.reserve1);
 

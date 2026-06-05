@@ -146,7 +146,7 @@ pub struct BflytPicturePane {
     pub bottom_left_vertex_color: Color4u8,
     pub bottom_right_vertex_color: Color4u8,
     pub material_index: u16,
-    pub is_shape: u8,
+    pub is_shape: bool,
     pub texture_uvs: Vec<TextureUv>,
 }
 
@@ -159,7 +159,7 @@ impl BflytPicturePane {
         let bottom_right_vertex_color = Color4u8::parse(cursor);
         let material_index = cursor.read_u16();
         let texture_count = cursor.read_u8();
-        let is_shape = cursor.read_u8();
+        let is_shape = cursor.read_u8() != 0;
         let mut texture_uvs = Vec::new();
         for _ in 0..texture_count {
             texture_uvs.push(TextureUv::parse(cursor));
@@ -186,7 +186,7 @@ impl BflytPicturePane {
         self.bottom_right_vertex_color.serialize(writer);
         writer.write_u16(self.material_index);
         writer.write_u8(self.texture_uvs.len() as u8);
-        writer.write_u8(self.is_shape);
+        writer.write_u8(self.is_shape.into());
         for uv in &self.texture_uvs {
             uv.serialize(writer);
         }
@@ -203,6 +203,8 @@ pub struct PerCharacterTransform {
     pub reserve0: u8,
     pub reserve1: u32,
     pub char_list: [u8; 16],
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub anim_info: Option<AnimInfo>,
 }
 
@@ -749,8 +751,14 @@ pub struct PartsProperty {
     pub basic_usage_flag: u8,
     pub material_usage_flag: u8,
     pub user_data_type: u8,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub o_section: Option<BflytSection>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub o_user_data: Option<BflytSection>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub o_basic_info: Option<PartsPaneBasicInfo>,
 }
 
@@ -899,8 +907,8 @@ pub struct BflytAlignmentPane {
     pub base: BflytPane,
     pub direction: u32,
     pub default_margin: f32,
-    pub is_align_last_pane: u8,
-    pub is_vertical_alignment: u8,
+    pub is_align_last_pane: bool,
+    pub is_vertical_alignment: bool,
     pub reserve0: u16,
 }
 
@@ -911,8 +919,8 @@ impl BflytAlignmentPane {
             base,
             direction: cursor.read_u32(),
             default_margin: cursor.read_f32(),
-            is_align_last_pane: cursor.read_u8(),
-            is_vertical_alignment: cursor.read_u8(),
+            is_align_last_pane: cursor.read_u8() != 0,
+            is_vertical_alignment: cursor.read_u8() != 0,
             reserve0: cursor.read_u16(),
         }
     }
@@ -922,8 +930,8 @@ impl BflytAlignmentPane {
 
         writer.write_u32(self.direction);
         writer.write_f32(self.default_margin);
-        writer.write_u8(self.is_align_last_pane);
-        writer.write_u8(self.is_vertical_alignment);
+        writer.write_u8(self.is_align_last_pane.into());
+        writer.write_u8(self.is_vertical_alignment.into());
         writer.write_u16(self.reserve0);
     }
 }
@@ -934,8 +942,8 @@ pub struct BflytCapturePane {
     pub reserve0: [u32; 4],
     pub clear_color: [f32; 4],
     pub image_format: u16,
-    pub is_copy_framebuffer: u8,
-    pub is_create_resource: u8,
+    pub is_copy_framebuffer: bool,
+    pub is_create_resource: bool,
     pub reserve1: u16,
     pub reserve2: [u8; 3],
     pub reserve3: [u8; 3],
@@ -956,8 +964,8 @@ impl BflytCapturePane {
             cursor.read_f32(),
         ];
         let image_format = cursor.read_u16();
-        let is_copy_framebuffer = cursor.read_u8();
-        let is_create_resource = cursor.read_u8();
+        let is_copy_framebuffer = cursor.read_u8() != 0;
+        let is_create_resource = cursor.read_u8() != 0;
         let reserve1 = cursor.read_u16();
         let reserve2 = [cursor.read_u8(), cursor.read_u8(), cursor.read_u8()];
         let reserve3 = [cursor.read_u8(), cursor.read_u8(), cursor.read_u8()];
@@ -986,8 +994,8 @@ impl BflytCapturePane {
             writer.write_f32(*v);
         }
         writer.write_u16(self.image_format);
-        writer.write_u8(self.is_copy_framebuffer);
-        writer.write_u8(self.is_create_resource);
+        writer.write_u8(self.is_copy_framebuffer.into());
+        writer.write_u8(self.is_create_resource.into());
         writer.write_u16(self.reserve1);
         for v in &self.reserve2 {
             writer.write_u8(*v);

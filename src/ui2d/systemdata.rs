@@ -411,7 +411,7 @@ pub struct ResUi2dSystemDataMaskTexture {
     pub capture_texture_id: u16,
     pub capture_u_options: u8,
     pub capture_v_options: u8,
-    pub is_use_capture_mask: u8,
+    pub is_use_capture_mask: bool,
     pub reserve1: [u8; 3],
     pub translation: [f32; 2],
     pub rotation: f32,
@@ -430,7 +430,7 @@ impl ResUi2dSystemDataMaskTexture {
             capture_texture_id: cursor.read_u16(),
             capture_u_options: cursor.read_u8(),
             capture_v_options: cursor.read_u8(),
-            is_use_capture_mask: cursor.read_u8(),
+            is_use_capture_mask: cursor.read_u8() != 0,
             reserve1: [cursor.read_u8(), cursor.read_u8(), cursor.read_u8()],
             translation: [cursor.read_f32(), cursor.read_f32()],
             rotation: cursor.read_f32(),
@@ -454,7 +454,7 @@ impl ResUi2dSystemDataMaskTexture {
         writer.write_u16(self.capture_texture_id);
         writer.write_u8(self.capture_u_options);
         writer.write_u8(self.capture_v_options);
-        writer.write_u8(self.is_use_capture_mask);
+        writer.write_u8(self.is_use_capture_mask.into());
 
         for &b in &self.reserve1 {
             writer.write_u8(b);
