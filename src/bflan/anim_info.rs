@@ -5,7 +5,7 @@ use crate::{
     core::{Cursor, Writer, tchar_code32},
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u32)]
 pub enum AnimInfoType {
     Invalid = 0,

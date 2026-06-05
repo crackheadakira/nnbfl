@@ -13,6 +13,18 @@ impl<'a> Cursor<'a> {
         unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const T) }
     }
 
+    fn peek<T: Copy>(&self) -> T {
+        let size = std::mem::size_of::<T>();
+        let end = self.pos + size;
+        let bytes = &self.data[self.pos..end];
+
+        unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const T) }
+    }
+
+    pub fn peek_u32(&self) -> u32 {
+        u32::from_le(self.peek::<u32>())
+    }
+
     pub fn read_u32(&mut self) -> u32 {
         u32::from_le(self.read::<u32>())
     }

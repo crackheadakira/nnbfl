@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    bflan::anim_info::{AnimInfo, AnimInfoType},
     bflyt::file::BflytSection,
     core::{Cursor, Writer},
     ui2d::types::Vector2f,
@@ -203,11 +204,13 @@ pub struct PerCharacterTransform {
     pub has_anim_info: u8,
     pub reserve0: u8,
     pub reserve1: u32,
+    pub char_list: [u8; 16],
+    pub anim_info: Option<AnimInfo>,
 }
 
 impl PerCharacterTransform {
     pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
+        let mut transform = Self {
             eval_time_offset: cursor.read_f32(),
             eval_time_width: cursor.read_f32(),
             loop_type: cursor.read_u8(),
@@ -215,7 +218,32 @@ impl PerCharacterTransform {
             has_anim_info: cursor.read_u8(),
             reserve0: cursor.read_u8(),
             reserve1: cursor.read_u32(),
+            char_list: [
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+                cursor.read_u8(),
+            ],
+            anim_info: None,
+        };
+
+        if transform.has_anim_info != 0 {
+            transform.anim_info = Some(AnimInfo::parse(cursor, cursor.pos));
         }
+
+        transform
     }
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("PerCharacterTransform");
@@ -227,6 +255,14 @@ impl PerCharacterTransform {
         writer.write_u8(self.has_anim_info);
         writer.write_u8(self.reserve0);
         writer.write_u32(self.reserve1);
+
+        for char in &self.char_list {
+            writer.write_u8(*char);
+        }
+
+        if let Some(anim_info) = &self.anim_info {
+            anim_info.serialize(writer, writer.pos());
+        }
     }
 }
 
@@ -260,7 +296,7 @@ pub struct BflytTextBoxPane {
     pub per_character_transform_offset: u32,
     pub text: Option<Vec<u16>>,
     pub label: Option<String>,
-    pub per_character_transforms: Option<Vec<PerCharacterTransform>>,
+    pub per_character_transform: Option<PerCharacterTransform>,
 }
 
 impl BflytTextBoxPane {
@@ -322,20 +358,11 @@ impl BflytTextBoxPane {
             None
         };
 
-        let per_character_transforms = if is_per_character && per_character_transform_offset != 0 {
+        let per_character_transform = if is_per_character && per_character_transform_offset != 0 {
             let addr = txt1_base + per_character_transform_offset as usize - 8;
-            let saved = cursor.pos;
             cursor.seek(addr);
 
-            let transform_size = std::mem::size_of::<PerCharacterTransform>();
-
-            let mut transforms = Vec::new();
-            while cursor.pos + transform_size <= section_end {
-                transforms.push(PerCharacterTransform::parse(cursor));
-            }
-
-            cursor.seek(saved);
-            Some(transforms)
+            Some(PerCharacterTransform::parse(cursor))
         } else {
             None
         };
@@ -369,7 +396,7 @@ impl BflytTextBoxPane {
             per_character_transform_offset,
             text,
             label,
-            per_character_transforms,
+            per_character_transform,
         }
     }
 
@@ -424,13 +451,12 @@ impl BflytTextBoxPane {
             writer.patch_u32(label_offset_pos, 0);
         }
 
-        if let Some(transforms) = &self.per_character_transforms {
+        if let Some(transform) = &self.per_character_transform {
             writer.align(4);
             let offset = writer.pos() - txt1_base + 8;
+
             writer.patch_u32(per_char_offset_pos, offset as u32);
-            for t in transforms {
-                t.serialize(writer);
-            }
+            transform.serialize(writer);
         } else {
             writer.patch_u32(per_char_offset_pos, 0);
         }

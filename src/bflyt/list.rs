@@ -353,6 +353,7 @@ pub struct MaterialProjectionTexGen {
     pub scale: [f32; 2],
     pub rotation: f32,
 }
+
 impl MaterialProjectionTexGen {
     fn parse(c: &mut Cursor) -> Self {
         Self {
@@ -692,37 +693,36 @@ impl DetailedCombinerAlphaFlags {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MaterialDetailedCombiner {
     pub value: i32,
+
     pub color1: Color4u8,
     pub color2: Color4u8,
     pub color3: Color4u8,
     pub color4: Color4u8,
     pub color5: Color4u8,
-    pub color: Color4u8,
+    pub color6: Color4u8,
 
-    pub color_flags: DetailedCombinerColorFlags,
-    pub alpha_flags: DetailedCombinerAlphaFlags,
-
-    pub unknown_1: u32,
-    pub unknown_2: u32,
+    pub entries: Vec<MaterialDetailedCombinerEntry>,
 }
 
 impl MaterialDetailedCombiner {
-    pub fn parse(c: &mut Cursor) -> Self {
-        Self {
+    pub fn parse(c: &mut Cursor, count: u8) -> Self {
+        let mut combiner = Self {
             value: c.read_i32(),
             color1: Color4u8::parse(c),
             color2: Color4u8::parse(c),
             color3: Color4u8::parse(c),
             color4: Color4u8::parse(c),
             color5: Color4u8::parse(c),
-            color: Color4u8::parse(c),
+            color6: Color4u8::parse(c),
+            entries: Vec::new(),
+        };
 
-            color_flags: DetailedCombinerColorFlags::from_u32(c.read_u32()),
-            alpha_flags: DetailedCombinerAlphaFlags::from_i32(c.read_i32()),
-
-            unknown_1: c.read_u32(),
-            unknown_2: c.read_u32(),
+        for _ in 0..count {
+            let entry = MaterialDetailedCombinerEntry::parse(c);
+            combiner.entries.push(entry);
         }
+
+        combiner
     }
 
     pub fn serialize(&self, w: &mut Writer) {
@@ -732,8 +732,35 @@ impl MaterialDetailedCombiner {
         self.color3.serialize(w);
         self.color4.serialize(w);
         self.color5.serialize(w);
-        self.color.serialize(w);
+        self.color6.serialize(w);
 
+        for entry in &self.entries {
+            entry.serialize(w);
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MaterialDetailedCombinerEntry {
+    pub color_flags: DetailedCombinerColorFlags,
+    pub alpha_flags: DetailedCombinerAlphaFlags,
+
+    pub unknown_1: u32,
+    pub unknown_2: u32,
+}
+
+impl MaterialDetailedCombinerEntry {
+    pub fn parse(c: &mut Cursor) -> Self {
+        Self {
+            color_flags: DetailedCombinerColorFlags::from_u32(c.read_u32()),
+            alpha_flags: DetailedCombinerAlphaFlags::from_i32(c.read_i32()),
+
+            unknown_1: c.read_u32(),
+            unknown_2: c.read_u32(),
+        }
+    }
+
+    pub fn serialize(&self, w: &mut Writer) {
         w.write_u32(self.color_flags.to_u32());
         w.write_i32(self.alpha_flags.to_i32());
 
@@ -747,6 +774,7 @@ pub struct MaterialUserCombiner {
     pub name: String,
     pub reserve: [u32; 5],
 }
+
 impl MaterialUserCombiner {
     fn parse(c: &mut Cursor) -> Self {
         let name = c.read_fixed_string(0x60);
@@ -818,7 +846,7 @@ pub struct MatMemCount {
     pub projection_tex_gen_count: u8,
     pub font_shadow_color: u8,
     pub reserve2: u8,
-    pub detailed_combiner_count: u8,
+    pub use_detailed_combiner: u8,
     pub user_combiner_count: u8,
     pub has_texture_extensions: u8,
     pub vector_texture_info_count: u8,
@@ -842,7 +870,7 @@ impl MatMemCount {
             projection_tex_gen_count: ((raw >> 15) & 0x3) as u8,
             font_shadow_color: ((raw >> 17) & 0x1) as u8,
             reserve2: ((raw >> 18) & 0x1) as u8,
-            detailed_combiner_count: ((raw >> 19) & 0x1) as u8,
+            use_detailed_combiner: ((raw >> 19) & 0x1) as u8,
             user_combiner_count: ((raw >> 20) & 0x1) as u8,
             has_texture_extensions: ((raw >> 21) & 0x1) as u8,
             vector_texture_info_count: ((raw >> 22) & 0x3) as u8,
@@ -865,7 +893,7 @@ impl MatMemCount {
             | (((self.projection_tex_gen_count & 0x3) as u32) << 15)
             | (((self.font_shadow_color & 0x1) as u32) << 17)
             | (((self.reserve2 & 0x1) as u32) << 18)
-            | (((self.detailed_combiner_count & 0x1) as u32) << 19)
+            | (((self.use_detailed_combiner & 0x1) as u32) << 19)
             | (((self.user_combiner_count & 0x1) as u32) << 20)
             | (((self.has_texture_extensions & 0x1) as u32) << 21)
             | (((self.vector_texture_info_count & 0x3) as u32) << 22)
@@ -902,7 +930,7 @@ pub struct BflytMaterial {
     pub indirect_matrices: Vec<MaterialIndirectMatrix>,
     pub projection_tex_gens: Vec<MaterialProjectionTexGen>,
     pub font_shadow_colors: Vec<MaterialFontShadowColor>,
-    pub detailed_combiners: Vec<MaterialDetailedCombiner>,
+    pub detailed_combiner: Option<MaterialDetailedCombiner>,
     pub user_combiners: Vec<MaterialUserCombiner>,
     pub vector_texture_infos: Vec<MaterialVectorTextureInfo>,
     pub brick_repeat_shader_infos: Vec<MaterialBrickRepeatShaderInfo>,
@@ -1024,10 +1052,14 @@ impl BflytMaterial {
             font_shadow_colors.push(MaterialFontShadowColor::parse(cursor));
         }
 
-        let mut detailed_combiners = Vec::new();
-        for _ in 0..mat_mem.detailed_combiner_count {
-            detailed_combiners.push(MaterialDetailedCombiner::parse(cursor));
-        }
+        let detailed_combiner = if mat_mem.use_detailed_combiner != 0 {
+            Some(MaterialDetailedCombiner::parse(
+                cursor,
+                mat_mem.tev_combiner_count,
+            ))
+        } else {
+            None
+        };
 
         let mut user_combiners = Vec::new();
         for _ in 0..mat_mem.user_combiner_count {
@@ -1060,7 +1092,7 @@ impl BflytMaterial {
             indirect_matrices,
             projection_tex_gens,
             font_shadow_colors,
-            detailed_combiners,
+            detailed_combiner,
             user_combiners,
             vector_texture_infos,
             brick_repeat_shader_infos,
@@ -1100,36 +1132,47 @@ impl BflytMaterial {
         for ts in &self.tex_srts {
             ts.serialize(writer);
         }
+
         for tg in &self.tex_coord_gens {
             tg.serialize(writer);
         }
+
         for tc in &self.tev_combiners {
             tc.serialize(writer);
         }
+
         for ac in &self.alpha_compares {
             ac.serialize(writer);
         }
+
         for bm in &self.blend_modes {
             bm.serialize(writer);
         }
+
         for im in &self.indirect_matrices {
             im.serialize(writer);
         }
+
         for pg in &self.projection_tex_gens {
             pg.serialize(writer);
         }
+
         for fs in &self.font_shadow_colors {
             fs.serialize(writer);
         }
-        for dc in &self.detailed_combiners {
-            dc.serialize(writer);
+
+        if let Some(detailed_combiner) = &self.detailed_combiner {
+            detailed_combiner.serialize(writer);
         }
+
         for uc in &self.user_combiners {
             uc.serialize(writer);
         }
+
         for vi in &self.vector_texture_infos {
             vi.serialize(writer);
         }
+
         for br in &self.brick_repeat_shader_infos {
             br.serialize(writer);
         }
