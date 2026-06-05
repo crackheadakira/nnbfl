@@ -213,6 +213,7 @@ impl BflytSection {
         }
 
         writer.align(4);
+
         let size = (writer.pos() - section_start) as u32;
         writer.patch_u32(size_pos, size);
     }

@@ -721,6 +721,8 @@ impl PartsPaneBasicInfo {
         writer.write_u8(self.pane_alpha);
         writer.write_u8(self.reserve0);
         writer.write_u8(self.reserve1);
+
+        writer.align(4);
     }
 }
 
