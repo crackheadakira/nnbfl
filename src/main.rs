@@ -421,7 +421,7 @@ fn test_roundtrip_bflyt(input_dir: &Path, bflyt_files: Vec<PathBuf>) {
             }
 
             let file_name = entry.file_name().unwrap_or(OsStr::new("Unknown Name"));
-            // println!("{file_name:?}");
+            println!("{file_name:?}");
 
             let file_in = match fs::read(&path) {
                 Ok(bytes) => bytes,

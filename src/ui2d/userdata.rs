@@ -74,48 +74,52 @@ impl ResUi2dUserDataSection {
             slots.push((entry_base, name_ph, data_ph));
         }
 
-        for (i, data) in self.user_data.iter().enumerate() {
-            let (entry_base, _name_ph, data_ph) = slots[i];
+        let type_order: &[fn(&ResUi2dUserDataInner) -> bool] = &[
+            |i| matches!(i, ResUi2dUserDataInner::SystemData(_)),
+            |i| {
+                matches!(
+                    i,
+                    ResUi2dUserDataInner::Float(_) | ResUi2dUserDataInner::S32(_)
+                )
+            },
+            |i| matches!(i, ResUi2dUserDataInner::String(_)),
+        ];
 
-            if !data.data_array.is_empty()
-                && data.data_type != Ui2dUserDataType::String
-                && data.data_type != Ui2dUserDataType::SystemData
-            {
+        for type_check in type_order {
+            for (i, data) in self.user_data.iter().enumerate() {
+                if data.data_array.is_empty() {
+                    continue;
+                }
+                if !data.data_array.iter().any(|item| type_check(item)) {
+                    continue;
+                }
+
+                let (entry_base, _name_ph, data_ph) = slots[i];
                 writer.patch_u32(data_ph, (writer.pos() - entry_base) as u32);
 
                 for item in &data.data_array {
                     match item {
                         ResUi2dUserDataInner::Float(f) => writer.write_f32(*f),
                         ResUi2dUserDataInner::S32(s) => writer.write_i32(*s),
-                        _ => {}
+                        ResUi2dUserDataInner::String(s) => {
+                            writer.write_fixed_string(s, data.data_count as usize);
+                            writer.write_u8(0);
+                        }
+                        ResUi2dUserDataInner::SystemData(sys) => sys.serialize(writer),
                     }
                 }
             }
         }
 
         for (i, data) in self.user_data.iter().enumerate() {
-            let (entry_base, name_ph, data_ph) = slots[i];
-
-            if !data.data_array.is_empty()
-                && (data.data_type == Ui2dUserDataType::String
-                    || data.data_type == Ui2dUserDataType::SystemData)
-            {
-                writer.patch_u32(data_ph, (writer.pos() - entry_base) as u32);
-
-                for item in &data.data_array {
-                    match item {
-                        ResUi2dUserDataInner::String(s) => {
-                            writer.write_fixed_string(s, data.data_count as usize);
-                            writer.write_u8(0);
-                        }
-                        ResUi2dUserDataInner::SystemData(sys) => sys.serialize(writer),
-                        _ => {}
-                    }
-                }
-            } else if data.data_array.is_empty() {
+            if data.data_array.is_empty() {
+                let (_entry_base, _name_ph, data_ph) = slots[i];
                 writer.patch_u32(data_ph, 0);
             }
+        }
 
+        for (i, data) in self.user_data.iter().enumerate() {
+            let (entry_base, name_ph, _data_ph) = slots[i];
             writer.patch_u32(name_ph, (writer.pos() - entry_base) as u32);
             writer.write_null_terminated_string(&data.o_name);
         }
