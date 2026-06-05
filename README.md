@@ -4,5 +4,5 @@ A serializer & deserializer for .bflan & .bflyt files, tested only with Tomodach
 
 # Credits
 
-Watertoon for their hexpat on .bflan & .bflyt files.
-KillzXGaming for understanding MaterialDetailedCombiner through their project LayoutLibrary.
+- Watertoon for their hexpat on .bflan & .bflyt files.
+- KillzXGaming ([LayoutLibrary](https://github.com/KillzXGaming/LayoutLibrary)) for reference implementation about `MaterialDetailedCombiner`.
