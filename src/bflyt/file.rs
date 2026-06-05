@@ -69,7 +69,7 @@ impl BflytSection {
                 BflytSection::Layout(s)
             }
             MAGIC_TEXTURELIST => {
-                let s = BflytTextureList::parse(cursor, section_start);
+                let s = BflytTextureList::parse(cursor);
                 BflytSection::TextureList(s)
             }
             MAGIC_FONTLIST => {
@@ -126,7 +126,7 @@ impl BflytSection {
                 BflytSection::PicturePane(s)
             }
             MAGIC_TEXTBOXPANE => {
-                let s = BflytTextBoxPane::parse(cursor, section_start, end);
+                let s = BflytTextBoxPane::parse(cursor, section_start);
                 BflytSection::TextBoxPane(s)
             }
             MAGIC_WINDOWPANE => {
@@ -228,7 +228,6 @@ pub struct Bflyt {
     pub minor_version: u8,
     pub major_version: u8,
     pub file_size: u32,
-    pub section_count: u32,
     pub sections: Vec<BflytSection>,
     pub pane_tree: Vec<PaneNode>,
     pub group_tree: Vec<GroupNode>,
@@ -275,7 +274,6 @@ impl Bflyt {
             minor_version,
             major_version,
             file_size,
-            section_count,
             sections,
             pane_tree,
             group_tree,

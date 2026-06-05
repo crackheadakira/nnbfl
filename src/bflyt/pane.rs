@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    bflan::anim_info::{AnimInfo, AnimInfoType},
+    bflan::anim_info::AnimInfo,
     bflyt::file::BflytSection,
     core::{Cursor, Writer},
     ui2d::types::Vector2f,
@@ -146,7 +146,6 @@ pub struct BflytPicturePane {
     pub bottom_left_vertex_color: Color4u8,
     pub bottom_right_vertex_color: Color4u8,
     pub material_index: u16,
-    pub texture_count: u8,
     pub is_shape: u8,
     pub texture_uvs: Vec<TextureUv>,
 }
@@ -172,7 +171,6 @@ impl BflytPicturePane {
             bottom_left_vertex_color,
             bottom_right_vertex_color,
             material_index,
-            texture_count,
             is_shape,
             texture_uvs,
         }
@@ -277,14 +275,12 @@ pub struct BflytTextBoxPane {
     pub line_alignment: u8,
     pub text_flags: u16,
     pub italic_tilt: f32,
-    pub text_offset: u32,
     pub font_top_color: Color4u8,
     pub font_bottom_color: Color4u8,
     pub font_size_x: f32,
     pub font_size_y: f32,
     pub character_space: f32,
     pub line_space: f32,
-    pub label_offset: u32,
     pub shadow_translation_x: f32,
     pub shadow_translation_y: f32,
     pub shadow_size_x: f32,
@@ -300,7 +296,7 @@ pub struct BflytTextBoxPane {
 }
 
 impl BflytTextBoxPane {
-    pub fn parse(cursor: &mut Cursor, section_start: usize, section_end: usize) -> Self {
+    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Self {
         let base = BflytPane::parse(cursor);
         let txt1_base = section_start + 8;
 
@@ -377,14 +373,12 @@ impl BflytTextBoxPane {
             line_alignment,
             text_flags,
             italic_tilt,
-            text_offset,
             font_top_color,
             font_bottom_color,
             font_size_x,
             font_size_y,
             character_space,
             line_space,
-            label_offset,
             shadow_translation_x,
             shadow_translation_y,
             shadow_size_x,
@@ -589,8 +583,6 @@ pub struct BflytWindowPane {
     pub frame_count: u8,
     pub flag: u8,
     pub reserve0: u16,
-    pub content_offset: u32,
-    pub frame_offset_array_offset: u32,
     pub content: WindowContent,
     pub frames: Vec<WindowFrame>,
 }
@@ -646,8 +638,6 @@ impl BflytWindowPane {
             frame_count,
             flag,
             reserve0,
-            content_offset,
-            frame_offset_array_offset,
             content,
             frames,
         }
@@ -759,9 +749,6 @@ pub struct PartsProperty {
     pub basic_usage_flag: u8,
     pub material_usage_flag: u8,
     pub user_data_type: u8,
-    pub pane_offset: u32,
-    pub user_data_offset: u32,
-    pub pane_basic_info_offset: u32,
     pub o_section: Option<BflytSection>,
     pub o_user_data: Option<BflytSection>,
     pub o_basic_info: Option<PartsPaneBasicInfo>,
@@ -775,34 +762,35 @@ impl PartsProperty {
             basic_usage_flag: cursor.read_u8(),
             material_usage_flag: cursor.read_u8(),
             user_data_type: cursor.read_u8(),
-            pane_offset: cursor.read_u32(),
-            user_data_offset: cursor.read_u32(),
-            pane_basic_info_offset: cursor.read_u32(),
             o_section: None,
             o_user_data: None,
             o_basic_info: None,
         };
 
+        let pane_offset = cursor.read_u32();
+        let user_data_offset = cursor.read_u32();
+        let pane_basic_info_offset = cursor.read_u32();
+
         let restore_point = cursor.pos;
 
-        if property.pane_offset > 0 {
-            cursor.seek(last_parts_pane + property.pane_offset as usize);
+        if pane_offset > 0 {
+            cursor.seek(last_parts_pane + pane_offset as usize);
             let pane = BflytSection::parse(cursor, &mut false);
 
             property.o_section = Some(pane);
             cursor.seek(restore_point);
         }
 
-        if property.user_data_offset > 0 {
-            cursor.seek(last_parts_pane + property.user_data_offset as usize);
+        if user_data_offset > 0 {
+            cursor.seek(last_parts_pane + user_data_offset as usize);
             let user_data = BflytSection::parse(cursor, &mut false);
 
             property.o_user_data = Some(user_data);
             cursor.seek(restore_point);
         }
 
-        if property.pane_basic_info_offset > 0 {
-            cursor.seek(last_parts_pane + property.pane_basic_info_offset as usize);
+        if pane_basic_info_offset > 0 {
+            cursor.seek(last_parts_pane + pane_basic_info_offset as usize);
             let basic_info = PartsPaneBasicInfo::parse(cursor);
 
             property.o_basic_info = Some(basic_info);

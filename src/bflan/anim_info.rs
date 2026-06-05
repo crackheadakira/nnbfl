@@ -185,8 +185,6 @@ pub struct ExtendedUserDataAnim {
     pub block_size: u32,
 
     pub unk_1: u16,
-    pub entry_count: u16,
-    pub entries_inside_entry: u16,
     pub unk_2: u16,
 
     pub block_size_2: u32,
@@ -235,8 +233,6 @@ impl ExtendedUserDataAnim {
         Self {
             block_size,
             unk_1,
-            entry_count,
-            entries_inside_entry,
             unk_2,
             block_size_2,
             unk_3,
@@ -254,8 +250,8 @@ impl ExtendedUserDataAnim {
 
         writer.write_u32(self.block_size);
         writer.write_u16(self.unk_1);
-        writer.write_u16(self.entry_count);
-        writer.write_u16(self.entries_inside_entry);
+        writer.write_u16(self.values.len() as u16);
+        writer.write_u16(self.values.len() as u16);
         writer.write_u16(self.unk_2);
         writer.write_u32(self.block_size_2);
         writer.write_u16(self.unk_3);

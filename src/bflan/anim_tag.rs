@@ -2,17 +2,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     bflyt::constants::MAGIC_USERDATA,
-    core::{Cursor, Writer, tchar_code32},
+    core::{Cursor, Writer},
     ui2d::userdata::ResUi2dUserDataSection,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ResBflanPaneAnimTag {
     pub tag_order: u16,
-    pub group_count: u16,
-    pub name_offset: u32,
-    pub group_array_offset: u32,
-    pub user_data_section_offset: u32,
     pub start_frame: u16,
     pub end_frame: u16,
     pub is_descending_bind: u8,
@@ -27,31 +23,30 @@ pub struct ResBflanPaneAnimTag {
 
 impl ResBflanPaneAnimTag {
     pub fn parse(cursor: &mut Cursor, section_start: usize) -> Self {
-        let mut tag = Self {
-            tag_order: cursor.read_u16(),
-            group_count: cursor.read_u16(),
-            name_offset: cursor.read_u32(),
-            group_array_offset: cursor.read_u32(),
-            user_data_section_offset: cursor.read_u32(),
-            start_frame: cursor.read_u16(),
-            end_frame: cursor.read_u16(),
-            is_descending_bind: cursor.read_u8(),
-            reserve0: cursor.read_u8(),
-            reserve1: cursor.read_u16(),
-            o_name: String::new(),
-            groups: Vec::new(),
-            user_data: None,
-        };
+        let tag_order = cursor.read_u16();
+        let group_count = cursor.read_u16();
+        let name_offset = cursor.read_u32();
+        let group_array_offset = cursor.read_u32();
+        let user_data_section_offset = cursor.read_u32();
+        let start_frame = cursor.read_u16();
+        let end_frame = cursor.read_u16();
+        let is_descending_bind = cursor.read_u8();
+        let reserve0 = cursor.read_u8();
+        let reserve1 = cursor.read_u16();
 
-        if tag.name_offset > 0 {
-            cursor.seek(section_start + tag.name_offset as usize);
-            tag.o_name = cursor.read_null_terminated_string();
+        let mut o_name = String::new();
+        let mut groups = Vec::new();
+        let mut user_data = None;
+
+        if name_offset > 0 {
+            cursor.seek(section_start + name_offset as usize);
+            o_name = cursor.read_null_terminated_string();
         }
 
-        if tag.group_count > 0 && tag.group_array_offset > 0 {
-            cursor.seek(section_start + tag.group_array_offset as usize);
-            for _ in 0..tag.group_count {
-                tag.groups.push(ResBflanGroup {
+        if group_count > 0 && group_array_offset > 0 {
+            cursor.seek(section_start + group_array_offset as usize);
+            for _ in 0..group_count {
+                groups.push(ResBflanGroup {
                     group_name: cursor.read_fixed_string(0x21),
                     flag: cursor.read_u8(),
                     reserve0: cursor.read_u16(),
@@ -59,18 +54,28 @@ impl ResBflanPaneAnimTag {
             }
         }
 
-        if tag.user_data_section_offset > 0 {
-            cursor.seek(section_start + tag.user_data_section_offset as usize);
+        if user_data_section_offset > 0 {
+            cursor.seek(section_start + user_data_section_offset as usize);
 
             let embed_magic = cursor.read_u32();
             let _embed_size = cursor.read_u32();
 
             if embed_magic == MAGIC_USERDATA {
-                tag.user_data = Some(ResUi2dUserDataSection::parse(cursor, false));
+                user_data = Some(ResUi2dUserDataSection::parse(cursor, false));
             }
         }
 
-        tag
+        Self {
+            tag_order,
+            start_frame,
+            end_frame,
+            is_descending_bind,
+            reserve0,
+            reserve1,
+            o_name,
+            groups,
+            user_data,
+        }
     }
 
     pub fn serialize(&self, writer: &mut Writer, section_start: usize) {

@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    bflyt::pane::PANE_NAME_LEN,
-    core::{Cursor, Writer},
-};
+use crate::core::{Cursor, Writer};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BflytLayout {
@@ -30,6 +27,7 @@ impl BflytLayout {
             name: cursor.read_null_terminated_string(),
         }
     }
+
     pub fn serialize(&self, writer: &mut Writer) {
         writer.write_u8(self.is_centered);
         writer.write_u8(self.reserve0);
@@ -48,7 +46,7 @@ pub struct BflytTextureList {
 }
 
 impl BflytTextureList {
-    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Self {
+    pub fn parse(cursor: &mut Cursor) -> Self {
         let texture_count = cursor.read_u16();
         let _reserve0 = cursor.read_u16();
 
@@ -987,11 +985,6 @@ impl BflytMaterial {
         };
 
         let after_color = mat_base + 0x20 + color_section_size;
-        let tex_map_stride = if mat_mem.has_texture_extensions != 0 {
-            8
-        } else {
-            4
-        };
 
         let tex_maps_base = after_color;
         cursor.seek(tex_maps_base);
@@ -1108,7 +1101,7 @@ impl BflytMaterial {
 
         let n = self.colors.len();
         let mut cumulative_offset = (2 + n) as u8;
-        for (i, entry) in self.colors.iter().enumerate() {
+        for (_, entry) in self.colors.iter().enumerate() {
             writer.write_u8(cumulative_offset);
             cumulative_offset += if entry.is_float { 16 } else { 4 };
         }
@@ -1191,7 +1184,6 @@ impl BflytMaterialList {
         let material_count = cursor.read_u16();
         let _reserve0 = cursor.read_u16();
 
-        let offsets_start = cursor.pos;
         let mut offsets = Vec::new();
         for _ in 0..material_count {
             offsets.push(cursor.read_u32());
@@ -1246,11 +1238,9 @@ impl BflytCaptureTextureList {
     pub fn parse(cursor: &mut Cursor, section_start: usize) -> Self {
         let ctl_base = section_start;
         let count = cursor.read_u32();
-        let entry_start = cursor.pos;
 
         let mut infos = Vec::new();
         for _ in 0..count {
-            let entry_base = cursor.pos;
             let pane_name_offset0 = cursor.read_u32();
             let pane_name_offset1 = cursor.read_u32();
             let mut reserve0 = [0u32; 6];
@@ -1419,10 +1409,6 @@ pub struct BflytControlSource {
     pub control_name: String,
     pub reserve0_name: String,
 
-    pub name_array_offset: u32,
-    pub pane_name_offset_array: u32,
-    pub anim_name_offset_array: u32,
-
     pub pane_bindings: Vec<String>,
     pub core_anims: Vec<String>,
 
@@ -1499,9 +1485,6 @@ impl BflytControlSource {
         Self {
             control_name,
             reserve0_name,
-            name_array_offset: name_array_offset as u32,
-            pane_name_offset_array: pane_name_offset_arr as u32,
-            anim_name_offset_array: anim_name_offset_arr as u32,
             pane_bindings,
             core_anims,
             pane_names,

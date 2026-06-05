@@ -8,8 +8,7 @@ use crate::{
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResUi2dSystemDataArray {
     pub reserve0: u16,
-    pub count: u16,
-    pub offset: u32,
+
     pub data_array: Vec<ResUi2dSystemDataInner>,
 }
 
@@ -38,8 +37,6 @@ impl ResUi2dSystemDataArray {
 
         Self {
             reserve0,
-            count,
-            offset,
             data_array,
         }
     }
