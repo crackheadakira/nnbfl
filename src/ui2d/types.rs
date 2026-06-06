@@ -52,6 +52,31 @@ impl Vector2f {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct Vector3f {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+impl Vector3f {
+    pub fn parse(cursor: &mut Cursor) -> Self {
+        Self {
+            x: cursor.read_f32(),
+            y: cursor.read_f32(),
+            z: cursor.read_f32(),
+        }
+    }
+
+    pub fn serialize(&self, writer: &mut Writer) {
+        writer.mark("Vector3f");
+
+        writer.write_f32(self.x);
+        writer.write_f32(self.y);
+        writer.write_f32(self.z);
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Ui2dUserDataType {

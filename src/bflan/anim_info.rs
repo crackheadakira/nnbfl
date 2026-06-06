@@ -182,17 +182,11 @@ impl AnimInfo {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExtendedUserDataAnim {
-    pub block_size: u32,
-
+    pub header_size: u32,
     pub unk_1: u16,
     pub unk_2: u16,
-
-    pub block_size_2: u32,
-
-    pub unk_3: u16,
-    pub unk_4: u16,
-    pub unk_5: u16,
-    pub frame_count: u16,
+    pub base_count: u32,
+    pub unk_3: u32,
 
     pub values: Vec<Vec<f32>>,
 
@@ -201,48 +195,36 @@ pub struct ExtendedUserDataAnim {
 
 impl ExtendedUserDataAnim {
     pub fn parse(cursor: &mut Cursor) -> Self {
-        let block_size = cursor.read_u32();
-
+        let header_size = cursor.read_u32();
         let unk_1 = cursor.read_u16();
-        let entry_count = cursor.read_u16();
-        let entries_inside_entry = cursor.read_u16();
         let unk_2 = cursor.read_u16();
 
-        let block_size_2 = cursor.read_u32();
+        let base_count = cursor.read_u32();
+        let unk_3 = cursor.read_u32();
 
-        let unk_3 = cursor.read_u16();
-        let unk_4 = cursor.read_u16();
-        let unk_5 = cursor.read_u16();
-        let frame_count = cursor.read_u16();
+        let mut values = Vec::with_capacity(3);
+        for _ in 0..3 {
+            let mut inner_values = Vec::with_capacity(base_count as usize);
 
-        let mut values = Vec::new();
-        for _ in 0..entry_count {
-            let mut inner_values = Vec::new();
-
-            for _ in 0..entries_inside_entry {
+            for _ in 0..base_count {
                 inner_values.push(cursor.read_f32())
             }
 
             values.push(inner_values);
         }
 
-        let restore = cursor.pos;
         let string_start = cursor.pos + cursor.read_u32() as usize;
 
         cursor.seek(string_start);
 
         let key = cursor.read_null_terminated_string();
-        cursor.seek(restore);
 
         Self {
-            block_size,
+            header_size,
             unk_1,
             unk_2,
-            block_size_2,
+            base_count,
             unk_3,
-            unk_4,
-            unk_5,
-            frame_count,
             values,
 
             key,
@@ -252,16 +234,11 @@ impl ExtendedUserDataAnim {
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("ExtendedUserDataAnim");
 
-        writer.write_u32(self.block_size);
+        writer.write_u32(self.header_size);
         writer.write_u16(self.unk_1);
-        writer.write_u16(self.values.len() as u16);
-        writer.write_u16(self.values[0].len() as u16);
         writer.write_u16(self.unk_2);
-        writer.write_u32(self.block_size_2);
-        writer.write_u16(self.unk_3);
-        writer.write_u16(self.unk_4);
-        writer.write_u16(self.unk_5);
-        writer.write_u16(self.frame_count);
+        writer.write_u32(self.base_count);
+        writer.write_u32(self.unk_3);
 
         for vec in &self.values {
             for val in vec {
@@ -270,7 +247,6 @@ impl ExtendedUserDataAnim {
         }
 
         let offset_pos = writer.write_placeholder_u32();
-
         let string_start = writer.pos();
         writer.write_null_terminated_string(&self.key);
 

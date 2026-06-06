@@ -2,9 +2,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     bflan::anim_info::AnimInfo,
-    bflyt::file::BflytSection,
+    bflyt::{
+        file::BflytSection,
+        flags::{BflytOrigins, PaneFlags, PaneFlagsEx, TextPaneFlags},
+    },
     core::{Cursor, Writer},
-    ui2d::types::Vector2f,
+    ui2d::types::{Vector2f, Vector3f},
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -37,104 +40,74 @@ pub const USER_NAME_LEN: usize = 0x08;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BflytPane {
-    pub pane_flags: u8,
-    pub origin: u8,
+    pub pane_flags: PaneFlags,
+    pub origin: BflytOrigins,
     pub alpha: u8,
-    pub flag_ex: u8,
+    pub flag_ex: PaneFlagsEx,
     pub pane_name: String,
     pub user_name: String,
-    pub translation_x: f32,
-    pub translation_y: f32,
-    pub translation_z: f32,
-    pub rotation_x: f32,
-    pub rotation_y: f32,
-    pub rotation_z: f32,
-    pub scale_x: f32,
-    pub scale_y: f32,
-    pub size_x: f32,
-    pub size_y: f32,
+    pub translation: Vector3f,
+    pub rotation: Vector3f,
+    pub scale: Vector2f,
+    pub size: Vector2f,
 }
 
 impl BflytPane {
     pub fn parse(cursor: &mut Cursor) -> Self {
         Self {
-            pane_flags: cursor.read_u8(),
-            origin: cursor.read_u8(),
+            pane_flags: PaneFlags::decode(cursor.read_u8()),
+            origin: BflytOrigins::decode(cursor.read_u8()),
             alpha: cursor.read_u8(),
-            flag_ex: cursor.read_u8(),
+            flag_ex: PaneFlagsEx::decode(cursor.read_u8()),
             pane_name: cursor.read_fixed_string(PANE_NAME_LEN),
             user_name: cursor.read_fixed_string(USER_NAME_LEN),
-            translation_x: cursor.read_f32(),
-            translation_y: cursor.read_f32(),
-            translation_z: cursor.read_f32(),
-            rotation_x: cursor.read_f32(),
-            rotation_y: cursor.read_f32(),
-            rotation_z: cursor.read_f32(),
-            scale_x: cursor.read_f32(),
-            scale_y: cursor.read_f32(),
-            size_x: cursor.read_f32(),
-            size_y: cursor.read_f32(),
+            translation: Vector3f::parse(cursor),
+            rotation: Vector3f::parse(cursor),
+            scale: Vector2f::parse(cursor),
+            size: Vector2f::parse(cursor),
         }
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("Pane (generic)");
 
-        writer.write_u8(self.pane_flags);
-        writer.write_u8(self.origin);
+        writer.write_u8(self.pane_flags.encode());
+        writer.write_u8(self.origin.encode());
         writer.write_u8(self.alpha);
-        writer.write_u8(self.flag_ex);
+        writer.write_u8(self.flag_ex.encode());
         writer.write_fixed_string(&self.pane_name, PANE_NAME_LEN);
         writer.write_fixed_string(&self.user_name, USER_NAME_LEN);
-        writer.write_f32(self.translation_x);
-        writer.write_f32(self.translation_y);
-        writer.write_f32(self.translation_z);
-        writer.write_f32(self.rotation_x);
-        writer.write_f32(self.rotation_y);
-        writer.write_f32(self.rotation_z);
-        writer.write_f32(self.scale_x);
-        writer.write_f32(self.scale_y);
-        writer.write_f32(self.size_x);
-        writer.write_f32(self.size_y);
+        self.translation.serialize(writer);
+        self.rotation.serialize(writer);
+        self.scale.serialize(writer);
+        self.size.serialize(writer);
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TextureUv {
-    pub top_left_x: f32,
-    pub top_left_y: f32,
-    pub top_right_x: f32,
-    pub top_right_y: f32,
-    pub bottom_left_x: f32,
-    pub bottom_left_y: f32,
-    pub bottom_right_x: f32,
-    pub bottom_right_y: f32,
+    pub top_left: Vector2f,
+    pub top_right: Vector2f,
+    pub bottom_left: Vector2f,
+    pub bottom_right: Vector2f,
 }
 
 impl TextureUv {
     pub fn parse(cursor: &mut Cursor) -> Self {
         Self {
-            top_left_x: cursor.read_f32(),
-            top_left_y: cursor.read_f32(),
-            top_right_x: cursor.read_f32(),
-            top_right_y: cursor.read_f32(),
-            bottom_left_x: cursor.read_f32(),
-            bottom_left_y: cursor.read_f32(),
-            bottom_right_x: cursor.read_f32(),
-            bottom_right_y: cursor.read_f32(),
+            top_left: Vector2f::parse(cursor),
+            top_right: Vector2f::parse(cursor),
+            bottom_left: Vector2f::parse(cursor),
+            bottom_right: Vector2f::parse(cursor),
         }
     }
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("TextureUv");
 
-        writer.write_f32(self.top_left_x);
-        writer.write_f32(self.top_left_y);
-        writer.write_f32(self.top_right_x);
-        writer.write_f32(self.top_right_y);
-        writer.write_f32(self.bottom_left_x);
-        writer.write_f32(self.bottom_left_y);
-        writer.write_f32(self.bottom_right_x);
-        writer.write_f32(self.bottom_right_y);
+        self.top_left.serialize(writer);
+        self.top_right.serialize(writer);
+        self.bottom_left.serialize(writer);
+        self.bottom_right.serialize(writer);
     }
 }
 
@@ -275,7 +248,7 @@ pub struct BflytTextBoxPane {
     pub font_index: u16,
     pub text_origin: u8,
     pub line_alignment: u8,
-    pub text_flags: u16,
+    pub text_flags: TextPaneFlags,
     pub italic_tilt: f32,
     pub font_top_color: Color4u8,
     pub font_bottom_color: Color4u8,
@@ -308,7 +281,7 @@ impl BflytTextBoxPane {
         let font_index = cursor.read_u16();
         let text_origin = cursor.read_u8();
         let line_alignment = cursor.read_u8();
-        let text_flags = cursor.read_u16();
+        let text_flags = TextPaneFlags::decode(cursor.read_u16());
         let italic_tilt = cursor.read_f32();
         let text_offset = cursor.read_u32();
         let font_top_color = Color4u8::parse(cursor);
@@ -327,8 +300,6 @@ impl BflytTextBoxPane {
         let shadow_italic_tilt = cursor.read_f32();
         let line_transform_offset = cursor.read_u32();
         let per_character_transform_offset = cursor.read_u32();
-
-        let is_per_character = (text_flags & (1 << 4)) != 0;
 
         let text = if text_offset != 0 {
             let addr = txt1_base + text_offset as usize - 8;
@@ -356,14 +327,15 @@ impl BflytTextBoxPane {
             None
         };
 
-        let per_character_transform = if is_per_character && per_character_transform_offset != 0 {
-            let addr = txt1_base + per_character_transform_offset as usize - 8;
-            cursor.seek(addr);
+        let per_character_transform =
+            if text_flags.is_per_character_transform && per_character_transform_offset != 0 {
+                let addr = txt1_base + per_character_transform_offset as usize - 8;
+                cursor.seek(addr);
 
-            Some(PerCharacterTransform::parse(cursor))
-        } else {
-            None
-        };
+                Some(PerCharacterTransform::parse(cursor))
+            } else {
+                None
+            };
 
         Self {
             base,
@@ -407,7 +379,7 @@ impl BflytTextBoxPane {
         writer.write_u16(self.font_index);
         writer.write_u8(self.text_origin);
         writer.write_u8(self.line_alignment);
-        writer.write_u16(self.text_flags);
+        writer.write_u16(self.text_flags.encode());
         writer.write_f32(self.italic_tilt);
 
         let text_offset_pos = writer.write_placeholder_u32();
@@ -468,10 +440,7 @@ pub struct WindowContent {
     pub material_index: u16,
     pub uv_coordinate_count: u8,
     pub reserve0: u8,
-    pub picture_uvs: Vec<Vector2f>,
-    pub unk_1: Vec<Vector2f>,
-    pub unk_2: Vec<Vector2f>,
-    pub unk_3: Vec<Vector2f>,
+    pub picture_uvs: Vec<TextureUv>,
 }
 
 impl WindowContent {
@@ -484,24 +453,9 @@ impl WindowContent {
         let uv_coordinate_count = cursor.read_u8();
         let reserve0 = cursor.read_u8();
         let mut picture_uvs = Vec::new();
-        let mut unk_1 = Vec::new();
-        let mut unk_2 = Vec::new();
-        let mut unk_3 = Vec::new();
 
         for _ in 0..uv_coordinate_count {
-            picture_uvs.push(Vector2f::parse(cursor));
-        }
-
-        for _ in 0..uv_coordinate_count {
-            unk_1.push(Vector2f::parse(cursor));
-        }
-
-        for _ in 0..uv_coordinate_count {
-            unk_2.push(Vector2f::parse(cursor));
-        }
-
-        for _ in 0..uv_coordinate_count {
-            unk_3.push(Vector2f::parse(cursor));
+            picture_uvs.push(TextureUv::parse(cursor));
         }
 
         Self {
@@ -513,9 +467,6 @@ impl WindowContent {
             uv_coordinate_count,
             reserve0,
             picture_uvs,
-            unk_1,
-            unk_2,
-            unk_3,
         }
     }
 
@@ -532,18 +483,6 @@ impl WindowContent {
 
         for uv in &self.picture_uvs {
             uv.serialize(writer);
-        }
-
-        for unk in &self.unk_1 {
-            unk.serialize(writer);
-        }
-
-        for unk in &self.unk_2 {
-            unk.serialize(writer);
-        }
-
-        for unk in &self.unk_3 {
-            unk.serialize(writer);
         }
     }
 }
