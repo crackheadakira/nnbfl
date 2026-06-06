@@ -1,0 +1,100 @@
+name: Build & Publish Releases
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-tag:
+    name: Check Version & Auto-Tag
+    runs-on: ubuntu-latest
+    outputs:
+      version_changed: ${{ steps.check.outputs.changed }}
+      version_tag: v${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth:
+
+      - name: Check if Cargo.toml Version Changed
+        id: check
+        run: |
+          NEW_VER=$(grep -m 1 '^version = ' Cargo.toml | cut -d '"' -f 2)
+          
+          OLD_VER=$(git show HEAD~1:Cargo.toml | grep -m 1 '^version = ' | cut -d '"' -f 2 || echo "0.0.0")
+          
+          if [ "$NEW_VER" != "$OLD_VER" ]; then
+            echo "Version changed from $OLD_VER to $NEW_VER"
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "version=$NEW_VER" >> $GITHUB_OUTPUT
+            
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "v$NEW_VER"
+            git push origin "v$NEW_VER"
+          else
+            echo "No version bump detected ($NEW_VER == $OLD_VER). Skipping release."
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-release:
+    name: Build Asset for ${{ matrix.job.target }}
+    needs: check-and-tag
+    if: needs: check-and-tag.outputs.version_changed == 'true'
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin-name: nnbfl
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin-name: nnbfl.exe
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            bin-name: nnbfl
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.job.target }}
+
+      - name: Cargo Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.job.target }}
+
+      - name: Build Binary (Optimized Release)
+        run: cargo build --release --target ${{ matrix.job.target }}
+
+      - name: Package Asset (Windows)
+        if: matrix.job.os == 'windows-latest'
+        run: |
+          cd target/${{ matrix.job.target }}/release
+          7z a ../../../nnbfl-${{ needs: check-and-tag.outputs.version_tag }}-${{ matrix.job.target }}.zip ${{ matrix.job.bin-name }}
+        shell: pwsh
+
+      - name: Package Asset (Linux / macOS)
+        if: matrix.job.os != 'windows-latest'
+        run: |
+          cd target/${{ matrix.job.target }}/release
+          tar -czf ../../../nnbfl-${{ needs: check-and-tag.outputs.version_tag }}-${{ matrix.job.target }}.tar.gz ${{ matrix.job.bin-name }}
+
+      - name: Upload Packaged Asset to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs: check-and-tag.outputs.version_tag }}
+          files: |
+            nnbfl-*.zip
+            nnbfl-*.tar.gz
