@@ -393,6 +393,7 @@ impl AnimContent {
 
     pub fn serialize(&self, writer: &mut Writer, base_offset: usize) {
         writer.mark("AnimContent");
+
         writer.write_fixed_string(&self.name, 0x1C);
         writer.write_u8(self.infos.len() as u8);
 
@@ -407,12 +408,12 @@ impl AnimContent {
         writer.write_u8(type_val);
         writer.write_u16(0);
 
-        let mut user_str_offset_pos = 0;
+        let mut total_size_pos = 0;
 
         // Workaround for MiniGame_PictQuiz_00_MosaicNormal.bflan
         if matches!(self.anim_type, AnimType::User) {
             let info_array_offset_pos = writer.write_placeholder_u32();
-            user_str_offset_pos = writer.write_placeholder_u32();
+            total_size_pos = writer.write_placeholder_u32();
 
             writer.patch_u32(info_array_offset_pos, (writer.pos() - base_offset) as u32);
         }
@@ -434,8 +435,21 @@ impl AnimContent {
         }
 
         if matches!(self.anim_type, AnimType::User) {
-            // man... dont question me.
-            writer.patch_u32(user_str_offset_pos, 0x5C);
+            let mut total_size = (writer.pos() - base_offset) as u32;
+
+            // this somehow works- don't question me
+            for info in &self.infos {
+                if let AnimInfo::ExtendedUserData { data, .. } = info {
+                    for anim in data {
+                        let string_overhead = 4 + anim.key.len() + 1;
+                        total_size -= string_overhead as u32;
+                    }
+                }
+            }
+
+            writer.patch_u32(total_size_pos, total_size);
         }
+
+        writer.align(4);
     }
 }

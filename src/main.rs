@@ -127,14 +127,13 @@ fn process_command(command: &str, ext: &str, input_path: &Path, output_path: &Pa
             let _ = std::fs::create_dir_all(parent);
         }
 
-        let failed = match (command, ext) {
+        match (command, ext) {
             ("extract", "bflan") => extract_bflan_file(input_path, output_path),
             ("pack", "bflan") => pack_bflan_file(input_path, output_path),
             ("extract", "bflyt") => extract_bflyt_file(input_path, output_path),
             ("pack", "bflyt") => pack_bflyt_file(input_path, output_path),
             _ => unreachable!(),
-        };
-        failed
+        }
     }
 }
 
@@ -159,7 +158,8 @@ fn test_roundtrip(
         if !path.is_file() {
             continue;
         }
-        if path.extension().map_or(true, |e| e != ext) {
+
+        if path.extension().is_none_or(|e| e != ext) {
             continue;
         }
 

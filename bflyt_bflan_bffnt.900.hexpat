@@ -537,6 +537,11 @@ struct ResBflanAnimContent {
     BflanAnimType anim_type;
     u16           reserve0;
 
+    if (anim_type == BflanAnimType::User) {
+        u32 info_array_offset;
+        u32 total_size;
+    }
+
     s_anim_content_base = addressof(this);
     
     ResBflanAnimInfoOffset anim_info_offset_array[anim_info_count];
@@ -592,7 +597,7 @@ struct ResBflanPaneAnimTag {
     u8  reserve0;
     u16 reserve1;
     
-    char o_name[0x8] @ addressof(this) - 0x8 + name_offset;
+    char o_name[] @ addressof(this) - 0x8 + name_offset;
     
     if (group_count != 0) {
         ResBflanGroup o_group_array[group_count] @ addressof(this) - 0x8 + group_array_offset;

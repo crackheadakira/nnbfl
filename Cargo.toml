@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
+authors = ["Morgan Tali"]
+description = "A CLI tool to pack, extract, and test Nintendo Binary File Layout (.bflyt and .bflan) files."
+repository = "https://github.com/crackheadakira/nnbfl"
+homepage = "https://github.com/crackheadakira/nnbfl"
+readme = "README.md"
+categories = ["command-line-utilities", "parser-implementations"]
+keywords = ["nintendo", "bflyt", "bflan", "modding", "cli"]
+
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
