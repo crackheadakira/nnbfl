@@ -4,7 +4,7 @@ use crate::{
     bflan::anim_info::AnimInfo,
     bflyt::{
         file::BflytSection,
-        flags::{BflytOrigins, PaneFlags, PaneFlagsEx, TextPaneFlags},
+        flags::{BflytOrigins, PaneFlags, PaneFlagsEx, TextPaneFlags, WindowFlags},
     },
     core::{Cursor, Writer},
     ui2d::types::{Vector2f, Vector3f},
@@ -522,7 +522,7 @@ pub struct BflytWindowPane {
     pub frame_size_top: i16,
     pub frame_size_bottom: i16,
     pub frame_count: u8,
-    pub flag: u8,
+    pub flag: WindowFlags,
     pub reserve0: u16,
     pub content: WindowContent,
     pub frames: Vec<WindowFrame>,
@@ -543,7 +543,7 @@ impl BflytWindowPane {
         let frame_size_bottom = cursor.read_i16();
 
         let frame_count = cursor.read_u8();
-        let flag = cursor.read_u8();
+        let flag = WindowFlags::decode(cursor.read_u8());
         let reserve0 = cursor.read_u16();
         let content_offset = cursor.read_u32();
         let frame_offset_array_offset = cursor.read_u32();
@@ -598,7 +598,7 @@ impl BflytWindowPane {
         writer.write_u16(self.frame_size_top as u16);
         writer.write_u16(self.frame_size_bottom as u16);
         writer.write_u8(self.frames.len() as u8);
-        writer.write_u8(self.flag);
+        writer.write_u8(self.flag.encode());
         writer.write_u16(self.reserve0);
 
         let content_offset_pos = writer.write_placeholder_u32();

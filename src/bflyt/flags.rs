@@ -240,3 +240,157 @@ impl TextPaneFlags {
         raw
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum WindowKind {
+    Around,
+    Horizontal,
+    HorizontalNoContent,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct WindowFlags {
+    pub use_layout_material: bool,
+    pub use_vertex_color_for_all_window: bool,
+    pub window_kind: WindowKind,
+    pub not_draw_content: bool,
+}
+
+impl WindowFlags {
+    pub fn decode(raw: u8) -> Self {
+        let kind_bits = (raw >> 2) & 0x03;
+        Self {
+            use_layout_material: (raw & 0x01) != 0,
+            use_vertex_color_for_all_window: ((raw >> 1) & 0x01) != 0,
+            window_kind: match kind_bits {
+                0 => WindowKind::Around,
+                1 => WindowKind::Horizontal,
+                2 => WindowKind::HorizontalNoContent,
+                _ => WindowKind::Around,
+            },
+            not_draw_content: ((raw >> 4) & 0x01) != 0,
+        }
+    }
+
+    pub fn encode(&self) -> u8 {
+        let mut raw = 0u8;
+        if self.use_layout_material {
+            raw |= 1 << 0;
+        }
+        if self.use_vertex_color_for_all_window {
+            raw |= 1 << 1;
+        }
+        raw |= ((self.window_kind as u8) & 0x03) << 2;
+        if self.not_draw_content {
+            raw |= 1 << 4;
+        }
+        raw
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TexWrapMode {
+    Clamp,
+    Repeat,
+    Mirror,
+}
+
+impl From<u8> for TexWrapMode {
+    fn from(val: u8) -> Self {
+        match val & 0x03 {
+            0 => TexWrapMode::Clamp,
+            1 => TexWrapMode::Repeat,
+            2 => TexWrapMode::Mirror,
+            _ => TexWrapMode::Clamp,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TexFilter {
+    Near,
+    Linear,
+}
+
+impl From<u8> for TexFilter {
+    fn from(val: u8) -> Self {
+        match val & 0x3F {
+            0 => TexFilter::Near,
+            1 => TexFilter::Linear,
+            _ => TexFilter::Near,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub struct TexOptions {
+    pub wrap_mode: TexWrapMode,
+    pub filter_mode: TexFilter,
+}
+
+impl TexOptions {
+    pub fn decode(raw: u8) -> Self {
+        Self {
+            wrap_mode: (raw & 0x03).into(),
+            filter_mode: (raw >> 2).into(),
+        }
+    }
+
+    pub fn encode(&self) -> u8 {
+        (self.wrap_mode as u8 & 0x03) | ((self.filter_mode as u8 & 0x3F) << 2)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub struct DropShadowFlags {
+    pub is_stroke_enabled: bool,
+    pub is_outer_glow_enabled: bool,
+    pub is_drop_shadow_enabled: bool,
+    pub is_knockout: bool,
+    pub is_only_effect: bool,
+    pub is_static_rendering: bool,
+    pub is_degamma_enabled: bool,
+}
+
+impl DropShadowFlags {
+    pub fn decode(raw: u8) -> Self {
+        Self {
+            is_stroke_enabled: (raw & 0x01) != 0,
+            is_outer_glow_enabled: ((raw >> 1) & 0x01) != 0,
+            is_drop_shadow_enabled: ((raw >> 2) & 0x01) != 0,
+            is_knockout: ((raw >> 3) & 0x01) != 0,
+            is_only_effect: ((raw >> 4) & 0x01) != 0,
+            is_static_rendering: ((raw >> 5) & 0x01) != 0,
+            is_degamma_enabled: ((raw >> 6) & 0x01) != 0,
+        }
+    }
+
+    pub fn encode(&self) -> u8 {
+        let mut raw = 0u8;
+        if self.is_stroke_enabled {
+            raw |= 1 << 0;
+        }
+        if self.is_outer_glow_enabled {
+            raw |= 1 << 1;
+        }
+        if self.is_drop_shadow_enabled {
+            raw |= 1 << 2;
+        }
+        if self.is_knockout {
+            raw |= 1 << 3;
+        }
+        if self.is_only_effect {
+            raw |= 1 << 4;
+        }
+        if self.is_static_rendering {
+            raw |= 1 << 5;
+        }
+        if self.is_degamma_enabled {
+            raw |= 1 << 6;
+        }
+        raw
+    }
+}

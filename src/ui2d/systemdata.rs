@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    bflyt::flags::{DropShadowFlags, TexOptions},
     core::{Cursor, Writer},
     ui2d::types::{Color4f, VertexPos},
 };
@@ -279,27 +280,69 @@ impl ResUi2dSystemDataAlignment {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum DropShadowBlendMode {
+    Normal = 0,
+    Multiply = 1,
+    Addition = 2,
+    Subtraction = 3,
+    NormalMaxAlpha = 4,
+}
+
+impl From<u8> for DropShadowBlendMode {
+    fn from(val: u8) -> Self {
+        match val {
+            0 => DropShadowBlendMode::Normal,
+            1 => DropShadowBlendMode::Multiply,
+            2 => DropShadowBlendMode::Addition,
+            3 => DropShadowBlendMode::Subtraction,
+            4 => DropShadowBlendMode::NormalMaxAlpha,
+            _ => DropShadowBlendMode::Normal,
+        }
+    }
+}
+
+impl From<DropShadowBlendMode> for u8 {
+    fn from(val: DropShadowBlendMode) -> Self {
+        match val {
+            DropShadowBlendMode::Normal => 0,
+            DropShadowBlendMode::Multiply => 1,
+            DropShadowBlendMode::Addition => 2,
+            DropShadowBlendMode::Subtraction => 3,
+            DropShadowBlendMode::NormalMaxAlpha => 4,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct ResUi2dSystemDataDropShadow {
     pub texture_id: u16,
-    pub u_options: u8,
-    pub v_options: u8,
-    pub flags: u8,
+    pub u_options: TexOptions,
+    pub v_options: TexOptions,
+    pub flags: DropShadowFlags,
     pub reserve0: [u8; 3],
-    pub reserve1: u8,
-    pub reserve2: u8,
-    pub reserve3: u8,
-    pub reserve4: u8,
-    pub reserve5: [u32; 5],
-    pub reserve6: [f32; 2],
-    pub reserve7: [f32; 2],
-    pub reserve8: [f32; 2],
-    pub reserve9: [f32; 2],
-    pub reserve10: [f32; 2],
-    pub reserve11: [f32; 2],
-    pub reserve12: [f32; 2],
-    pub reserve13: [f32; 2],
-    pub reserve14: [f32; 2],
+
+    pub max_size: u8,
+    pub stroke_blend_mode: DropShadowBlendMode,
+    pub outer_glow_blend_mode: DropShadowBlendMode,
+    pub drop_shadow_blend_mode: DropShadowBlendMode,
+
+    pub reserve5: [u32; 4],
+
+    pub stroke_size: f32,
+    pub stroke_color: Color4f,
+
+    pub outer_glow_color: Color4f,
+    pub outer_glow_spread: f32,
+    pub outer_glow_size: f32,
+
+    pub drop_shadow_color: Color4f,
+    pub drop_shadow_angle: f32,
+    pub drop_shadow_distance: f32,
+    pub drop_shadow_spread: f32,
+    pub drop_shadow_size: f32,
+
     pub reserve15: u32,
     pub reserve16: u32,
     pub reserve17: u32,
@@ -310,30 +353,33 @@ impl ResUi2dSystemDataDropShadow {
     pub fn parse(cursor: &mut Cursor) -> Self {
         Self {
             texture_id: cursor.read_u16(),
-            u_options: cursor.read_u8(),
-            v_options: cursor.read_u8(),
-            flags: cursor.read_u8(),
+            u_options: TexOptions::decode(cursor.read_u8()),
+            v_options: TexOptions::decode(cursor.read_u8()),
+            flags: DropShadowFlags::decode(cursor.read_u8()),
             reserve0: [cursor.read_u8(), cursor.read_u8(), cursor.read_u8()],
-            reserve1: cursor.read_u8(),
-            reserve2: cursor.read_u8(),
-            reserve3: cursor.read_u8(),
-            reserve4: cursor.read_u8(),
+            max_size: cursor.read_u8(),
+            stroke_blend_mode: cursor.read_u8().into(),
+            outer_glow_blend_mode: cursor.read_u8().into(),
+            drop_shadow_blend_mode: cursor.read_u8().into(),
             reserve5: [
                 cursor.read_u32(),
                 cursor.read_u32(),
                 cursor.read_u32(),
                 cursor.read_u32(),
-                cursor.read_u32(),
             ],
-            reserve6: [cursor.read_f32(), cursor.read_f32()],
-            reserve7: [cursor.read_f32(), cursor.read_f32()],
-            reserve8: [cursor.read_f32(), cursor.read_f32()],
-            reserve9: [cursor.read_f32(), cursor.read_f32()],
-            reserve10: [cursor.read_f32(), cursor.read_f32()],
-            reserve11: [cursor.read_f32(), cursor.read_f32()],
-            reserve12: [cursor.read_f32(), cursor.read_f32()],
-            reserve13: [cursor.read_f32(), cursor.read_f32()],
-            reserve14: [cursor.read_f32(), cursor.read_f32()],
+            stroke_size: cursor.read_f32(),
+            stroke_color: Color4f::parse(cursor),
+
+            outer_glow_color: Color4f::parse(cursor),
+            outer_glow_spread: cursor.read_f32(),
+            outer_glow_size: cursor.read_f32(),
+
+            drop_shadow_color: Color4f::parse(cursor),
+            drop_shadow_angle: cursor.read_f32(),
+            drop_shadow_distance: cursor.read_f32(),
+            drop_shadow_spread: cursor.read_f32(),
+            drop_shadow_size: cursor.read_f32(),
+
             reserve15: cursor.read_u32(),
             reserve16: cursor.read_u32(),
             reserve17: cursor.read_u32(),
@@ -344,55 +390,35 @@ impl ResUi2dSystemDataDropShadow {
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("Drop Shadow");
         writer.write_u16(self.texture_id);
-        writer.write_u8(self.u_options);
-        writer.write_u8(self.v_options);
-        writer.write_u8(self.flags);
+        writer.write_u8(self.u_options.encode());
+        writer.write_u8(self.v_options.encode());
+        writer.write_u8(self.flags.encode());
+
         for &b in &self.reserve0 {
             writer.write_u8(b);
         }
-        writer.write_u8(self.reserve1);
-        writer.write_u8(self.reserve2);
-        writer.write_u8(self.reserve3);
-        writer.write_u8(self.reserve4);
+
+        writer.write_u8(self.max_size);
+        writer.write_u8(self.stroke_blend_mode as u8);
+        writer.write_u8(self.outer_glow_blend_mode as u8);
+        writer.write_u8(self.drop_shadow_blend_mode as u8);
+
         for &v in &self.reserve5 {
             writer.write_u32(v);
         }
 
-        for &f in &self.reserve6 {
-            writer.write_f32(f);
-        }
+        writer.write_f32(self.stroke_size);
+        self.stroke_color.serialize(writer);
 
-        for &f in &self.reserve7 {
-            writer.write_f32(f);
-        }
+        self.outer_glow_color.serialize(writer);
+        writer.write_f32(self.outer_glow_spread);
+        writer.write_f32(self.outer_glow_size);
 
-        for &f in &self.reserve8 {
-            writer.write_f32(f);
-        }
-
-        for &f in &self.reserve9 {
-            writer.write_f32(f);
-        }
-
-        for &f in &self.reserve10 {
-            writer.write_f32(f);
-        }
-
-        for &f in &self.reserve11 {
-            writer.write_f32(f);
-        }
-
-        for &f in &self.reserve12 {
-            writer.write_f32(f);
-        }
-
-        for &f in &self.reserve13 {
-            writer.write_f32(f);
-        }
-
-        for &f in &self.reserve14 {
-            writer.write_f32(f);
-        }
+        self.drop_shadow_color.serialize(writer);
+        writer.write_f32(self.drop_shadow_angle);
+        writer.write_f32(self.drop_shadow_distance);
+        writer.write_f32(self.drop_shadow_spread);
+        writer.write_f32(self.drop_shadow_size);
 
         writer.write_u32(self.reserve15);
         writer.write_u32(self.reserve16);
