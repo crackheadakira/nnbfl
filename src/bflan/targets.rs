@@ -5,7 +5,7 @@ use crate::{
     core::{Cursor, Writer, tchar_code32},
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Clone, Deserialize)]
 pub struct AnimTarget {
     pub reserve0: u8,
     pub target: TargetIndex,
@@ -62,7 +62,7 @@ impl AnimTarget {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum TargetIndex {
     PerCharacterTransformCurve(PerCharacterTransformCurveTarget),
     PerCharacterTransform(PerCharacterTransformTarget),
@@ -116,7 +116,7 @@ impl TargetIndex {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum PaneSrtTarget {
     TranslateX = 0,
     TranslateY = 1,
@@ -130,7 +130,7 @@ pub enum PaneSrtTarget {
     SizeY = 9,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum PerCharacterTransformCurveTarget {
     TranslateX = 0,
     TranslateY = 1,
@@ -148,17 +148,17 @@ pub enum PerCharacterTransformCurveTarget {
     LeftBottomAlpha = 13,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum PerCharacterTransformTarget {
     EvalTypeOffset,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum TexturePatternTarget {
     Image = 0,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum VertexColorTarget {
     LeftTopRed = 0,
     LeftTopGreen = 1,
@@ -179,7 +179,7 @@ pub enum VertexColorTarget {
     PaneAlpha = 16,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum MaterialColorTarget {
     BufferRed = 0,
     BufferGreen = 1,
@@ -211,7 +211,7 @@ pub enum MaterialColorTarget {
     Color4Alpha = 27,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum TextureSrtTarget {
     TranslateU = 0,
     TranslateV = 1,

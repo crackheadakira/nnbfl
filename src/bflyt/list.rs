@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{Cursor, Writer};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytLayout {
     pub is_centered: bool,
     pub reserve0: u8,
@@ -40,7 +40,7 @@ impl BflytLayout {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytTextureList {
     pub textures: Vec<String>,
 }
@@ -83,7 +83,7 @@ impl BflytTextureList {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytFontList {
     pub fonts: Vec<String>,
 }
@@ -126,7 +126,7 @@ impl BflytFontList {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Color4u8 {
     pub r: u8,
     pub g: u8,
@@ -150,7 +150,7 @@ impl Color4u8 {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Color4f {
     pub r: f32,
     pub g: f32,
@@ -174,9 +174,11 @@ impl Color4f {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialTextureMap {
+    #[serde(skip)]
     pub texture_index: u16,
+    pub texture_name: String,
     pub u_options: u8,
     pub v_options: u8,
 }
@@ -184,10 +186,12 @@ impl MaterialTextureMap {
     fn parse(c: &mut Cursor) -> Self {
         Self {
             texture_index: c.read_u16(),
+            texture_name: String::new(),
             u_options: c.read_u8(),
             v_options: c.read_u8(),
         }
     }
+
     fn serialize(&self, w: &mut Writer) {
         w.write_u16(self.texture_index);
         w.write_u8(self.u_options);
@@ -195,7 +199,7 @@ impl MaterialTextureMap {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialTextureSrt {
     pub translation_x: f32,
     pub translation_y: f32,
@@ -222,7 +226,7 @@ impl MaterialTextureSrt {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialTexCoordGen {
     pub reserve0: u8,
     pub tex_gen_type: u8,
@@ -254,7 +258,7 @@ impl MaterialTexCoordGen {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialTevCombiner {
     pub stage: u8,
     pub reserve0: u8,
@@ -278,7 +282,7 @@ impl MaterialTevCombiner {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialAlphaCompare {
     pub alpha_test_function: u8,
     pub reserve0: u8,
@@ -302,7 +306,7 @@ impl MaterialAlphaCompare {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialBlendMode {
     pub blend_equation: u8,
     pub source: u8,
@@ -326,7 +330,7 @@ impl MaterialBlendMode {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialIndirectMatrix {
     pub translation: [f32; 2],
     pub rotation: f32,
@@ -345,7 +349,7 @@ impl MaterialIndirectMatrix {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialProjectionTexGen {
     pub translation: [f32; 2],
     pub scale: [f32; 2],
@@ -371,7 +375,7 @@ impl MaterialProjectionTexGen {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialFontShadowColor {
     pub color0: Color4u8,
     pub color1: Color4u8,
@@ -603,7 +607,7 @@ impl TevAlphaOp {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetailedCombinerColorFlags {
     pub color_sources: [TevSource; 3],
     pub color_ops: [TevColorOp; 3],
@@ -645,7 +649,7 @@ impl DetailedCombinerColorFlags {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetailedCombinerAlphaFlags {
     pub alpha_sources: [TevSource; 3],
     pub alpha_ops: [TevAlphaOp; 3],
@@ -688,7 +692,7 @@ impl DetailedCombinerAlphaFlags {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialDetailedCombiner {
     pub value: i32,
 
@@ -738,7 +742,7 @@ impl MaterialDetailedCombiner {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialDetailedCombinerEntry {
     pub color_flags: DetailedCombinerColorFlags,
     pub alpha_flags: DetailedCombinerAlphaFlags,
@@ -767,7 +771,7 @@ impl MaterialDetailedCombinerEntry {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialUserCombiner {
     pub name: String,
     pub reserve: [u32; 5],
@@ -790,7 +794,7 @@ impl MaterialUserCombiner {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialVectorTextureInfo {
     pub time: f32,
     pub color: Color4u8,
@@ -816,7 +820,7 @@ impl MaterialVectorTextureInfo {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialBrickRepeatShaderInfo {
     pub data: Vec<u8>,
 }
@@ -902,7 +906,7 @@ impl MatMemCount {
 
 pub const MATERIAL_NAME_LEN: usize = 0x1c;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialColorEntry {
     pub is_float: bool,
 
@@ -913,7 +917,7 @@ pub struct MaterialColorEntry {
     pub color_f32: Option<Color4f>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytMaterial {
     pub material_name: String,
     pub mat_mem_raw: u32,
@@ -1179,7 +1183,7 @@ impl BflytMaterial {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytMaterialList {
     pub materials: Vec<BflytMaterial>,
 }
@@ -1226,7 +1230,7 @@ impl BflytMaterialList {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapturePaneInfo {
     pub pane_name0: String,
     pub pane_name1: String,
@@ -1236,7 +1240,7 @@ pub struct CapturePaneInfo {
     pub reserve2: f32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytCaptureTextureList {
     pub infos: Vec<CapturePaneInfo>,
 }
@@ -1313,7 +1317,7 @@ impl BflytCaptureTextureList {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorGraphicsInfo {
     pub reserve1: u32,
     pub reserve2: u32,
@@ -1321,7 +1325,7 @@ pub struct VectorGraphicsInfo {
     pub bnvg_name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytVectorGraphicsList {
     pub infos: Vec<VectorGraphicsInfo>,
 }
@@ -1379,7 +1383,7 @@ impl BflytVectorGraphicsList {
 pub const GROUP_NAME_LEN: usize = 0x21;
 pub const GROUP_PANE_NAME_LEN: usize = 0x18;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytGroup {
     pub group_name: String,
     pub reserve0: u8,
@@ -1411,7 +1415,7 @@ impl BflytGroup {
         }
     }
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytControlSource {
     pub control_name: String,
     pub reserve0_name: String,

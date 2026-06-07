@@ -5,13 +5,13 @@ use crate::{
     ui2d::{systemdata::ResUi2dSystemDataArray, types::Ui2dUserDataType},
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResUi2dUserDataSection {
     pub reserve0: u16,
     pub user_data: Vec<ResUi2dUserData>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResUi2dUserData {
     pub data_type: Ui2dUserDataType,
     pub reserve0: u8,

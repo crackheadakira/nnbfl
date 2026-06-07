@@ -77,7 +77,7 @@ impl Vector3f {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Ui2dUserDataType {
     String = 0,
