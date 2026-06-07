@@ -5,7 +5,7 @@ use crate::{
     core::{Cursor, Writer, tchar_code32},
 };
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u32)]
 pub enum AnimInfoType {
     Invalid = 0,
@@ -59,7 +59,7 @@ impl From<u32> for AnimInfoType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AnimType {
     Pane = 0,
     Material = 1,
@@ -82,7 +82,7 @@ impl From<u8> for AnimType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AnimInfo {
     Standard {
         magic: AnimInfoType,
@@ -180,7 +180,7 @@ impl AnimInfo {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtendedUserDataAnim {
     pub header_size: u32,
     pub unk_1: u16,
@@ -255,7 +255,7 @@ impl ExtendedUserDataAnim {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaneAnimInfo {
     pub frame_count: u16,
     pub is_looping: bool,
@@ -351,7 +351,7 @@ impl PaneAnimInfo {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnimContent {
     pub name: String,
     pub anim_type: AnimType,
@@ -393,7 +393,6 @@ impl AnimContent {
 
     pub fn serialize(&self, writer: &mut Writer, base_offset: usize) {
         writer.mark("AnimContent");
-
         writer.write_fixed_string(&self.name, 0x1C);
         writer.write_u8(self.infos.len() as u8);
 
@@ -408,12 +407,12 @@ impl AnimContent {
         writer.write_u8(type_val);
         writer.write_u16(0);
 
-        let mut total_size_pos = 0;
+        let mut user_str_offset_pos = 0;
 
         // Workaround for MiniGame_PictQuiz_00_MosaicNormal.bflan
         if matches!(self.anim_type, AnimType::User) {
             let info_array_offset_pos = writer.write_placeholder_u32();
-            total_size_pos = writer.write_placeholder_u32();
+            user_str_offset_pos = writer.write_placeholder_u32();
 
             writer.patch_u32(info_array_offset_pos, (writer.pos() - base_offset) as u32);
         }
@@ -435,21 +434,8 @@ impl AnimContent {
         }
 
         if matches!(self.anim_type, AnimType::User) {
-            let mut total_size = (writer.pos() - base_offset) as u32;
-
-            // this somehow works- don't question me
-            for info in &self.infos {
-                if let AnimInfo::ExtendedUserData { data, .. } = info {
-                    for anim in data {
-                        let string_overhead = 4 + anim.key.len() + 1;
-                        total_size -= string_overhead as u32;
-                    }
-                }
-            }
-
-            writer.patch_u32(total_size_pos, total_size);
+            // man... dont question me.
+            writer.patch_u32(user_str_offset_pos, 0x5C);
         }
-
-        writer.align(4);
     }
 }

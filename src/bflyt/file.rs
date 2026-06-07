@@ -16,19 +16,7 @@ use crate::{
     ui2d::userdata::ResUi2dUserDataSection,
 };
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PaneNode {
-    pub pane: BflytSection,
-    pub children: Vec<PaneNode>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GroupNode {
-    pub group: BflytGroup,
-    pub children: Vec<GroupNode>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BflytSection {
     UserData(ResUi2dUserDataSection),
     Layout(BflytLayout),
@@ -204,7 +192,7 @@ impl BflytSection {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bflyt {
     pub magic: u32,
     pub endianness: u16,
@@ -213,8 +201,6 @@ pub struct Bflyt {
     pub minor_version: u8,
     pub major_version: u8,
     pub sections: Vec<BflytSection>,
-    pub pane_tree: Vec<PaneNode>,
-    pub group_tree: Vec<GroupNode>,
 }
 
 impl Bflyt {
@@ -245,12 +231,7 @@ impl Bflyt {
             sections.push(section);
         }
 
-        let mut idx = 0;
-        let pane_tree = build_pane_tree(&sections, &mut idx);
-        idx = 0;
-        let group_tree = build_group_tree(&sections, &mut idx);
-
-        Ok(Self {
+        let mut bflyt = Self {
             magic,
             endianness,
             header_size,
@@ -258,12 +239,24 @@ impl Bflyt {
             minor_version,
             major_version,
             sections,
-            pane_tree,
-            group_tree,
-        })
+        };
+
+        bflyt.resolve_names();
+        Ok(bflyt)
     }
 
     pub fn serialize(&self) -> Writer {
+        let mut this = Self {
+            magic: self.magic,
+            endianness: self.endianness,
+            header_size: self.header_size,
+            micro_version: self.micro_version,
+            minor_version: self.minor_version,
+            major_version: self.major_version,
+            sections: self.sections.clone(),
+        };
+
+        this.rebuild_indices();
         let mut writer = Writer::new();
 
         writer.mark("File header");
@@ -281,7 +274,7 @@ impl Bflyt {
             writer.write_u8(0);
         }
 
-        for section in &self.sections {
+        for section in &this.sections {
             section.serialize(&mut writer);
         }
 
@@ -290,70 +283,53 @@ impl Bflyt {
 
         writer
     }
-}
 
-fn build_pane_tree(sections: &[BflytSection], idx: &mut usize) -> Vec<PaneNode> {
-    let mut nodes = Vec::new();
-    while *idx < sections.len() {
-        match &sections[*idx] {
-            BflytSection::Unknown(h, _) if h.magic == MAGIC_PANESTART => {
-                *idx += 1;
+    fn get_texture_names(&self) -> Vec<String> {
+        self.sections
+            .iter()
+            .find_map(|s| {
+                if let BflytSection::TextureList(t) = s {
+                    Some(t.textures.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
 
-                if *idx < sections.len() {
-                    let pane_section = sections[*idx].clone_pane_section();
-                    *idx += 1;
-                    let children = build_pane_tree(sections, idx);
+    fn resolve_names(&mut self) {
+        let textures = self.get_texture_names();
 
-                    if *idx < sections.len()
-                        && let BflytSection::Unknown(h, _) = &sections[*idx]
-                        && h.magic == MAGIC_PANEEND
-                    {
-                        *idx += 1;
-                    }
-                    if let Some(pane) = pane_section {
-                        nodes.push(PaneNode { pane, children });
+        for section in &mut self.sections {
+            if let BflytSection::MaterialList(ml) = section {
+                for mat in &mut ml.materials {
+                    for tm in &mut mat.tex_maps {
+                        tm.texture_name = textures
+                            .get(tm.texture_index as usize)
+                            .cloned()
+                            .unwrap_or_default();
                     }
                 }
             }
-            BflytSection::Unknown(h, _) if h.magic == MAGIC_PANEEND => {
-                break;
-            }
-            _ => {
-                *idx += 1;
-            }
         }
     }
-    nodes
-}
 
-fn build_group_tree(sections: &[BflytSection], idx: &mut usize) -> Vec<GroupNode> {
-    let mut nodes = Vec::new();
-    while *idx < sections.len() {
-        match &sections[*idx] {
-            BflytSection::Unknown(h, _) if h.magic == MAGIC_GROUPSTART => {
-                *idx += 1;
-                if *idx < sections.len()
-                    && let BflytSection::Group(g) = &sections[*idx]
-                {
-                    let group = g.clone_group();
-                    *idx += 1;
-                    let children = build_group_tree(sections, idx);
-                    if *idx < sections.len()
-                        && let BflytSection::Unknown(h, _) = &sections[*idx]
-                        && h.magic == MAGIC_GROUPEND
-                    {
-                        *idx += 1;
+    fn rebuild_indices(&mut self) {
+        let textures = self.get_texture_names();
+
+        for section in &mut self.sections {
+            if let BflytSection::MaterialList(ml) = section {
+                for mat in &mut ml.materials {
+                    for tm in &mut mat.tex_maps {
+                        tm.texture_index = textures
+                            .iter()
+                            .position(|t| t == &tm.texture_name)
+                            .unwrap_or(0) as u16;
                     }
-                    nodes.push(GroupNode { group, children });
                 }
             }
-            BflytSection::Unknown(h, _) if h.magic == MAGIC_GROUPEND => break,
-            _ => {
-                *idx += 1;
-            }
         }
     }
-    nodes
 }
 
 fn section_magic(section: &BflytSection) -> u32 {
@@ -381,29 +357,5 @@ fn section_magic(section: &BflytSection) -> u32 {
         BflytSection::GroupStart => MAGIC_GROUPSTART,
         BflytSection::GroupEnd => MAGIC_GROUPEND,
         BflytSection::Unknown(h, _) => h.magic,
-    }
-}
-
-trait ClonePaneSection {
-    fn clone_pane_section(&self) -> Option<BflytSection>;
-}
-
-impl ClonePaneSection for BflytSection {
-    fn clone_pane_section(&self) -> Option<BflytSection> {
-        None
-    }
-}
-
-trait CloneGroup {
-    fn clone_group(&self) -> BflytGroup;
-}
-
-impl CloneGroup for crate::bflyt::list::BflytGroup {
-    fn clone_group(&self) -> BflytGroup {
-        BflytGroup {
-            group_name: self.group_name.clone(),
-            reserve0: self.reserve0,
-            child_names: self.child_names.clone(),
-        }
     }
 }

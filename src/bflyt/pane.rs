@@ -38,7 +38,7 @@ impl Color4u8 {
 pub const PANE_NAME_LEN: usize = 0x18;
 pub const USER_NAME_LEN: usize = 0x08;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytPane {
     pub pane_flags: PaneFlags,
     pub origin: BflytOrigins,
@@ -84,7 +84,7 @@ impl BflytPane {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextureUv {
     pub top_left: Vector2f,
     pub top_right: Vector2f,
@@ -111,7 +111,7 @@ impl TextureUv {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytPicturePane {
     pub base: BflytPane,
     pub top_left_vertex_color: Color4u8,
@@ -166,7 +166,7 @@ impl BflytPicturePane {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerCharacterTransform {
     pub eval_time_offset: f32,
     pub eval_time_width: f32,
@@ -239,7 +239,7 @@ impl PerCharacterTransform {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytTextBoxPane {
     pub base: BflytPane,
     pub text_buffer_size: u16,
@@ -431,7 +431,7 @@ impl BflytTextBoxPane {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowContent {
     pub top_left_vertex_color: Color4u8,
     pub top_right_vertex_color: Color4u8,
@@ -487,7 +487,7 @@ impl WindowContent {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowFrame {
     pub material_index: u16,
     pub texture_flip_mode: u8,
@@ -510,7 +510,7 @@ impl WindowFrame {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytWindowPane {
     pub base: BflytPane,
     pub inflation_left: i16,
@@ -625,7 +625,7 @@ impl BflytWindowPane {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartsPaneBasicInfo {
     pub user_name: String,
     pub translation_x: f32,
@@ -683,7 +683,7 @@ impl PartsPaneBasicInfo {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartsProperty {
     pub property_name: String,
     pub usage_flag: u8,
@@ -762,7 +762,7 @@ impl PartsProperty {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytPartsPane {
     pub base: BflytPane,
     pub magnify_x: f32,
@@ -841,7 +841,7 @@ impl BflytPartsPane {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytAlignmentPane {
     pub base: BflytPane,
     pub direction: u32,
@@ -875,7 +875,7 @@ impl BflytAlignmentPane {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytCapturePane {
     pub base: BflytPane,
     pub reserve0: [u32; 4],
@@ -893,15 +893,18 @@ impl BflytCapturePane {
     pub fn parse(cursor: &mut Cursor) -> Self {
         let base = BflytPane::parse(cursor);
         let mut reserve0 = [0u32; 4];
+
         for v in &mut reserve0 {
             *v = cursor.read_u32();
         }
+
         let clear_color = [
             cursor.read_f32(),
             cursor.read_f32(),
             cursor.read_f32(),
             cursor.read_f32(),
         ];
+
         let image_format = cursor.read_u16();
         let is_copy_framebuffer = cursor.read_u8() != 0;
         let is_create_resource = cursor.read_u8() != 0;
@@ -909,6 +912,7 @@ impl BflytCapturePane {
         let reserve2 = [cursor.read_u8(), cursor.read_u8(), cursor.read_u8()];
         let reserve3 = [cursor.read_u8(), cursor.read_u8(), cursor.read_u8()];
         let scale = cursor.read_f32();
+
         Self {
             base,
             reserve0,
@@ -922,6 +926,7 @@ impl BflytCapturePane {
             scale,
         }
     }
+
     pub fn serialize(&self, writer: &mut Writer) {
         self.base.serialize(writer);
         writer.mark("CapturePane");

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{Cursor, Writer};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Curve {
     Constant(Vec<f32>),
     Step(Vec<StepKey>),
@@ -70,13 +70,13 @@ impl Curve {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StepKey {
     pub frame: f32,
     pub value: u16,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HermiteKey {
     pub frame: f32,
     pub value: f32,

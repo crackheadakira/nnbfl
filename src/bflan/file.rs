@@ -15,7 +15,6 @@ pub struct Bflan {
     pub micro_version: u16,
     pub minor_version: u8,
     pub major_version: u8,
-    pub section_count: u32,
 
     pub sections: Vec<BflanSections>,
 }
@@ -47,7 +46,6 @@ impl Bflan {
             micro_version,
             minor_version,
             major_version,
-            section_count,
             sections,
         })
     }
