@@ -1,39 +1,22 @@
+use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, IntoPrimitive, FromPrimitive)]
+#[repr(u8)]
 pub enum BflytOrigin {
+    #[num_enum(default)]
     Center,
     LeftTop,
     RightBottom,
 }
 
-impl BflytOrigin {
-    fn from_u8(value: u8) -> Self {
-        match value & 0x03 {
-            0 => BflytOrigin::Center,
-            1 => BflytOrigin::LeftTop,
-            2 => BflytOrigin::RightBottom,
-            _ => BflytOrigin::Center,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, IntoPrimitive, FromPrimitive)]
+#[repr(u8)]
 pub enum BflytParentOrigin {
+    #[num_enum(default)]
     None,
     LeftTop,
     RightBottom,
-}
-
-impl BflytParentOrigin {
-    fn from_u8(value: u8) -> Self {
-        match value & 0x03 {
-            0 => BflytParentOrigin::None,
-            1 => BflytParentOrigin::LeftTop,
-            2 => BflytParentOrigin::RightBottom,
-            _ => BflytParentOrigin::None,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
@@ -47,10 +30,10 @@ pub struct BflytOrigins {
 impl BflytOrigins {
     pub fn decode(raw: u8) -> Self {
         Self {
-            origin_x: BflytOrigin::from_u8(raw & 0x03),
-            origin_y: BflytOrigin::from_u8((raw >> 2) & 0x03),
-            parent_origin_x: BflytParentOrigin::from_u8((raw >> 4) & 0x03),
-            parent_origin_y: BflytParentOrigin::from_u8(raw >> 6),
+            origin_x: (raw & 0x03).into(),
+            origin_y: ((raw >> 2) & 0x03).into(),
+            parent_origin_x: ((raw >> 4) & 0x03).into(),
+            parent_origin_y: (raw >> 6).into(),
         }
     }
 
@@ -289,40 +272,25 @@ impl WindowFlags {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive,
+)]
 #[repr(u8)]
 pub enum TexWrapMode {
+    #[num_enum(default)]
     Clamp,
     Repeat,
     Mirror,
 }
 
-impl From<u8> for TexWrapMode {
-    fn from(val: u8) -> Self {
-        match val & 0x03 {
-            0 => TexWrapMode::Clamp,
-            1 => TexWrapMode::Repeat,
-            2 => TexWrapMode::Mirror,
-            _ => TexWrapMode::Clamp,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, IntoPrimitive, FromPrimitive,
+)]
 #[repr(u8)]
 pub enum TexFilter {
+    #[num_enum(default)]
     Near,
     Linear,
-}
-
-impl From<u8> for TexFilter {
-    fn from(val: u8) -> Self {
-        match val & 0x3F {
-            0 => TexFilter::Near,
-            1 => TexFilter::Linear,
-            _ => TexFilter::Near,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]

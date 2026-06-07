@@ -1,3 +1,4 @@
+use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 
 use crate::core::{Cursor, Writer};
@@ -77,13 +78,14 @@ impl Vector3f {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, IntoPrimitive, FromPrimitive)]
 #[repr(u8)]
 pub enum Ui2dUserDataType {
     String = 0,
     S32 = 1,
     Float = 2,
     SystemData = 3,
+    #[num_enum(default)]
     Invalid = 4,
 }
 
@@ -111,17 +113,5 @@ impl VertexPos {
         writer.write_f32(self.size_scale_height);
         writer.write_f32(self.position_x_scale);
         writer.write_f32(self.position_y_scale);
-    }
-}
-
-impl From<u8> for Ui2dUserDataType {
-    fn from(v: u8) -> Self {
-        match v {
-            0 => Self::String,
-            1 => Self::S32,
-            2 => Self::Float,
-            3 => Self::SystemData,
-            _ => Self::Invalid,
-        }
     }
 }

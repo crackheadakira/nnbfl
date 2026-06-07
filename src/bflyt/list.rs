@@ -1,6 +1,10 @@
+use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 
-use crate::core::{Cursor, Writer};
+use crate::{
+    bflyt::flags::{TexFilter, TexWrapMode},
+    core::{Cursor, Writer},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytLayout {
@@ -175,27 +179,74 @@ impl Color4f {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaterialTextureOptions {
+    pub wrap_mode: TexWrapMode,
+    pub filter: TexFilter,
+    pub reserve0: u8,
+}
+
+impl MaterialTextureOptions {
+    pub fn decode(raw: u8) -> Self {
+        Self {
+            wrap_mode: (raw & 0x3).into(),
+            filter: ((raw >> 2) & 0x3).into(),
+            reserve0: ((raw >> 4) & 0xF) as u8,
+        }
+    }
+
+    pub fn encode(&self) -> u8 {
+        (self.wrap_mode as u8 & 0x3)
+            | ((self.filter as u8 & 0x3) << 2)
+            | ((self.reserve0 & 0xF) << 4)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaterialTextureExtension {
+    pub is_capture_texture: bool,
+    pub is_vecture_texture: bool,
+    pub reserve0: u32,
+}
+
+impl MaterialTextureExtension {
+    pub fn decode(raw: u32) -> Self {
+        Self {
+            is_capture_texture: (raw & 0x1) != 0,
+            is_vecture_texture: ((raw >> 1) & 0x1) != 0,
+            reserve0: ((raw >> 2) & 0x3FFFFFFF),
+        }
+    }
+
+    pub fn encode(&self) -> u32 {
+        (self.is_capture_texture as u32 & 0x1)
+            | ((self.is_vecture_texture as u32 & 0x1) << 1)
+            | ((self.reserve0 & 0x3FFFFFFF) << 2)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialTextureMap {
     #[serde(skip)]
     pub texture_index: u16,
     pub texture_name: String,
-    pub u_options: u8,
-    pub v_options: u8,
+    pub u_options: MaterialTextureOptions,
+    pub v_options: MaterialTextureOptions,
 }
+
 impl MaterialTextureMap {
     fn parse(c: &mut Cursor) -> Self {
         Self {
             texture_index: c.read_u16(),
             texture_name: String::new(),
-            u_options: c.read_u8(),
-            v_options: c.read_u8(),
+            u_options: MaterialTextureOptions::decode(c.read_u8()),
+            v_options: MaterialTextureOptions::decode(c.read_u8()),
         }
     }
 
     fn serialize(&self, w: &mut Writer) {
         w.write_u16(self.texture_index);
-        w.write_u8(self.u_options);
-        w.write_u8(self.v_options);
+        w.write_u8(self.u_options.encode());
+        w.write_u8(self.v_options.encode());
     }
 }
 
@@ -207,6 +258,7 @@ pub struct MaterialTextureSrt {
     pub scale_x: f32,
     pub scale_z: f32,
 }
+
 impl MaterialTextureSrt {
     fn parse(c: &mut Cursor) -> Self {
         Self {
@@ -234,6 +286,7 @@ pub struct MaterialTexCoordGen {
     pub reserve2: u32,
     pub reserve3: u64,
 }
+
 impl MaterialTexCoordGen {
     fn parse(c: &mut Cursor) -> Self {
         Self {
@@ -260,23 +313,24 @@ impl MaterialTexCoordGen {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialTevCombiner {
-    pub stage: u8,
-    pub reserve0: u8,
+    pub rgb_mode: CombinerTevMode,
+    pub alpha_mode: CombinerTevMode,
     pub reserve1: u8,
     pub reserve2: u8,
 }
+
 impl MaterialTevCombiner {
     fn parse(c: &mut Cursor) -> Self {
         Self {
-            stage: c.read_u8(),
-            reserve0: c.read_u8(),
+            rgb_mode: c.read_u8().into(),
+            alpha_mode: c.read_u8().into(),
             reserve1: c.read_u8(),
             reserve2: c.read_u8(),
         }
     }
     fn serialize(&self, w: &mut Writer) {
-        w.write_u8(self.stage);
-        w.write_u8(self.reserve0);
+        w.write_u8(self.rgb_mode.into());
+        w.write_u8(self.alpha_mode.into());
         w.write_u8(self.reserve1);
         w.write_u8(self.reserve2);
     }
@@ -306,27 +360,91 @@ impl MaterialAlphaCompare {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum BlendMode {
+    #[num_enum(default)]
+    None,
+    Blend,
+    Logic,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum BlendFactor {
+    #[num_enum(default)]
+    V0,
+    V1_0,
+    DstColor,
+    InvDstColor,
+    SrcAlpha,
+    InvSrcAlpha,
+    DstAlpha,
+    InvDstAlpha,
+    SrcColor,
+    InvSrcColor,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum LogicOp {
+    #[num_enum(default)]
+    Invalid,
+
+    NoOp,
+    Clear,
+    Set,
+    Copy,
+    InvCopy,
+    Inv,
+    And,
+    Nand,
+    Or,
+    Nor,
+    Xor,
+    Equiv,
+    RevAnd,
+    InvAnd,
+    RevOr,
+    InvOr,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum BlendOp {
+    #[num_enum(default)]
+    Invalid,
+
+    Add,
+    Subtract,
+    ReverseSubtract,
+    SelectMin,
+    SelectMax,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialBlendMode {
-    pub blend_equation: u8,
-    pub source: u8,
-    pub destination: u8,
-    pub logic_op: u8,
+    pub blend_op: BlendOp,
+    pub function_source: BlendFactor,
+    pub function_destination: BlendFactor,
+    pub logic_op: LogicOp,
 }
+
 impl MaterialBlendMode {
     fn parse(c: &mut Cursor) -> Self {
         Self {
-            blend_equation: c.read_u8(),
-            source: c.read_u8(),
-            destination: c.read_u8(),
-            logic_op: c.read_u8(),
+            blend_op: c.read_u8().into(),
+            function_source: c.read_u8().into(),
+            function_destination: c.read_u8().into(),
+            logic_op: c.read_u8().into(),
         }
     }
+
     fn serialize(&self, w: &mut Writer) {
-        w.write_u8(self.blend_equation);
-        w.write_u8(self.source);
-        w.write_u8(self.destination);
-        w.write_u8(self.logic_op);
+        w.write_u8(self.blend_op.into());
+        w.write_u8(self.function_source.into());
+        w.write_u8(self.function_destination.into());
+        w.write_u8(self.logic_op.into());
     }
 }
 
@@ -394,224 +512,119 @@ impl MaterialFontShadowColor {
 }
 
 // MaterialDetailedCombiner & these enums are from KillzXGaming's LayoutLibrary repository!
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, FromPrimitive, IntoPrimitive,
+)]
 #[repr(u8)]
 pub enum TevSource {
     Primary = 0,
+    Unknown2 = 2,
     Texture0 = 3,
     Texture1 = 4,
     Texture2 = 5,
+    Texture3 = 6,
+    Register = 13,
+    #[num_enum(default)]
     Constant = 14,
     Previous = 15,
-    Unknown(u8),
 }
 
-impl TevSource {
-    pub fn from_u8(val: u8) -> Self {
-        match val {
-            0 => Self::Primary,
-            3 => Self::Texture0,
-            4 => Self::Texture1,
-            5 => Self::Texture2,
-            14 => Self::Constant,
-            15 => Self::Previous,
-            other => Self::Unknown(other),
-        }
-    }
-
-    pub fn to_u8(self) -> u8 {
-        match self {
-            Self::Primary => 0,
-            Self::Texture0 => 3,
-            Self::Texture1 => 4,
-            Self::Texture2 => 5,
-            Self::Constant => 14,
-            Self::Previous => 15,
-            Self::Unknown(other) => other,
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, FromPrimitive, IntoPrimitive,
+)]
 #[repr(u8)]
 pub enum TevScale {
-    Scale1 = 0,
-    Scale2 = 1,
-    Scale4 = 2,
-    Unknown(u8),
+    #[num_enum(default)]
+    V1,
+    V2,
+    V4,
+    Unknown,
 }
 
-impl TevScale {
-    pub fn from_u8(val: u8) -> Self {
-        match val {
-            0 => Self::Scale1,
-            1 => Self::Scale2,
-            2 => Self::Scale4,
-            other => Self::Unknown(other),
-        }
-    }
-    pub fn to_u8(self) -> u8 {
-        match self {
-            Self::Scale1 => 0,
-            Self::Scale2 => 1,
-            Self::Scale4 => 2,
-            Self::Unknown(other) => other,
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, FromPrimitive, IntoPrimitive,
+)]
 #[repr(u8)]
-pub enum TevMode {
-    Replace = 0,
-    Modulate = 1,
-    Add = 2,
-    AddSigned = 3,
-    Interpolate = 4,
-    Subtract = 5,
-    AddMultiplicate = 6,
-    MultiplcateAdd = 7,
-    Overlay = 8,
-    Indirect = 9,
-    BlendIndirect = 10,
-    EachIndirect = 11,
-    Unknown(u8),
+pub enum DetailedCombinerTevMode {
+    #[num_enum(default)]
+    Replace,
+    Modulate,
+    Add,
+    AddSigned,
+    Interpolate,
+    Subtract,
+    AddMultiplicate = 8,
+    MultiplcateAdd,
+    Overlay,
+    Lighten,
+    Darken,
+    Indirect,
+    BlendIndirect,
+    EachIndirect,
 }
 
-impl TevMode {
-    pub fn from_u8(val: u8) -> Self {
-        match val {
-            0 => Self::Replace,
-            1 => Self::Modulate,
-            2 => Self::Add,
-            3 => Self::AddSigned,
-            4 => Self::Interpolate,
-            5 => Self::Subtract,
-            6 => Self::AddMultiplicate,
-            7 => Self::MultiplcateAdd,
-            8 => Self::Overlay,
-            9 => Self::Indirect,
-            10 => Self::BlendIndirect,
-            11 => Self::EachIndirect,
-            other => Self::Unknown(other),
-        }
-    }
-    pub fn to_u8(self) -> u8 {
-        match self {
-            Self::Replace => 0,
-            Self::Modulate => 1,
-            Self::Add => 2,
-            Self::AddSigned => 3,
-            Self::Interpolate => 4,
-            Self::Subtract => 5,
-            Self::AddMultiplicate => 6,
-            Self::MultiplcateAdd => 7,
-            Self::Overlay => 8,
-            Self::Indirect => 9,
-            Self::BlendIndirect => 10,
-            Self::EachIndirect => 11,
-            Self::Unknown(other) => other,
-        }
-    }
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, FromPrimitive, IntoPrimitive,
+)]
+#[repr(u8)]
+pub enum CombinerTevMode {
+    #[num_enum(default)]
+    Replace,
+    Modulate,
+    Add,
+    AddSigned,
+    Interpolate,
+    Subtract,
+    AddMultiplicate,
+    MultiplcateAdd,
+    Overlay,
+    Lighten,
+    Darken,
+    Indirect,
+    BlendIndirect,
+    EachIndirect,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, IntoPrimitive, FromPrimitive,
+)]
 #[repr(u8)]
 pub enum TevColorOp {
-    RGB = 0,
-    InvRGB = 1,
-    Alpha = 2,
-    InvAlpha = 3,
-    RRR = 4,
-    InvRRR = 5,
-    GGG = 6,
-    InvGGG = 7,
-    BBB = 8,
-    InvBBB = 9,
-    Unknown(u8),
+    #[num_enum(default)]
+    RGB,
+    InvRGB,
+    Alpha,
+    InvAlpha,
+    RRR,
+    InvRRR,
+    GGG,
+    InvGGG,
+    BBB,
+    InvBBB,
 }
 
-impl TevColorOp {
-    pub fn from_u8(val: u8) -> Self {
-        match val {
-            0 => Self::RGB,
-            1 => Self::InvRGB,
-            2 => Self::Alpha,
-            3 => Self::InvAlpha,
-            4 => Self::RRR,
-            5 => Self::InvRRR,
-            6 => Self::GGG,
-            7 => Self::InvGGG,
-            8 => Self::BBB,
-            9 => Self::InvBBB,
-            other => Self::Unknown(other),
-        }
-    }
-    pub fn to_u8(self) -> u8 {
-        match self {
-            Self::RGB => 0,
-            Self::InvRGB => 1,
-            Self::Alpha => 2,
-            Self::InvAlpha => 3,
-            Self::RRR => 4,
-            Self::InvRRR => 5,
-            Self::GGG => 6,
-            Self::InvGGG => 7,
-            Self::BBB => 8,
-            Self::InvBBB => 9,
-            Self::Unknown(other) => other,
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, IntoPrimitive, FromPrimitive,
+)]
 #[repr(u8)]
 pub enum TevAlphaOp {
-    Alpha = 0,
-    InvAlpha = 1,
-    R = 2,
-    InvR = 3,
-    G = 4,
-    InvG = 5,
-    B = 6,
-    InvB = 7,
-    Unknown(u8),
-}
-
-impl TevAlphaOp {
-    pub fn from_u8(val: u8) -> Self {
-        match val {
-            0 => Self::Alpha,
-            1 => Self::InvAlpha,
-            2 => Self::R,
-            3 => Self::InvR,
-            4 => Self::G,
-            5 => Self::InvG,
-            6 => Self::B,
-            7 => Self::InvB,
-            other => Self::Unknown(other),
-        }
-    }
-    pub fn to_u8(self) -> u8 {
-        match self {
-            Self::Alpha => 0,
-            Self::InvAlpha => 1,
-            Self::R => 2,
-            Self::InvR => 3,
-            Self::G => 4,
-            Self::InvG => 5,
-            Self::B => 6,
-            Self::InvB => 7,
-            Self::Unknown(other) => other,
-        }
-    }
+    #[num_enum(default)]
+    Alpha,
+    InvAlpha,
+    R,
+    InvR,
+    G,
+    InvG,
+    B,
+    InvB,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetailedCombinerColorFlags {
     pub color_sources: [TevSource; 3],
     pub color_ops: [TevColorOp; 3],
-    pub color_mode: TevMode,
+    pub color_mode: DetailedCombinerTevMode,
     pub color_scale: TevScale,
 }
 
@@ -621,30 +634,30 @@ impl DetailedCombinerColorFlags {
 
         Self {
             color_sources: [
-                TevSource::from_u8(get_bits(0, 4)),
-                TevSource::from_u8(get_bits(4, 4)),
-                TevSource::from_u8(get_bits(8, 4)),
+                get_bits(0, 4).into(),
+                get_bits(4, 4).into(),
+                get_bits(8, 4).into(),
             ],
             color_ops: [
-                TevColorOp::from_u8(get_bits(12, 4)),
-                TevColorOp::from_u8(get_bits(16, 4)),
-                TevColorOp::from_u8(get_bits(20, 4)),
+                get_bits(12, 4).into(),
+                get_bits(16, 4).into(),
+                get_bits(20, 4).into(),
             ],
-            color_mode: TevMode::from_u8(get_bits(24, 4)),
-            color_scale: TevScale::from_u8(get_bits(28, 3)),
+            color_mode: get_bits(24, 4).into(),
+            color_scale: get_bits(28, 3).into(),
         }
     }
 
     pub fn to_u32(&self) -> u32 {
         let mut flags = 0u32;
-        flags |= self.color_sources[0].to_u8() as u32 & 0xF;
-        flags |= (self.color_sources[1].to_u8() as u32 & 0xF) << 4;
-        flags |= (self.color_sources[2].to_u8() as u32 & 0xF) << 8;
-        flags |= (self.color_ops[0].to_u8() as u32 & 0xF) << 12;
-        flags |= (self.color_ops[1].to_u8() as u32 & 0xF) << 16;
-        flags |= (self.color_ops[2].to_u8() as u32 & 0xF) << 20;
-        flags |= (self.color_mode.to_u8() as u32 & 0xF) << 24;
-        flags |= (self.color_scale.to_u8() as u32 & 0x7) << 28;
+        flags |= self.color_sources[0] as u32 & 0xF;
+        flags |= (self.color_sources[1] as u32 & 0xF) << 4;
+        flags |= (self.color_sources[2] as u32 & 0xF) << 8;
+        flags |= (self.color_ops[0] as u32 & 0xF) << 12;
+        flags |= (self.color_ops[1] as u32 & 0xF) << 16;
+        flags |= (self.color_ops[2] as u32 & 0xF) << 20;
+        flags |= (self.color_mode as u32 & 0xF) << 24;
+        flags |= (self.color_scale as u32 & 0x7) << 28;
         flags
     }
 }
@@ -653,7 +666,7 @@ impl DetailedCombinerColorFlags {
 pub struct DetailedCombinerAlphaFlags {
     pub alpha_sources: [TevSource; 3],
     pub alpha_ops: [TevAlphaOp; 3],
-    pub alpha_mode: TevMode,
+    pub alpha_mode: DetailedCombinerTevMode,
     pub alpha_scale: TevScale,
 }
 
@@ -664,30 +677,30 @@ impl DetailedCombinerAlphaFlags {
 
         Self {
             alpha_sources: [
-                TevSource::from_u8(get_bits(0, 4)),
-                TevSource::from_u8(get_bits(4, 4)),
-                TevSource::from_u8(get_bits(8, 4)),
+                get_bits(0, 4).into(),
+                get_bits(4, 4).into(),
+                get_bits(8, 4).into(),
             ],
             alpha_ops: [
-                TevAlphaOp::from_u8(get_bits(12, 4)),
-                TevAlphaOp::from_u8(get_bits(16, 4)),
-                TevAlphaOp::from_u8(get_bits(20, 4)),
+                get_bits(12, 4).into(),
+                get_bits(16, 4).into(),
+                get_bits(20, 4).into(),
             ],
-            alpha_mode: TevMode::from_u8(get_bits(24, 4)),
-            alpha_scale: TevScale::from_u8(get_bits(28, 3)),
+            alpha_mode: get_bits(24, 4).into(),
+            alpha_scale: get_bits(28, 3).into(),
         }
     }
 
     pub fn to_i32(&self) -> i32 {
         let mut flags = 0u32;
-        flags |= self.alpha_sources[0].to_u8() as u32 & 0xF;
-        flags |= (self.alpha_sources[1].to_u8() as u32 & 0xF) << 4;
-        flags |= (self.alpha_sources[2].to_u8() as u32 & 0xF) << 8;
-        flags |= (self.alpha_ops[0].to_u8() as u32 & 0xF) << 12;
-        flags |= (self.alpha_ops[1].to_u8() as u32 & 0xF) << 16;
-        flags |= (self.alpha_ops[2].to_u8() as u32 & 0xF) << 20;
-        flags |= (self.alpha_mode.to_u8() as u32 & 0xF) << 24;
-        flags |= (self.alpha_scale.to_u8() as u32 & 0x7) << 28;
+        flags |= self.alpha_sources[0] as u32 & 0xF;
+        flags |= (self.alpha_sources[1] as u32 & 0xF) << 4;
+        flags |= (self.alpha_sources[2] as u32 & 0xF) << 8;
+        flags |= (self.alpha_ops[0] as u32 & 0xF) << 12;
+        flags |= (self.alpha_ops[1] as u32 & 0xF) << 16;
+        flags |= (self.alpha_ops[2] as u32 & 0xF) << 20;
+        flags |= (self.alpha_mode as u32 & 0xF) << 24;
+        flags |= (self.alpha_scale as u32 & 0x3) << 28;
         flags as i32
     }
 }
@@ -833,21 +846,22 @@ impl MaterialBrickRepeatShaderInfo {
         w.write_bytes(&self.data);
     }
 }
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
-pub struct MatMemCount {
+pub struct MaterialInfo {
     pub tex_map_count: u8,
     pub tex_srt_count: u8,
     pub tex_coord_gen_count: u8,
     pub tev_combiner_count: u8,
     pub alpha_compare_count: u8,
-    pub color_blend_mode: u8,
-    pub reserve0: u8,
-    pub color_and_alpha_blend_mode: u8,
+    pub has_color_blend_mode: bool,
+    pub reserve0: bool,
+    pub has_alpha_blend_mode: bool,
     pub reserve1: u8,
     pub indirect_matrix_count: u8,
     pub projection_tex_gen_count: u8,
     pub font_shadow_color: u8,
-    pub reserve2: u8,
+    pub reserve2: bool,
     pub use_detailed_combiner: u8,
     pub user_combiner_count: u8,
     pub has_texture_extensions: u8,
@@ -856,7 +870,7 @@ pub struct MatMemCount {
     pub reserve3: u8,
 }
 
-impl MatMemCount {
+impl MaterialInfo {
     pub fn decode(raw: u32) -> Self {
         Self {
             tex_map_count: (raw & 0x3) as u8,
@@ -864,14 +878,14 @@ impl MatMemCount {
             tex_coord_gen_count: ((raw >> 4) & 0x3) as u8,
             tev_combiner_count: ((raw >> 6) & 0x7) as u8,
             alpha_compare_count: ((raw >> 9) & 0x1) as u8,
-            color_blend_mode: ((raw >> 10) & 0x1) as u8,
-            reserve0: ((raw >> 11) & 0x1) as u8,
-            color_and_alpha_blend_mode: ((raw >> 12) & 0x1) as u8,
+            has_color_blend_mode: ((raw >> 10) & 0x1) as u8 != 0,
+            reserve0: ((raw >> 11) & 0x1) as u8 != 0,
+            has_alpha_blend_mode: ((raw >> 12) & 0x1) as u8 != 0,
             reserve1: ((raw >> 13) & 0x1) as u8,
             indirect_matrix_count: ((raw >> 14) & 0x1) as u8,
             projection_tex_gen_count: ((raw >> 15) & 0x3) as u8,
             font_shadow_color: ((raw >> 17) & 0x1) as u8,
-            reserve2: ((raw >> 18) & 0x1) as u8,
+            reserve2: ((raw >> 18) & 0x1) as u8 != 0,
             use_detailed_combiner: ((raw >> 19) & 0x1) as u8,
             user_combiner_count: ((raw >> 20) & 0x1) as u8,
             has_texture_extensions: ((raw >> 21) & 0x1) as u8,
@@ -887,14 +901,14 @@ impl MatMemCount {
             | (((self.tex_coord_gen_count & 0x3) as u32) << 4)
             | (((self.tev_combiner_count & 0x7) as u32) << 6)
             | (((self.alpha_compare_count & 0x1) as u32) << 9)
-            | (((self.color_blend_mode & 0x1) as u32) << 10)
-            | (((self.reserve0 & 0x1) as u32) << 11)
-            | (((self.color_and_alpha_blend_mode & 0x1) as u32) << 12)
+            | (((self.has_color_blend_mode as u8 & 0x1) as u32) << 10)
+            | (((self.reserve0 as u8 & 0x1) as u32) << 11)
+            | (((self.has_alpha_blend_mode as u8 & 0x1) as u32) << 12)
             | (((self.reserve1 & 0x1) as u32) << 13)
             | (((self.indirect_matrix_count & 0x1) as u32) << 14)
             | (((self.projection_tex_gen_count & 0x3) as u32) << 15)
             | (((self.font_shadow_color & 0x1) as u32) << 17)
-            | (((self.reserve2 & 0x1) as u32) << 18)
+            | (((self.reserve2 as u8 & 0x1) as u32) << 18)
             | (((self.use_detailed_combiner & 0x1) as u32) << 19)
             | (((self.user_combiner_count & 0x1) as u32) << 20)
             | (((self.has_texture_extensions & 0x1) as u32) << 21)
@@ -908,8 +922,6 @@ pub const MATERIAL_NAME_LEN: usize = 0x1c;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialColorEntry {
-    pub is_float: bool,
-
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub color_u8: Option<Color4u8>,
 
@@ -920,19 +932,26 @@ pub struct MaterialColorEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytMaterial {
     pub material_name: String,
-    pub mat_mem_raw: u32,
-    pub mat_mem: MatMemCount,
+
+    pub reserve0: bool,
+    pub reserve2: bool,
 
     pub color_types_byte: u8,
     pub colors: Vec<MaterialColorEntry>,
 
     pub tex_maps: Vec<MaterialTextureMap>,
-    pub tex_extensions: Vec<u32>,
+    pub tex_extensions: Vec<MaterialTextureExtension>,
     pub tex_srts: Vec<MaterialTextureSrt>,
     pub tex_coord_gens: Vec<MaterialTexCoordGen>,
     pub tev_combiners: Vec<MaterialTevCombiner>,
     pub alpha_compares: Vec<MaterialAlphaCompare>,
-    pub blend_modes: Vec<MaterialBlendMode>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub blend_mode: Option<MaterialBlendMode>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub blend_mode_alpha: Option<MaterialBlendMode>,
+
     pub indirect_matrices: Vec<MaterialIndirectMatrix>,
     pub projection_tex_gens: Vec<MaterialProjectionTexGen>,
     pub font_shadow_colors: Vec<MaterialFontShadowColor>,
@@ -949,8 +968,7 @@ impl BflytMaterial {
     pub fn parse(cursor: &mut Cursor, mat_base: usize) -> Self {
         cursor.seek(mat_base);
         let material_name = cursor.read_fixed_string(MATERIAL_NAME_LEN);
-        let mat_mem_raw = cursor.read_u32();
-        let mat_mem = MatMemCount::decode(mat_mem_raw);
+        let material_info = MaterialInfo::decode(cursor.read_u32());
 
         let color_types_byte = cursor.read_u8();
         let color_count = cursor.read_u8();
@@ -968,13 +986,11 @@ impl BflytMaterial {
             cursor.seek(color_data_base + offset as usize);
             let entry = if is_float {
                 MaterialColorEntry {
-                    is_float: true,
                     color_u8: None,
                     color_f32: Some(Color4f::parse(cursor)),
                 }
             } else {
                 MaterialColorEntry {
-                    is_float: false,
                     color_u8: Some(Color4u8::parse(cursor)),
                     color_f32: None,
                 }
@@ -1000,91 +1016,93 @@ impl BflytMaterial {
         let tex_maps_base = after_color;
         cursor.seek(tex_maps_base);
         let mut tex_maps = Vec::new();
-        for _ in 0..mat_mem.tex_map_count {
+        for _ in 0..material_info.tex_map_count {
             tex_maps.push(MaterialTextureMap::parse(cursor));
         }
 
         let mut tex_extensions = Vec::new();
-        if mat_mem.has_texture_extensions != 0 {
-            for _ in 0..mat_mem.tex_map_count {
-                tex_extensions.push(cursor.read_u32());
+        if material_info.has_texture_extensions != 0 {
+            for _ in 0..material_info.tex_map_count {
+                tex_extensions.push(MaterialTextureExtension::decode(cursor.read_u32()));
             }
         }
 
         let mut tex_srts = Vec::new();
-        for _ in 0..mat_mem.tex_srt_count {
+        for _ in 0..material_info.tex_srt_count {
             tex_srts.push(MaterialTextureSrt::parse(cursor));
         }
 
         let mut tex_coord_gens = Vec::new();
-        for _ in 0..mat_mem.tex_coord_gen_count {
+        for _ in 0..material_info.tex_coord_gen_count {
             tex_coord_gens.push(MaterialTexCoordGen::parse(cursor));
         }
 
         let mut tev_combiners = Vec::new();
-        for _ in 0..mat_mem.tev_combiner_count {
+        for _ in 0..material_info.tev_combiner_count {
             tev_combiners.push(MaterialTevCombiner::parse(cursor));
         }
 
         let mut alpha_compares = Vec::new();
-        for _ in 0..mat_mem.alpha_compare_count {
+        for _ in 0..material_info.alpha_compare_count {
             alpha_compares.push(MaterialAlphaCompare::parse(cursor));
         }
 
-        let blend_count = if mat_mem.color_and_alpha_blend_mode != 0 {
-            2
+        let blend_mode = if material_info.has_color_blend_mode {
+            Some(MaterialBlendMode::parse(cursor))
         } else {
-            mat_mem.color_blend_mode as usize
+            None
         };
-        let mut blend_modes = Vec::new();
-        for _ in 0..blend_count {
-            blend_modes.push(MaterialBlendMode::parse(cursor));
-        }
+
+        let blend_mode_alpha = if material_info.has_alpha_blend_mode {
+            Some(MaterialBlendMode::parse(cursor))
+        } else {
+            None
+        };
 
         let mut indirect_matrices = Vec::new();
-        for _ in 0..mat_mem.indirect_matrix_count {
+        for _ in 0..material_info.indirect_matrix_count {
             indirect_matrices.push(MaterialIndirectMatrix::parse(cursor));
         }
 
         let mut projection_tex_gens = Vec::new();
-        for _ in 0..mat_mem.projection_tex_gen_count {
+        for _ in 0..material_info.projection_tex_gen_count {
             projection_tex_gens.push(MaterialProjectionTexGen::parse(cursor));
         }
 
         let mut font_shadow_colors = Vec::new();
-        for _ in 0..mat_mem.font_shadow_color {
+        for _ in 0..material_info.font_shadow_color {
             font_shadow_colors.push(MaterialFontShadowColor::parse(cursor));
         }
 
-        let detailed_combiner = if mat_mem.use_detailed_combiner != 0 {
+        let detailed_combiner = if material_info.use_detailed_combiner != 0 {
             Some(MaterialDetailedCombiner::parse(
                 cursor,
-                mat_mem.tev_combiner_count,
+                material_info.tev_combiner_count,
             ))
         } else {
             None
         };
 
         let mut user_combiners = Vec::new();
-        for _ in 0..mat_mem.user_combiner_count {
+        for _ in 0..material_info.user_combiner_count {
             user_combiners.push(MaterialUserCombiner::parse(cursor));
         }
 
         let mut vector_texture_infos = Vec::new();
-        for _ in 0..mat_mem.vector_texture_info_count {
+        for _ in 0..material_info.vector_texture_info_count {
             vector_texture_infos.push(MaterialVectorTextureInfo::parse(cursor));
         }
 
         let mut brick_repeat_shader_infos = Vec::new();
-        for _ in 0..mat_mem.brick_repeat_shader_info_count {
+        for _ in 0..material_info.brick_repeat_shader_info_count {
             brick_repeat_shader_infos.push(MaterialBrickRepeatShaderInfo::parse(cursor));
         }
 
         Self {
             material_name,
-            mat_mem_raw,
-            mat_mem,
             color_types_byte,
+            reserve0: material_info.reserve0,
+            reserve2: material_info.reserve2,
             colors,
             tex_maps,
             tex_extensions,
@@ -1092,7 +1110,8 @@ impl BflytMaterial {
             tex_coord_gens,
             tev_combiners,
             alpha_compares,
-            blend_modes,
+            blend_mode,
+            blend_mode_alpha,
             indirect_matrices,
             projection_tex_gens,
             font_shadow_colors,
@@ -1105,7 +1124,30 @@ impl BflytMaterial {
 
     pub fn serialize(&self, writer: &mut Writer) {
         writer.write_fixed_string(&self.material_name, MATERIAL_NAME_LEN);
-        writer.write_u32(self.mat_mem.encode());
+
+        let material_info = MaterialInfo {
+            tex_map_count: self.tex_maps.len() as u8,
+            tex_srt_count: self.tex_srts.len() as u8,
+            tex_coord_gen_count: self.tex_coord_gens.len() as u8,
+            tev_combiner_count: self.tev_combiners.len() as u8,
+            alpha_compare_count: self.alpha_compares.len() as u8,
+            has_color_blend_mode: self.blend_mode.is_some(),
+            reserve0: self.reserve0,
+            has_alpha_blend_mode: self.blend_mode_alpha.is_some(),
+            reserve1: 0,
+            indirect_matrix_count: self.indirect_matrices.len() as u8,
+            projection_tex_gen_count: self.projection_tex_gens.len() as u8,
+            font_shadow_color: self.font_shadow_colors.len() as u8,
+            reserve2: self.reserve2,
+            use_detailed_combiner: self.detailed_combiner.is_some() as u8,
+            user_combiner_count: self.user_combiners.len() as u8,
+            has_texture_extensions: !self.tex_extensions.is_empty() as u8,
+            vector_texture_info_count: self.vector_texture_infos.len() as u8,
+            brick_repeat_shader_info_count: self.brick_repeat_shader_infos.len() as u8,
+            reserve3: 0,
+        };
+
+        writer.write_u32(material_info.encode());
 
         writer.write_u8(self.color_types_byte);
         writer.write_u8(self.colors.len() as u8);
@@ -1114,7 +1156,7 @@ impl BflytMaterial {
         let mut cumulative_offset = (2 + n) as u8;
         for entry in self.colors.iter() {
             writer.write_u8(cumulative_offset);
-            cumulative_offset += if entry.is_float { 16 } else { 4 };
+            cumulative_offset += if entry.color_u8.is_some() { 4 } else { 16 };
         }
 
         for entry in &self.colors {
@@ -1128,11 +1170,11 @@ impl BflytMaterial {
         for tm in &self.tex_maps {
             tm.serialize(writer);
         }
-        if self.mat_mem.has_texture_extensions != 0 {
-            for ext in &self.tex_extensions {
-                writer.write_u32(*ext);
-            }
+
+        for ext in &self.tex_extensions {
+            writer.write_u32(ext.encode());
         }
+
         for ts in &self.tex_srts {
             ts.serialize(writer);
         }
@@ -1149,8 +1191,12 @@ impl BflytMaterial {
             ac.serialize(writer);
         }
 
-        for bm in &self.blend_modes {
-            bm.serialize(writer);
+        if let Some(blend_mode) = &self.blend_mode {
+            blend_mode.serialize(writer);
+        }
+
+        if let Some(blend_mode) = &self.blend_mode_alpha {
+            blend_mode.serialize(writer);
         }
 
         for im in &self.indirect_matrices {
