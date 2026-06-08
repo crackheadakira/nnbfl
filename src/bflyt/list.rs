@@ -492,6 +492,7 @@ pub struct MaterialFontShadowColor {
     pub color0: Color4u8,
     pub color1: Color4u8,
 }
+
 impl MaterialFontShadowColor {
     fn parse(c: &mut Cursor) -> Self {
         Self {
@@ -505,7 +506,6 @@ impl MaterialFontShadowColor {
     }
 }
 
-// MaterialDetailedCombiner & these enums are from KillzXGaming's LayoutLibrary repository!
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, FromPrimitive, IntoPrimitive,
 )]
@@ -715,8 +715,8 @@ impl MaterialDetailedCombinerEntry {
         alpha_flags |= (self.alpha_config.operands[1] as u32 & 0xF) << 16;
         alpha_flags |= (self.alpha_config.operands[2] as u32 & 0xF) << 20;
         alpha_flags |= (self.alpha_config.mode as u32 & 0xF) << 24;
-        color_flags |= (self.alpha_config.scale as u32 & 0x3) << 28;
-        color_flags |= (self.alpha_config.copy_reg as u32 & 0x1) << 30;
+        alpha_flags |= (self.alpha_config.scale as u32 & 0x3) << 28;
+        alpha_flags |= (self.alpha_config.copy_reg as u32 & 0x1) << 30;
 
         let mut constant_selectors = 0u32;
         constant_selectors |= self.color_config.konst_sel as u32 & 0xF;

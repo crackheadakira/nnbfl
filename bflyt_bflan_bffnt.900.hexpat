@@ -672,10 +672,10 @@ struct ResBflytColorTypeOffset {
     u8 color_offset;
 
     if ((c_color_types_info >> c_color_type_index) == 0) {
-        Color4u8 o_color @ c_material_color_data_base + color_offset;
+        Color4u8 o_color;
         c_color_data_size += 4;
     } else if ((c_color_types_info >> c_color_type_index) == 1) {
-        Color4f o_color @ c_material_color_data_base + color_offset ;
+        Color4f o_color;
         c_color_data_size += 0x10;
     }
      
@@ -878,12 +878,110 @@ struct ResBflytMaterialDetailedCombiner {
     Color4u8 Color3;
     Color4u8 Color4;
     Color4u8 Color5;
-    Color4u8 Color6;
-    
-    u32 color_flags;
-    s32 alpha_flags;
-    u32 unknown_1;
-    u32 unknown_2;
+    u32 stage_flags;
+};
+
+enum TevSource : u8 {
+    Primary = 0,
+    Unknown2 = 2,
+    Texture0 = 3,
+    Texture1 = 4,
+    Texture2 = 5,
+    Texture3 = 6,
+    Register = 13,
+    Constant = 14,
+    Previous = 15,
+};
+
+enum TevColorOp : u8 {
+    RGB,
+    InvRGB,
+    Alpha,
+    InvAlpha,
+    RRR,
+    InvRRR,
+    GGG,
+    InvGGG,
+    BBB,
+    InvBBB,
+};
+
+enum TevScale : u8 {
+    V1,
+    V2,
+    V4,
+    Unknown,
+};
+
+enum TevAlphaOp : u8 {
+    Alpha,
+    InvAlpha,
+    R,
+    InvR,
+    G,
+    InvG,
+    B,
+    InvB,
+    Unknown,
+};
+
+enum DetailedCombinerStageMode : u8 {
+    Replace         = 0,
+    Modulate        = 1,
+    Add             = 2,
+    AddSigned       = 3,
+    Interpolate     = 4,
+    Subtract        = 5,
+    AddMultiplicate = 8,
+    MultiplicateAdd = 9
+};
+
+enum TevKonstSel : u8 {
+    BlackColor = 0,
+    WhiteColor = 1,
+    K0         = 2,
+    K1         = 3,
+    K2         = 4,
+    K3         = 5,
+    K4         = 6
+};
+
+bitfield ColorFlags {
+    TevSource source_0             : 4;
+    TevSource source_1             : 4;
+    TevSource source_2             : 4;
+    TevColorOp operand_0           : 4;
+    TevColorOp operand_1           : 4;
+    TevColorOp operand_2           : 4;
+    DetailedCombinerStageMode mode : 4;
+    TevScale scale                 : 2;
+    bool copy_reg                  : 1;
+    padding                        : 1;
+};
+
+bitfield AlphaFlags {
+    TevSource source_0             : 4;
+    TevSource source_1             : 4;
+    TevSource source_2             : 4;
+    TevAlphaOp operand_0           : 4;
+    TevAlphaOp operand_1           : 4;
+    TevAlphaOp operand_2           : 4;
+    DetailedCombinerStageMode mode : 4;
+    TevScale scale                 : 2;
+    padding                        : 2;
+};
+
+bitfield ConstantSelectors {
+    TevKonstSel color_konst_sel    : 4;
+    TevKonstSel alpha_konst_sel    : 4;
+    padding                        : 24;
+};
+
+struct MaterialDetailedCombinerEntry {
+    ColorFlags color_flags;
+    AlphaFlags alpha_flags;
+    ConstantSelectors constant_selectors;
+    u32 reserve0;
 };
 
 struct ResBflytMaterialUserCombiner {
@@ -907,7 +1005,7 @@ bitfield ResBflytMatMemCount {
      tex_srt_count                  : 2;
      tex_coord_gen_count            : 2;
      tev_combiner_count             : 3;
-     alpha_compare_count            : 1;
+     has_alpha_compare              : 1;
      color_blend_mode               : 1;
      reserve0                       : 1;
      color_and_alpha_blend_mode     : 1;
@@ -916,7 +1014,7 @@ bitfield ResBflytMatMemCount {
      projection_tex_gen_count       : 2;
      font_shadow_color              : 1;
      reserve2                       : 1;
-     detailed_combiner_count        : 1;
+     use_detailed_combiner          : 1;
      user_combiner_count            : 1;
      has_texture_extensions         : 1;
      vector_texture_info_count      : 2;
@@ -939,8 +1037,8 @@ struct ResBflytMaterialData {
     ResBflytMaterialTexCoordGen      tex_coord_gen_array[mat_mem.tex_coord_gen_count];
     ResBflytMaterialTevCombiner      tev_combiner_array[mat_mem.tev_combiner_count];
     
-    if (mat_mem.alpha_compare_count > 0) {
-        ResBflytMaterialAlphaCompare alpha_compare_array[mat_mem.alpha_compare_count];
+    if (mat_mem.has_alpha_compare > 0) {
+        ResBflytMaterialAlphaCompare alpha_compare;
     }
     
     if (mat_mem.color_blend_mode != 0) {
@@ -955,8 +1053,9 @@ struct ResBflytMaterialData {
         ResBflytMaterialIndirectMatrix   indirect_matrix_array[mat_mem.indirect_matrix_count];
     }
     
-    if (mat_mem.detailed_combiner_count > 0) {
-        ResBflytMaterialDetailedCombiner detailed_combiner_array[mat_mem.detailed_combiner_count];
+    if (mat_mem.use_detailed_combiner != 0) {
+        ResBflytMaterialDetailedCombiner detailed_combiner;
+        MaterialDetailedCombinerEntry detailed_combiner_entries[mat_mem.tev_combiner_count];
     }
  
     if (mat_mem.projection_tex_gen_count > 0) {
