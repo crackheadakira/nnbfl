@@ -11,7 +11,7 @@ use crate::{
     ui2d::types::{Vector2f, Vector3f},
 };
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct Color4u8 {
     pub r: u8,
     pub g: u8,

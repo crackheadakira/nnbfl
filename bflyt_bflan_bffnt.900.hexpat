@@ -725,15 +725,16 @@ struct ResBflytMaterialTextureSrt {
 
 /* Material texture coord gen */
 enum BflytTexGenType : u8 {
-    Reserve0     = 0,
-    Reserve1     = 1,
-    Reserve2     = 2,
-    Reserve3     = 3,
-    Reserve4     = 4,
-    PerspectiveTexProj0 = 5,
-    PerspectiveTexProj1 = 6,
-    BrickRepeat  = 7
+    Tex0                            = 0,
+    Tex1                            = 1,
+    Tex2                            = 2,
+    OrthogonalProjection            = 3,
+    PaneBasedProjection             = 4,
+    PerspectiveProjection           = 5,
+    PaneBasedPerspectiveProjection  = 6,
+    BrickRepeat                     = 7
 };
+
 struct ResBflytMaterialTexCoordGen {
     u8  reserve0;
     BflytTexGenType tex_gen_type;
@@ -778,6 +779,12 @@ enum BflytAlphaTestFunction : u8 {
     Always        = 7,
 };
 
+enum BflytBlendMode : u8 {
+    None = 0,
+    Blend = 1,
+    Logic = 2,
+};
+
 struct ResBflytMaterialAlphaCompare {
     BflytAlphaTestFunction alpha_test_function;
     u8    reserve0;
@@ -795,19 +802,21 @@ enum BflytBlendEquation : u8 {
     Min        = 4,
     Max        = 5,
 };
-/* Default Zero */
+
+/* Default V0 */
 enum BflytBlendFunction : u8 {
-    Zero                     = 0,
-    One                      = 1,
+    V0                       = 0,
+    V1_0                     = 1,
     DestinationColor         = 2,
-    DestinationColorMinusOne = 3,
+    InvDestinationColor      = 3,
     SourceAlpha              = 4,
-    SourceAlphaMinusOne      = 5,
+    InvSourceAlpha           = 5,
     DestinationAlpha         = 6,
-    DestinationAlphaMinusOne = 7,
+    InvDestinationAlpha      = 7,
     SourceColor              = 8,
-    SourceColorMinusOne      = 9
+    InvSourceColor           = 9
 };
+
 /* Default Clear */
 enum BflytLogicOp : u8 {
     Invalid      = 0,
@@ -841,10 +850,20 @@ struct ResBflytMaterialIndirectMatrix {
     float rotation;
 };
 
+bitfield ProjectionTexGenFlags {
+    fitting_layout_size  : 1;
+    fitting_pane_size    : 1; 
+    adjust_projection_sr : 1;
+    reserve0             : 5;
+};
+
 struct ResBflytMaterialProjectionTexGen {
-    float translation[2];
-    float scale[2];
-    float rotation;
+    float translation_x;
+    float translation_y;
+    float scale_x;
+    float scale_y;
+    ProjectionTexGenFlags flags;
+    u8 reserve0[3];
 };
 
 struct ResBflytMaterialFontShadowColor {
@@ -859,7 +878,7 @@ struct ResBflytMaterialDetailedCombiner {
     Color4u8 Color3;
     Color4u8 Color4;
     Color4u8 Color5;
-    Color4u8 Color;
+    Color4u8 Color6;
     
     u32 color_flags;
     s32 alpha_flags;
@@ -906,31 +925,59 @@ bitfield ResBflytMatMemCount {
 };
 
 struct ResBflytMaterialData {
-    char                      material_name[cBflytMaterialNameLength];
-    ResBflytMatMemCount       mat_mem;
-    ResBflytMaterialColorData color_data;
+    char                             material_name[cBflytMaterialNameLength];
+    ResBflytMatMemCount              mat_mem;
+    ResBflytMaterialColorData        color_data;
     
-    ResBflytMaterialTextureMap  tex_map_array[mat_mem.tex_map_count] @ addressof(this) + 0x20 + c_color_data_size;
+    ResBflytMaterialTextureMap       tex_map_array[mat_mem.tex_map_count];
+    
     if (mat_mem.has_texture_extensions) {
-        ResBflytMaterialTextureExtension tex_ext_array[mat_mem.tex_map_count] @ addressof(this) + 0x20 + c_color_data_size + 0x4 * mat_mem.tex_map_count;
+        ResBflytMaterialTextureExtension tex_ext_array[mat_mem.tex_map_count];
     }
-    ResBflytMaterialTextureSrt  tex_srt_array[mat_mem.tex_srt_count]             @ addressof(this) + 0x20 + c_color_data_size + ((mat_mem.has_texture_extensions * 0x4) + 0x4) * mat_mem.tex_map_count;
-    ResBflytMaterialTexCoordGen tex_coord_gen_array[mat_mem.tex_coord_gen_count] @ addressof(this) + 0x20 + c_color_data_size + ((mat_mem.has_texture_extensions * 0x4) + 0x4) * mat_mem.tex_map_count + 0x14 * mat_mem.tex_srt_count;
-    ResBflytMaterialTevCombiner tev_combiner_array[mat_mem.tev_combiner_count]   @ addressof(this) + 0x20 + c_color_data_size + ((mat_mem.has_texture_extensions * 0x4) + 0x4) * mat_mem.tex_map_count + 0x14 * mat_mem.tex_srt_count + 0x10 * mat_mem.tex_coord_gen_count;
     
-    ResBflytMaterialAlphaCompare alpha_compare_array[mat_mem.alpha_compare_count] @ addressof(this) + 0x20 + c_color_data_size + ((mat_mem.has_texture_extensions * 0x4) + 0x4) * mat_mem.tex_map_count + 0x14 * mat_mem.tex_srt_count + 0x10 * mat_mem.tex_coord_gen_count + 0x4 * mat_mem.tev_combiner_count;
+    ResBflytMaterialTextureSrt       tex_srt_array[mat_mem.tex_srt_count];
+    ResBflytMaterialTexCoordGen      tex_coord_gen_array[mat_mem.tex_coord_gen_count];
+    ResBflytMaterialTevCombiner      tev_combiner_array[mat_mem.tev_combiner_count];
     
-    u32 c_blend_count = (mat_mem.color_and_alpha_blend_mode != 0) ? 2 : mat_mem.color_blend_mode;
-    ResBflytMaterialBlendMode blend_mode_array[c_blend_count] @ addressof(this) + 0x20 + c_color_data_size + ((mat_mem.has_texture_extensions * 0x4) + 0x4) * mat_mem.tex_map_count + 0x14 * mat_mem.tex_srt_count + 0x10 * mat_mem.tex_coord_gen_count + 0x4 * mat_mem.tev_combiner_count + 0x8 * mat_mem.alpha_compare_count;
+    if (mat_mem.alpha_compare_count > 0) {
+        ResBflytMaterialAlphaCompare alpha_compare_array[mat_mem.alpha_compare_count];
+    }
+    
+    if (mat_mem.color_blend_mode != 0) {
+        ResBflytMaterialBlendMode        blend_mode;
+    }
+    
+    if (mat_mem.color_and_alpha_blend_mode != 0) {
+        ResBflytMaterialBlendMode        blend_mode_alpha;
+    }
 
-    ResBflytMaterialIndirectMatrix   indirect_matrix_array[mat_mem.indirect_matrix_count] @ addressof(this) + 0x20 + c_color_data_size + ((mat_mem.has_texture_extensions * 0x4) + 0x4) * mat_mem.tex_map_count + 0x14 * mat_mem.tex_srt_count + 0x10 * mat_mem.tex_coord_gen_count + 0x4 * mat_mem.tev_combiner_count + 0x8 * mat_mem.alpha_compare_count + 0x4 * c_blend_count;
-    ResBflytMaterialProjectionTexGen projection_tex_gen_array[mat_mem.projection_tex_gen_count] @ addressof(this) + 0x20 + c_color_data_size + ((mat_mem.has_texture_extensions * 0x4) + 0x4) * mat_mem.tex_map_count + 0x14 * mat_mem.tex_srt_count + 0x10 * mat_mem.tex_coord_gen_count + 0x4 * mat_mem.tev_combiner_count + 0x8 * mat_mem.alpha_compare_count + 0x4 * c_blend_count + 0xc * mat_mem.indirect_matrix_count;
-    ResBflytMaterialFontShadowColor  font_shadow_color_array[mat_mem.font_shadow_color] @ addressof(this) + 0x20 + c_color_data_size + ((mat_mem.has_texture_extensions * 0x4) + 0x4) * mat_mem.tex_map_count + 0x14 * mat_mem.tex_srt_count + 0x10 * mat_mem.tex_coord_gen_count + 0x4 * mat_mem.tev_combiner_count + 0x8 * mat_mem.alpha_compare_count + 0x4 * c_blend_count + 0xc * mat_mem.indirect_matrix_count + 0x14 * mat_mem.projection_tex_gen_count;
+    if (mat_mem.indirect_matrix_count > 0) {
+        ResBflytMaterialIndirectMatrix   indirect_matrix_array[mat_mem.indirect_matrix_count];
+    }
     
-    ResBflytMaterialDetailedCombiner detailed_combiner_array[mat_mem.detailed_combiner_count] @ addressof(this) + 0x20 + c_color_data_size + ((mat_mem.has_texture_extensions * 0x4) + 0x4) * mat_mem.tex_map_count + 0x14 * mat_mem.tex_srt_count + 0x10 * mat_mem.tex_coord_gen_count + 0x4 * mat_mem.tev_combiner_count + 0x8 * mat_mem.alpha_compare_count + 0x4 * c_blend_count + 0xc * mat_mem.indirect_matrix_count + 0x14 * mat_mem.projection_tex_gen_count + 0x8 * mat_mem.font_shadow_color;
-    ResBflytMaterialUserCombiner user_combiner_array[mat_mem.user_combiner_count] @ addressof(this) + 0x20 + c_color_data_size + ((mat_mem.has_texture_extensions * 0x4) + 0x4) * mat_mem.tex_map_count + 0x14 * mat_mem.tex_srt_count + 0x10 * mat_mem.tex_coord_gen_count + 0x4 * mat_mem.tev_combiner_count + 0x8 * mat_mem.alpha_compare_count + 0x4 * c_blend_count + 0xc * mat_mem.indirect_matrix_count + 0x14 * mat_mem.projection_tex_gen_count + 0x8 * mat_mem.font_shadow_color + 0x10 * mat_mem.detailed_combiner_count;
-    ResBflytMaterialVectorTextureInfo vector_texture_info_array[mat_mem.vector_texture_info_count] @ addressof(this) + 0x20 + c_color_data_size + ((mat_mem.has_texture_extensions * 0x4) + 0x4) * mat_mem.tex_map_count + 0x14 * mat_mem.tex_srt_count + 0x10 * mat_mem.tex_coord_gen_count + 0x4 * mat_mem.tev_combiner_count + 0x8 * mat_mem.alpha_compare_count + 0x4 * c_blend_count + 0xc * mat_mem.indirect_matrix_count + 0x14 * mat_mem.projection_tex_gen_count + 0x8 * mat_mem.font_shadow_color + 0x10 * mat_mem.detailed_combiner_count + 0x74 * mat_mem.user_combiner_count;
-    ResBflytMaterialBrickRepeatShaderInfo brick_repeat_gen_array[mat_mem.brick_repeat_shader_info_count] @ addressof(this) + 0x20 + c_color_data_size + ((mat_mem.has_texture_extensions * 0x4) + 0x4) * mat_mem.tex_map_count + 0x14 * mat_mem.tex_srt_count + 0x10 * mat_mem.tex_coord_gen_count + 0x4 * mat_mem.tev_combiner_count + 0x8 * mat_mem.alpha_compare_count + 0x4 * c_blend_count + 0xc * mat_mem.indirect_matrix_count + 0x14 * mat_mem.projection_tex_gen_count + 0x8 * mat_mem.font_shadow_color + 0x10 * mat_mem.detailed_combiner_count + 0x74 * mat_mem.user_combiner_count + 0x10 * mat_mem.vector_texture_info_count;
+    if (mat_mem.detailed_combiner_count > 0) {
+        ResBflytMaterialDetailedCombiner detailed_combiner_array[mat_mem.detailed_combiner_count];
+    }
+ 
+    if (mat_mem.projection_tex_gen_count > 0) {
+        ResBflytMaterialProjectionTexGen projection_tex_gen_array[mat_mem.projection_tex_gen_count];
+    }
+    
+    if (mat_mem.font_shadow_color > 0) {
+        ResBflytMaterialFontShadowColor  font_shadow_color_array[mat_mem.font_shadow_color];
+    }
+    
+    if (mat_mem.user_combiner_count > 0) {
+        ResBflytMaterialUserCombiner     user_combiner_array[mat_mem.user_combiner_count];
+    }
+    
+    if (mat_mem.vector_texture_info_count > 0) {
+        ResBflytMaterialVectorTextureInfo vector_texture_info_array[mat_mem.vector_texture_info_count];
+    }
+    
+    if (mat_mem.brick_repeat_shader_info_count > 0) {
+        ResBflytMaterialBrickRepeatShaderInfo brick_repeat_gen_array[mat_mem.brick_repeat_shader_info_count];
+    }
 };
 
 u32 material_list_base;

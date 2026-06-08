@@ -2,8 +2,12 @@ use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    bflyt::flags::{TexFilter, TexWrapMode},
+    bflyt::{
+        flags::{TexFilter, TexWrapMode},
+        pane::Color4u8,
+    },
     core::{Cursor, Writer},
+    ui2d::types::Color4f,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,54 +135,6 @@ impl BflytFontList {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Color4u8 {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: u8,
-}
-impl Color4u8 {
-    fn parse(c: &mut Cursor) -> Self {
-        Self {
-            r: c.read_u8(),
-            g: c.read_u8(),
-            b: c.read_u8(),
-            a: c.read_u8(),
-        }
-    }
-    fn serialize(&self, w: &mut Writer) {
-        w.write_u8(self.r);
-        w.write_u8(self.g);
-        w.write_u8(self.b);
-        w.write_u8(self.a);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Color4f {
-    pub r: f32,
-    pub g: f32,
-    pub b: f32,
-    pub a: f32,
-}
-impl Color4f {
-    fn parse(c: &mut Cursor) -> Self {
-        Self {
-            r: c.read_f32(),
-            g: c.read_f32(),
-            b: c.read_f32(),
-            a: c.read_f32(),
-        }
-    }
-    fn serialize(&self, w: &mut Writer) {
-        w.write_f32(self.r);
-        w.write_f32(self.g);
-        w.write_f32(self.b);
-        w.write_f32(self.a);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialTextureOptions {
     pub wrap_mode: TexWrapMode,
     pub filter: TexFilter,
@@ -278,10 +234,24 @@ impl MaterialTextureSrt {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum TexGenSrc {
+    #[num_enum(default)]
+    Tex0,
+    Tex1,
+    Tex2,
+    OrthogonalProjection,
+    PaneBasedProjection,
+    PerspectiveProjection,
+    PaneBasedPerspectiveProjection,
+    BrickRepeat,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialTexCoordGen {
     pub reserve0: u8,
-    pub tex_gen_type: u8,
+    pub tex_gen_source: TexGenSrc,
     pub reserve1: u16,
     pub reserve2: u32,
     pub reserve3: u64,
@@ -291,7 +261,7 @@ impl MaterialTexCoordGen {
     fn parse(c: &mut Cursor) -> Self {
         Self {
             reserve0: c.read_u8(),
-            tex_gen_type: c.read_u8(),
+            tex_gen_source: c.read_u8().into(),
             reserve1: c.read_u16(),
             reserve2: c.read_u32(),
             reserve3: {
@@ -303,7 +273,7 @@ impl MaterialTexCoordGen {
     }
     fn serialize(&self, w: &mut Writer) {
         w.write_u8(self.reserve0);
-        w.write_u8(self.tex_gen_type);
+        w.write_u8(self.tex_gen_source.into());
         w.write_u16(self.reserve1);
         w.write_u32(self.reserve2);
         w.write_u32((self.reserve3 & 0xFFFFFFFF) as u32);
@@ -343,6 +313,7 @@ pub struct MaterialAlphaCompare {
     pub reserve1: u16,
     pub alpha_compare_ref_value: f32,
 }
+
 impl MaterialAlphaCompare {
     fn parse(c: &mut Cursor) -> Self {
         Self {
@@ -360,16 +331,7 @@ impl MaterialAlphaCompare {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, FromPrimitive, IntoPrimitive)]
-#[repr(u8)]
-pub enum BlendMode {
-    #[num_enum(default)]
-    None,
-    Blend,
-    Logic,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, FromPrimitive, IntoPrimitive)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, FromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum BlendFactor {
     #[num_enum(default)]
@@ -385,7 +347,7 @@ pub enum BlendFactor {
     InvSrcColor,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, FromPrimitive, IntoPrimitive)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, FromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum LogicOp {
     #[num_enum(default)]
@@ -409,7 +371,7 @@ pub enum LogicOp {
     InvOr,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, FromPrimitive, IntoPrimitive)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, FromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum BlendOp {
     #[num_enum(default)]
@@ -422,29 +384,61 @@ pub enum BlendOp {
     SelectMax,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MaterialBlendMode {
-    pub blend_op: BlendOp,
-    pub function_source: BlendFactor,
-    pub function_destination: BlendFactor,
-    pub logic_op: LogicOp,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum MaterialBlendMode {
+    None,
+    Blend {
+        blend_op: BlendOp,
+        function_source: BlendFactor,
+        function_destination: BlendFactor,
+    },
+    Logic {
+        logic_op: LogicOp,
+    },
 }
 
 impl MaterialBlendMode {
-    fn parse(c: &mut Cursor) -> Self {
-        Self {
-            blend_op: c.read_u8().into(),
-            function_source: c.read_u8().into(),
-            function_destination: c.read_u8().into(),
-            logic_op: c.read_u8().into(),
+    pub fn parse(cursor: &mut Cursor) -> Self {
+        let blend_op_raw = cursor.read_u8();
+        let src_factor_raw = cursor.read_u8();
+        let dst_factor_raw = cursor.read_u8();
+        let logic_op_raw = cursor.read_u8();
+
+        if logic_op_raw != 0 && blend_op_raw == 0 {
+            Self::Logic {
+                logic_op: logic_op_raw.into(),
+            }
+        } else if blend_op_raw != 0 {
+            Self::Blend {
+                blend_op: blend_op_raw.into(),
+                function_source: src_factor_raw.into(),
+                function_destination: dst_factor_raw.into(),
+            }
+        } else {
+            Self::None
         }
     }
 
-    fn serialize(&self, w: &mut Writer) {
-        w.write_u8(self.blend_op.into());
-        w.write_u8(self.function_source.into());
-        w.write_u8(self.function_destination.into());
-        w.write_u8(self.logic_op.into());
+    pub fn serialize(&self, w: &mut Writer) {
+        match self {
+            Self::None => {
+                w.write_bytes(&[0, 0, 0, 0]);
+            }
+            Self::Blend {
+                blend_op,
+                function_source,
+                function_destination,
+            } => {
+                w.write_u8((*blend_op).into());
+                w.write_u8((*function_source).into());
+                w.write_u8((*function_destination).into());
+                w.write_u8(0);
+            }
+            Self::Logic { logic_op } => {
+                w.write_bytes(&[0, 0, 0]);
+                w.write_u8((*logic_op).into());
+            }
+        }
     }
 }
 
@@ -1064,6 +1058,15 @@ impl BflytMaterial {
             indirect_matrices.push(MaterialIndirectMatrix::parse(cursor));
         }
 
+        let detailed_combiner = if material_info.use_detailed_combiner != 0 {
+            Some(MaterialDetailedCombiner::parse(
+                cursor,
+                material_info.tev_combiner_count,
+            ))
+        } else {
+            None
+        };
+
         let mut projection_tex_gens = Vec::new();
         for _ in 0..material_info.projection_tex_gen_count {
             projection_tex_gens.push(MaterialProjectionTexGen::parse(cursor));
@@ -1073,15 +1076,6 @@ impl BflytMaterial {
         for _ in 0..material_info.font_shadow_color {
             font_shadow_colors.push(MaterialFontShadowColor::parse(cursor));
         }
-
-        let detailed_combiner = if material_info.use_detailed_combiner != 0 {
-            Some(MaterialDetailedCombiner::parse(
-                cursor,
-                material_info.tev_combiner_count,
-            ))
-        } else {
-            None
-        };
 
         let mut user_combiners = Vec::new();
         for _ in 0..material_info.user_combiner_count {
@@ -1203,16 +1197,16 @@ impl BflytMaterial {
             im.serialize(writer);
         }
 
+        if let Some(detailed_combiner) = &self.detailed_combiner {
+            detailed_combiner.serialize(writer);
+        }
+
         for pg in &self.projection_tex_gens {
             pg.serialize(writer);
         }
 
         for fs in &self.font_shadow_colors {
             fs.serialize(writer);
-        }
-
-        if let Some(detailed_combiner) = &self.detailed_combiner {
-            detailed_combiner.serialize(writer);
         }
 
         for uc in &self.user_combiners {
