@@ -1,3 +1,4 @@
+use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -10,7 +11,7 @@ use crate::{
     ui2d::types::{Vector2f, Vector3f},
 };
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct Color4u8 {
     pub r: u8,
     pub g: u8,
@@ -239,6 +240,16 @@ impl PerCharacterTransform {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum TextAlignment {
+    #[num_enum(default)]
+    Synchronous,
+    Left,
+    Center,
+    Right,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BflytTextBoxPane {
     pub base: BflytPane,
@@ -247,7 +258,7 @@ pub struct BflytTextBoxPane {
     pub material_index: u16,
     pub font_index: u16,
     pub text_origin: u8,
-    pub line_alignment: u8,
+    pub text_alignment: TextAlignment,
     pub text_flags: TextPaneFlags,
     pub italic_tilt: f32,
     pub font_top_color: Color4u8,
@@ -265,7 +276,7 @@ pub struct BflytTextBoxPane {
     pub shadow_italic_tilt: f32,
     pub line_transform_offset: u32,
     pub per_character_transform_offset: u32,
-    pub text: Option<Vec<u16>>,
+    pub text: Option<String>,
     pub label: Option<String>,
     pub per_character_transform: Option<PerCharacterTransform>,
 }
@@ -280,7 +291,7 @@ impl BflytTextBoxPane {
         let material_index = cursor.read_u16();
         let font_index = cursor.read_u16();
         let text_origin = cursor.read_u8();
-        let line_alignment = cursor.read_u8();
+        let text_alignment = cursor.read_u8().into();
         let text_flags = TextPaneFlags::decode(cursor.read_u16());
         let italic_tilt = cursor.read_f32();
         let text_offset = cursor.read_u32();
@@ -305,13 +316,17 @@ impl BflytTextBoxPane {
             let addr = txt1_base + text_offset as usize - 8;
             let saved = cursor.pos;
             cursor.seek(addr);
+
             let char_count = (text_length / 2) as usize;
-            let mut chars = Vec::with_capacity(char_count);
+            let mut utf16_chars = Vec::with_capacity(char_count);
+
             for _ in 0..char_count {
-                chars.push(cursor.read_u16());
+                utf16_chars.push(cursor.read_u16());
             }
+
             cursor.seek(saved);
-            Some(chars)
+
+            String::from_utf16(&utf16_chars).ok()
         } else {
             None
         };
@@ -344,7 +359,7 @@ impl BflytTextBoxPane {
             material_index,
             font_index,
             text_origin,
-            line_alignment,
+            text_alignment,
             text_flags,
             italic_tilt,
             font_top_color,
@@ -378,7 +393,7 @@ impl BflytTextBoxPane {
         writer.write_u16(self.material_index);
         writer.write_u16(self.font_index);
         writer.write_u8(self.text_origin);
-        writer.write_u8(self.line_alignment);
+        writer.write_u8(self.text_alignment.into());
         writer.write_u16(self.text_flags.encode());
         writer.write_f32(self.italic_tilt);
 
@@ -403,8 +418,9 @@ impl BflytTextBoxPane {
         if let Some(text) = &self.text {
             let offset = writer.pos() - txt1_base + 8;
             writer.patch_u32(text_offset_pos, offset as u32);
-            for ch in text {
-                writer.write_u16(*ch);
+
+            for ch in text.encode_utf16() {
+                writer.write_u16(ch);
             }
         } else {
             writer.patch_u32(text_offset_pos, 0);

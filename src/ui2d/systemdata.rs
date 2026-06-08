@@ -1,3 +1,4 @@
+use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -88,23 +89,15 @@ pub enum ResUi2dSystemDataInner {
     Pane(ResUi2dPaneData),
 }
 
-#[derive(Debug)]
+#[derive(Debug, FromPrimitive, IntoPrimitive)]
 #[repr(u32)]
 pub enum Ui2dLayoutSystemDataType {
     AnimTagName = 0,
+    #[num_enum(default)]
     Unknown = 1,
 }
 
-impl From<u32> for Ui2dLayoutSystemDataType {
-    fn from(value: u32) -> Self {
-        match value {
-            0 => Self::AnimTagName,
-            _ => Self::Unknown,
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, FromPrimitive, IntoPrimitive)]
 #[repr(u32)]
 pub enum Ui2dPaneSystemDataType {
     VertexPos0 = 0,
@@ -113,21 +106,8 @@ pub enum Ui2dPaneSystemDataType {
     MaskTexture = 3,
     DropShadow = 4,
     ProceduralShape = 6,
+    #[num_enum(default)]
     Invalid,
-}
-
-impl From<u32> for Ui2dPaneSystemDataType {
-    fn from(value: u32) -> Self {
-        match value {
-            0 => Self::VertexPos0,
-            1 => Self::VertexPos1,
-            2 => Self::Alignment,
-            3 => Self::MaskTexture,
-            4 => Self::DropShadow,
-            6 => Self::ProceduralShape,
-            _ => Self::Invalid,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -280,39 +260,17 @@ impl ResUi2dSystemDataAlignment {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, IntoPrimitive, FromPrimitive,
+)]
 #[repr(u8)]
 pub enum DropShadowBlendMode {
+    #[num_enum(default)]
     Normal = 0,
     Multiply = 1,
     Addition = 2,
     Subtraction = 3,
     NormalMaxAlpha = 4,
-}
-
-impl From<u8> for DropShadowBlendMode {
-    fn from(val: u8) -> Self {
-        match val {
-            0 => DropShadowBlendMode::Normal,
-            1 => DropShadowBlendMode::Multiply,
-            2 => DropShadowBlendMode::Addition,
-            3 => DropShadowBlendMode::Subtraction,
-            4 => DropShadowBlendMode::NormalMaxAlpha,
-            _ => DropShadowBlendMode::Normal,
-        }
-    }
-}
-
-impl From<DropShadowBlendMode> for u8 {
-    fn from(val: DropShadowBlendMode) -> Self {
-        match val {
-            DropShadowBlendMode::Normal => 0,
-            DropShadowBlendMode::Multiply => 1,
-            DropShadowBlendMode::Addition => 2,
-            DropShadowBlendMode::Subtraction => 3,
-            DropShadowBlendMode::NormalMaxAlpha => 4,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]

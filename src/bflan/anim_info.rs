@@ -1,3 +1,4 @@
+use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -59,27 +60,15 @@ impl From<u32> for AnimInfoType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, IntoPrimitive, FromPrimitive)]
+#[repr(u8)]
 pub enum AnimType {
+    #[num_enum(default)]
     Pane = 0,
     Material = 1,
     User = 2,
     PaneExt = 3,
     StateMachine = 4,
-}
-
-impl From<u8> for AnimType {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => AnimType::Pane,
-            1 => AnimType::Material,
-            2 => AnimType::User,
-            3 => AnimType::PaneExt,
-            4 => AnimType::StateMachine,
-            // fallback
-            _ => AnimType::Pane,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
