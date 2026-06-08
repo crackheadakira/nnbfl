@@ -7,7 +7,7 @@ use crate::{
         pane::Color4u8,
     },
     core::{Cursor, Writer},
-    ui2d::types::Color4f,
+    ui2d::types::{Color4f, Vector2f},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -306,9 +306,23 @@ impl MaterialTevCombiner {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum AlphaCompare {
+    Never,
+    Less,
+    LEqual,
+    Equal,
+    NEqual,
+    GEqual,
+    Greater,
+    #[num_enum(default)]
+    Always,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialAlphaCompare {
-    pub alpha_test_function: u8,
+    pub compare: AlphaCompare,
     pub reserve0: u8,
     pub reserve1: u16,
     pub alpha_compare_ref_value: f32,
@@ -317,14 +331,15 @@ pub struct MaterialAlphaCompare {
 impl MaterialAlphaCompare {
     fn parse(c: &mut Cursor) -> Self {
         Self {
-            alpha_test_function: c.read_u8(),
+            compare: c.read_u8().into(),
             reserve0: c.read_u8(),
             reserve1: c.read_u16(),
             alpha_compare_ref_value: c.read_f32(),
         }
     }
+
     fn serialize(&self, w: &mut Writer) {
-        w.write_u8(self.alpha_test_function);
+        w.write_u8(self.compare.into());
         w.write_u8(self.reserve0);
         w.write_u16(self.reserve1);
         w.write_f32(self.alpha_compare_ref_value);
@@ -444,20 +459,21 @@ impl MaterialBlendMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialIndirectMatrix {
-    pub translation: [f32; 2],
     pub rotation: f32,
+    pub scale: Vector2f,
 }
+
 impl MaterialIndirectMatrix {
     fn parse(c: &mut Cursor) -> Self {
         Self {
-            translation: [c.read_f32(), c.read_f32()],
             rotation: c.read_f32(),
+            scale: Vector2f::parse(c),
         }
     }
+
     fn serialize(&self, w: &mut Writer) {
-        w.write_f32(self.translation[0]);
-        w.write_f32(self.translation[1]);
         w.write_f32(self.rotation);
+        self.scale.serialize(w);
     }
 }
 
@@ -616,7 +632,7 @@ pub enum DetailedCombinerStageMode {
     AddSigned,
     Interpolate,
     Subtract,
-    AddMultiplicate = 8,
+    AddMult = 8,
     MultiplicateAdd,
 }
 
@@ -848,12 +864,12 @@ pub struct MaterialInfo {
     pub tex_srt_count: u8,
     pub tex_coord_gen_count: u8,
     pub tev_combiner_count: u8,
-    pub alpha_compare_count: u8,
+    pub has_alpha_compare: bool,
     pub has_color_blend_mode: bool,
     pub reserve0: bool,
     pub has_alpha_blend_mode: bool,
     pub reserve1: u8,
-    pub indirect_matrix_count: u8,
+    pub has_indirect_matrix: bool,
     pub projection_tex_gen_count: u8,
     pub font_shadow_color: u8,
     pub reserve2: bool,
@@ -872,12 +888,12 @@ impl MaterialInfo {
             tex_srt_count: ((raw >> 2) & 0x3) as u8,
             tex_coord_gen_count: ((raw >> 4) & 0x3) as u8,
             tev_combiner_count: ((raw >> 6) & 0x7) as u8,
-            alpha_compare_count: ((raw >> 9) & 0x1) as u8,
+            has_alpha_compare: ((raw >> 9) & 0x1) as u8 != 0,
             has_color_blend_mode: ((raw >> 10) & 0x1) as u8 != 0,
             reserve0: ((raw >> 11) & 0x1) as u8 != 0,
             has_alpha_blend_mode: ((raw >> 12) & 0x1) as u8 != 0,
             reserve1: ((raw >> 13) & 0x1) as u8,
-            indirect_matrix_count: ((raw >> 14) & 0x1) as u8,
+            has_indirect_matrix: ((raw >> 14) & 0x1) as u8 != 0,
             projection_tex_gen_count: ((raw >> 15) & 0x3) as u8,
             font_shadow_color: ((raw >> 17) & 0x1) as u8,
             reserve2: ((raw >> 18) & 0x1) as u8 != 0,
@@ -895,12 +911,12 @@ impl MaterialInfo {
             | (((self.tex_srt_count & 0x3) as u32) << 2)
             | (((self.tex_coord_gen_count & 0x3) as u32) << 4)
             | (((self.tev_combiner_count & 0x7) as u32) << 6)
-            | (((self.alpha_compare_count & 0x1) as u32) << 9)
+            | (((self.has_alpha_compare as u8 & 0x1) as u32) << 9)
             | (((self.has_color_blend_mode as u8 & 0x1) as u32) << 10)
             | (((self.reserve0 as u8 & 0x1) as u32) << 11)
             | (((self.has_alpha_blend_mode as u8 & 0x1) as u32) << 12)
             | (((self.reserve1 & 0x1) as u32) << 13)
-            | (((self.indirect_matrix_count & 0x1) as u32) << 14)
+            | (((self.has_indirect_matrix as u8 & 0x1) as u32) << 14)
             | (((self.projection_tex_gen_count & 0x3) as u32) << 15)
             | (((self.font_shadow_color & 0x1) as u32) << 17)
             | (((self.reserve2 as u8 & 0x1) as u32) << 18)
@@ -939,19 +955,16 @@ pub struct BflytMaterial {
     pub tex_srts: Vec<MaterialTextureSrt>,
     pub tex_coord_gens: Vec<MaterialTexCoordGen>,
     pub tev_combiners: Vec<MaterialTevCombiner>,
-    pub alpha_compares: Vec<MaterialAlphaCompare>,
+    pub alpha_compare: Option<MaterialAlphaCompare>,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub blend_mode: Option<MaterialBlendMode>,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub blend_mode_alpha: Option<MaterialBlendMode>,
 
-    pub indirect_matrices: Vec<MaterialIndirectMatrix>,
+    pub indirect_matrix: Option<MaterialIndirectMatrix>,
     pub projection_tex_gens: Vec<MaterialProjectionTexGen>,
     pub font_shadow_colors: Vec<MaterialFontShadowColor>,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub detailed_combiner: Option<MaterialDetailedCombiner>,
 
     pub user_combiners: Vec<MaterialUserCombiner>,
@@ -1037,10 +1050,11 @@ impl BflytMaterial {
             tev_combiners.push(MaterialTevCombiner::parse(cursor));
         }
 
-        let mut alpha_compares = Vec::new();
-        for _ in 0..material_info.alpha_compare_count {
-            alpha_compares.push(MaterialAlphaCompare::parse(cursor));
-        }
+        let alpha_compare = if material_info.has_alpha_compare {
+            Some(MaterialAlphaCompare::parse(cursor))
+        } else {
+            None
+        };
 
         let blend_mode = if material_info.has_color_blend_mode {
             Some(MaterialBlendMode::parse(cursor))
@@ -1054,10 +1068,11 @@ impl BflytMaterial {
             None
         };
 
-        let mut indirect_matrices = Vec::new();
-        for _ in 0..material_info.indirect_matrix_count {
-            indirect_matrices.push(MaterialIndirectMatrix::parse(cursor));
-        }
+        let indirect_matrix = if material_info.has_indirect_matrix {
+            Some(MaterialIndirectMatrix::parse(cursor))
+        } else {
+            None
+        };
 
         let detailed_combiner = if material_info.use_detailed_combiner != 0 {
             Some(MaterialDetailedCombiner::parse(
@@ -1104,10 +1119,10 @@ impl BflytMaterial {
             tex_srts,
             tex_coord_gens,
             tev_combiners,
-            alpha_compares,
+            alpha_compare,
             blend_mode,
             blend_mode_alpha,
-            indirect_matrices,
+            indirect_matrix,
             projection_tex_gens,
             font_shadow_colors,
             detailed_combiner,
@@ -1125,12 +1140,12 @@ impl BflytMaterial {
             tex_srt_count: self.tex_srts.len() as u8,
             tex_coord_gen_count: self.tex_coord_gens.len() as u8,
             tev_combiner_count: self.tev_combiners.len() as u8,
-            alpha_compare_count: self.alpha_compares.len() as u8,
+            has_alpha_compare: self.alpha_compare.is_some(),
             has_color_blend_mode: self.blend_mode.is_some(),
             reserve0: self.reserve0,
             has_alpha_blend_mode: self.blend_mode_alpha.is_some(),
             reserve1: 0,
-            indirect_matrix_count: self.indirect_matrices.len() as u8,
+            has_indirect_matrix: self.indirect_matrix.is_some(),
             projection_tex_gen_count: self.projection_tex_gens.len() as u8,
             font_shadow_color: self.font_shadow_colors.len() as u8,
             reserve2: self.reserve2,
@@ -1182,8 +1197,8 @@ impl BflytMaterial {
             tc.serialize(writer);
         }
 
-        for ac in &self.alpha_compares {
-            ac.serialize(writer);
+        if let Some(alpha_compare) = &self.alpha_compare {
+            alpha_compare.serialize(writer);
         }
 
         if let Some(blend_mode) = &self.blend_mode {
@@ -1194,8 +1209,8 @@ impl BflytMaterial {
             blend_mode.serialize(writer);
         }
 
-        for im in &self.indirect_matrices {
-            im.serialize(writer);
+        if let Some(indirect_matrix) = &self.indirect_matrix {
+            indirect_matrix.serialize(writer);
         }
 
         if let Some(detailed_combiner) = &self.detailed_combiner {
