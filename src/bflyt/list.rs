@@ -146,7 +146,7 @@ impl MaterialTextureOptions {
         Self {
             wrap_mode: (raw & 0x3).into(),
             filter: ((raw >> 2) & 0x3).into(),
-            reserve0: ((raw >> 4) & 0xF) as u8,
+            reserve0: (raw >> 4) & 0xF,
         }
     }
 
@@ -512,7 +512,6 @@ impl MaterialFontShadowColor {
 #[repr(u8)]
 pub enum TevSource {
     Primary = 0,
-    Unknown2 = 2,
     Texture0 = 3,
     Texture1 = 4,
     Texture2 = 5,
@@ -532,29 +531,6 @@ pub enum TevScale {
     V1,
     V2,
     V4,
-    Unknown,
-}
-
-#[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, FromPrimitive, IntoPrimitive,
-)]
-#[repr(u8)]
-pub enum DetailedCombinerTevMode {
-    #[num_enum(default)]
-    Replace,
-    Modulate,
-    Add,
-    AddSigned,
-    Interpolate,
-    Subtract,
-    AddMultiplicate = 8,
-    MultiplcateAdd,
-    Overlay,
-    Lighten,
-    Darken,
-    Indirect,
-    BlendIndirect,
-    EachIndirect,
 }
 
 #[derive(
@@ -611,91 +587,145 @@ pub enum TevAlphaOp {
     InvG,
     B,
     InvB,
-    Unknown,
+}
+
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, IntoPrimitive, FromPrimitive,
+)]
+#[repr(u8)]
+pub enum TevKonstSel {
+    BlackColor,
+    #[num_enum(default)]
+    WhiteColor,
+    K0,
+    K1,
+    K2,
+    K3,
+    K4,
+}
+
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, IntoPrimitive, FromPrimitive,
+)]
+#[repr(u8)]
+pub enum DetailedCombinerStageMode {
+    #[num_enum(default)]
+    Replace,
+    Modulate,
+    Add,
+    AddSigned,
+    Interpolate,
+    Subtract,
+    AddMultiplicate = 8,
+    MultiplicateAdd,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DetailedCombinerColorStageConfig {
+    pub sources: [TevSource; 3],
+    pub operands: [TevColorOp; 3],
+    pub mode: DetailedCombinerStageMode,
+    pub scale: TevScale,
+    pub copy_reg: bool,
+    pub konst_sel: TevKonstSel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DetailedCombinerAlphaStageConfig {
+    pub sources: [TevSource; 3],
+    pub operands: [TevAlphaOp; 3],
+    pub mode: DetailedCombinerStageMode,
+    pub scale: TevScale,
+    pub copy_reg: bool,
+    pub konst_sel: TevKonstSel,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DetailedCombinerColorFlags {
-    pub color_sources: [TevSource; 3],
-    pub color_ops: [TevColorOp; 3],
-    pub color_mode: DetailedCombinerTevMode,
-    pub color_scale: TevScale,
+pub struct MaterialDetailedCombinerEntry {
+    pub color_config: DetailedCombinerColorStageConfig,
+    pub alpha_config: DetailedCombinerAlphaStageConfig,
+    pub reserve0: u32,
 }
 
-impl DetailedCombinerColorFlags {
-    pub fn from_u32(flags: u32) -> Self {
-        let get_bits = |start: u8, len: u8| -> u8 { ((flags >> start) & ((1 << len) - 1)) as u8 };
+impl MaterialDetailedCombinerEntry {
+    pub fn parse(c: &mut Cursor) -> Self {
+        let color_flags = c.read_u32();
+        let alpha_flags = c.read_u32();
+        let constant_selectors = c.read_u32();
+        let reserve0 = c.read_u32();
+
+        let color_config = DetailedCombinerColorStageConfig {
+            sources: [
+                ((color_flags & 0xF) as u8).into(),
+                (((color_flags >> 4) & 0xF) as u8).into(),
+                (((color_flags >> 8) & 0xF) as u8).into(),
+            ],
+            operands: [
+                (((color_flags >> 12) & 0xF) as u8).into(),
+                (((color_flags >> 16) & 0xF) as u8).into(),
+                (((color_flags >> 20) & 0xF) as u8).into(),
+            ],
+            mode: (((color_flags >> 24) & 0xF) as u8).into(),
+            scale: (((color_flags >> 28) & 0x3) as u8).into(),
+            copy_reg: ((color_flags >> 30) & 0x1) as u8 != 0,
+            konst_sel: ((constant_selectors & 0xF) as u8).into(),
+        };
+
+        let alpha_config = DetailedCombinerAlphaStageConfig {
+            sources: [
+                ((alpha_flags & 0xF) as u8).into(),
+                (((alpha_flags >> 4) & 0xF) as u8).into(),
+                (((alpha_flags >> 8) & 0xF) as u8).into(),
+            ],
+            operands: [
+                (((alpha_flags >> 12) & 0xF) as u8).into(),
+                (((alpha_flags >> 16) & 0xF) as u8).into(),
+                (((alpha_flags >> 20) & 0xF) as u8).into(),
+            ],
+            mode: (((alpha_flags >> 24) & 0xF) as u8).into(),
+            scale: (((alpha_flags >> 28) & 0x3) as u8).into(),
+            copy_reg: ((alpha_flags >> 30) & 0x1) as u8 != 0,
+            konst_sel: ((constant_selectors & 0xF) as u8).into(),
+        };
 
         Self {
-            color_sources: [
-                get_bits(0, 4).into(),
-                get_bits(4, 4).into(),
-                get_bits(8, 4).into(),
-            ],
-            color_ops: [
-                get_bits(12, 4).into(),
-                get_bits(16, 4).into(),
-                get_bits(20, 4).into(),
-            ],
-            color_mode: get_bits(24, 4).into(),
-            color_scale: get_bits(28, 3).into(),
+            color_config,
+            alpha_config,
+            reserve0,
         }
     }
 
-    pub fn to_u32(&self) -> u32 {
-        let mut flags = 0u32;
-        flags |= self.color_sources[0] as u32 & 0xF;
-        flags |= (self.color_sources[1] as u32 & 0xF) << 4;
-        flags |= (self.color_sources[2] as u32 & 0xF) << 8;
-        flags |= (self.color_ops[0] as u32 & 0xF) << 12;
-        flags |= (self.color_ops[1] as u32 & 0xF) << 16;
-        flags |= (self.color_ops[2] as u32 & 0xF) << 20;
-        flags |= (self.color_mode as u32 & 0xF) << 24;
-        flags |= (self.color_scale as u32 & 0x7) << 28;
-        flags
-    }
-}
+    pub fn serialize(&self, w: &mut Writer) {
+        let mut color_flags = 0u32;
+        color_flags |= self.color_config.sources[0] as u32 & 0xF;
+        color_flags |= (self.color_config.sources[1] as u32 & 0xF) << 4;
+        color_flags |= (self.color_config.sources[2] as u32 & 0xF) << 8;
+        color_flags |= (self.color_config.operands[0] as u32 & 0xF) << 12;
+        color_flags |= (self.color_config.operands[1] as u32 & 0xF) << 16;
+        color_flags |= (self.color_config.operands[2] as u32 & 0xF) << 20;
+        color_flags |= (self.color_config.mode as u32 & 0xF) << 24;
+        color_flags |= (self.color_config.scale as u32 & 0x3) << 28;
+        color_flags |= (self.color_config.copy_reg as u32 & 0x1) << 30;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DetailedCombinerAlphaFlags {
-    pub alpha_sources: [TevSource; 3],
-    pub alpha_ops: [TevAlphaOp; 3],
-    pub alpha_mode: DetailedCombinerTevMode,
-    pub alpha_scale: TevScale,
-}
+        let mut alpha_flags = 0u32;
+        alpha_flags |= self.alpha_config.sources[0] as u32 & 0xF;
+        alpha_flags |= (self.alpha_config.sources[1] as u32 & 0xF) << 4;
+        alpha_flags |= (self.alpha_config.sources[2] as u32 & 0xF) << 8;
+        alpha_flags |= (self.alpha_config.operands[0] as u32 & 0xF) << 12;
+        alpha_flags |= (self.alpha_config.operands[1] as u32 & 0xF) << 16;
+        alpha_flags |= (self.alpha_config.operands[2] as u32 & 0xF) << 20;
+        alpha_flags |= (self.alpha_config.mode as u32 & 0xF) << 24;
+        color_flags |= (self.alpha_config.scale as u32 & 0x3) << 28;
+        color_flags |= (self.alpha_config.copy_reg as u32 & 0x1) << 30;
 
-impl DetailedCombinerAlphaFlags {
-    pub fn from_i32(flags: i32) -> Self {
-        let u_flags = flags as u32;
-        let get_bits = |start: u8, len: u8| -> u8 { ((u_flags >> start) & ((1 << len) - 1)) as u8 };
+        let mut constant_selectors = 0u32;
+        constant_selectors |= self.color_config.konst_sel as u32 & 0xF;
+        constant_selectors |= (self.alpha_config.konst_sel as u32 & 0xF) << 4;
 
-        Self {
-            alpha_sources: [
-                get_bits(0, 4).into(),
-                get_bits(4, 4).into(),
-                get_bits(8, 4).into(),
-            ],
-            alpha_ops: [
-                get_bits(12, 4).into(),
-                get_bits(16, 4).into(),
-                get_bits(20, 4).into(),
-            ],
-            alpha_mode: get_bits(24, 4).into(),
-            alpha_scale: get_bits(28, 3).into(),
-        }
-    }
-
-    pub fn to_i32(&self) -> i32 {
-        let mut flags = 0u32;
-        flags |= self.alpha_sources[0] as u32 & 0xF;
-        flags |= (self.alpha_sources[1] as u32 & 0xF) << 4;
-        flags |= (self.alpha_sources[2] as u32 & 0xF) << 8;
-        flags |= (self.alpha_ops[0] as u32 & 0xF) << 12;
-        flags |= (self.alpha_ops[1] as u32 & 0xF) << 16;
-        flags |= (self.alpha_ops[2] as u32 & 0xF) << 20;
-        flags |= (self.alpha_mode as u32 & 0xF) << 24;
-        flags |= (self.alpha_scale as u32 & 0x3) << 28;
-        flags as i32
+        w.write_u32(color_flags);
+        w.write_u32(alpha_flags);
+        w.write_u32(constant_selectors);
+        w.write_u32(self.reserve0);
     }
 }
 
@@ -708,7 +738,7 @@ pub struct MaterialDetailedCombiner {
     pub color3: Color4u8,
     pub color4: Color4u8,
     pub color5: Color4u8,
-    pub color6: Color4u8,
+    pub stage_flags: u32,
 
     pub entries: Vec<MaterialDetailedCombinerEntry>,
 }
@@ -722,7 +752,7 @@ impl MaterialDetailedCombiner {
             color3: Color4u8::parse(c),
             color4: Color4u8::parse(c),
             color5: Color4u8::parse(c),
-            color6: Color4u8::parse(c),
+            stage_flags: c.read_u32(),
             entries: Vec::new(),
         };
 
@@ -741,40 +771,11 @@ impl MaterialDetailedCombiner {
         self.color3.serialize(w);
         self.color4.serialize(w);
         self.color5.serialize(w);
-        self.color6.serialize(w);
+        w.write_u32(self.stage_flags);
 
         for entry in &self.entries {
             entry.serialize(w);
         }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MaterialDetailedCombinerEntry {
-    pub color_flags: DetailedCombinerColorFlags,
-    pub alpha_flags: DetailedCombinerAlphaFlags,
-
-    pub unknown_1: u32,
-    pub unknown_2: u32,
-}
-
-impl MaterialDetailedCombinerEntry {
-    pub fn parse(c: &mut Cursor) -> Self {
-        Self {
-            color_flags: DetailedCombinerColorFlags::from_u32(c.read_u32()),
-            alpha_flags: DetailedCombinerAlphaFlags::from_i32(c.read_i32()),
-
-            unknown_1: c.read_u32(),
-            unknown_2: c.read_u32(),
-        }
-    }
-
-    pub fn serialize(&self, w: &mut Writer) {
-        w.write_u32(self.color_flags.to_u32());
-        w.write_i32(self.alpha_flags.to_i32());
-
-        w.write_u32(self.unknown_1);
-        w.write_u32(self.unknown_2);
     }
 }
 
