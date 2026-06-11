@@ -49,9 +49,14 @@ pub enum FormatError {
     },
 
     #[error(
-        "Section count mismatch: header expects {expected} sections, but file stream cut off at section {actual}"
+        "Section count mismatch: header expects {expected} sections, but file stream cut off at section {actual}. Inner error: {source}"
     )]
-    SectionCountMismatch { expected: u32, actual: u32 },
+    SectionCountMismatch {
+        expected: u32,
+        actual: u32,
+        #[source]
+        source: Box<FormatError>,
+    },
 
     #[error("Malformed section block '{section_type}' at offset 0x{offset:X}: {reason}")]
     MalformedSection {

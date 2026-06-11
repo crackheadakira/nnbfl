@@ -6,15 +6,6 @@ pub struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
-    fn read<T: Copy>(&mut self) -> T {
-        let size = std::mem::size_of::<T>();
-        let end = self.pos + size;
-        let bytes = &self.data[self.pos..end];
-        self.pos = end;
-
-        unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const T) }
-    }
-
     pub fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], FormatError> {
         let end = self.pos + len;
 
@@ -46,8 +37,9 @@ impl<'a> Cursor<'a> {
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
-    pub fn read_i16(&mut self) -> i16 {
-        i16::from_le(self.read::<i16>())
+    pub fn read_i16(&mut self) -> Result<i16, FormatError> {
+        let b = self.read_bytes(2)?;
+        Ok(i16::from_le_bytes([b[0], b[1]]))
     }
 
     pub fn read_i32(&mut self) -> Result<i32, FormatError> {
@@ -103,8 +95,16 @@ impl<'a> Cursor<'a> {
         Ok(String::from_utf8_lossy(bytes).into_owned())
     }
 
-    pub fn seek(&mut self, pos: usize) {
+    pub fn seek(&mut self, pos: usize) -> Result<(), FormatError> {
+        if pos > self.data.len() {
+            return Err(FormatError::UnexpectedEof {
+                offset: self.data.len(),
+                requested_bytes: pos - self.data.len(),
+            });
+        }
+
         self.pos = pos;
+        Ok(())
     }
 
     pub fn seek_relative(&mut self, pos: usize) {

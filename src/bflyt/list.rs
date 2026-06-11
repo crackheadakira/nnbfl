@@ -6,7 +6,7 @@ use crate::{
         flags::{TexFilter, TexWrapMode},
         pane::Color4u8,
     },
-    core::{Cursor, Writer},
+    core::{Cursor, FormatError, Writer},
     ui2d::types::{Color4f, Vector2f},
 };
 
@@ -23,17 +23,17 @@ pub struct BflytLayout {
 }
 
 impl BflytLayout {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            is_centered: cursor.read_u8() != 0,
-            reserve0: cursor.read_u8(),
-            reserve1: cursor.read_u16(),
-            width: cursor.read_f32(),
-            height: cursor.read_f32(),
-            parts_width: cursor.read_f32(),
-            parts_height: cursor.read_f32(),
-            name: cursor.read_null_terminated_string(),
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            is_centered: cursor.read_u8()? != 0,
+            reserve0: cursor.read_u8()?,
+            reserve1: cursor.read_u16()?,
+            width: cursor.read_f32()?,
+            height: cursor.read_f32()?,
+            parts_width: cursor.read_f32()?,
+            parts_height: cursor.read_f32()?,
+            name: cursor.read_null_terminated_string()?,
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -54,23 +54,23 @@ pub struct BflytTextureList {
 }
 
 impl BflytTextureList {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        let texture_count = cursor.read_u16();
-        let _reserve0 = cursor.read_u16();
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let texture_count = cursor.read_u16()?;
+        let _reserve0 = cursor.read_u16()?;
 
         let offsets_start = cursor.pos;
         let mut offsets = Vec::new();
         for _ in 0..texture_count {
-            offsets.push(cursor.read_u32());
+            offsets.push(cursor.read_u32()?);
         }
 
         let mut textures = Vec::new();
         for offset in offsets {
             cursor.seek(offsets_start + offset as usize);
-            textures.push(cursor.read_null_terminated_string());
+            textures.push(cursor.read_null_terminated_string()?);
         }
 
-        Self { textures }
+        Ok(Self { textures })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -97,23 +97,23 @@ pub struct BflytFontList {
 }
 
 impl BflytFontList {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        let font_count = cursor.read_u16();
-        let _reserve0 = cursor.read_u16();
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let font_count = cursor.read_u16()?;
+        let _reserve0 = cursor.read_u16()?;
 
         let offsets_start = cursor.pos;
         let mut offsets = Vec::new();
         for _ in 0..font_count {
-            offsets.push(cursor.read_u32());
+            offsets.push(cursor.read_u32()?);
         }
 
         let mut fonts = Vec::new();
         for offset in offsets {
             cursor.seek(offsets_start + offset as usize);
-            fonts.push(cursor.read_null_terminated_string());
+            fonts.push(cursor.read_null_terminated_string()?);
         }
 
-        Self { fonts }
+        Ok(Self { fonts })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -190,13 +190,13 @@ pub struct MaterialTextureMap {
 }
 
 impl MaterialTextureMap {
-    fn parse(c: &mut Cursor) -> Self {
-        Self {
-            texture_index: c.read_u16(),
+    fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            texture_index: c.read_u16()?,
             texture_name: String::new(),
-            u_options: MaterialTextureOptions::decode(c.read_u8()),
-            v_options: MaterialTextureOptions::decode(c.read_u8()),
-        }
+            u_options: MaterialTextureOptions::decode(c.read_u8()?),
+            v_options: MaterialTextureOptions::decode(c.read_u8()?),
+        })
     }
 
     fn serialize(&self, w: &mut Writer) {
@@ -216,14 +216,14 @@ pub struct MaterialTextureSrt {
 }
 
 impl MaterialTextureSrt {
-    fn parse(c: &mut Cursor) -> Self {
-        Self {
-            translation_x: c.read_f32(),
-            translation_y: c.read_f32(),
-            rotation: c.read_f32(),
-            scale_x: c.read_f32(),
-            scale_z: c.read_f32(),
-        }
+    fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            translation_x: c.read_f32()?,
+            translation_y: c.read_f32()?,
+            rotation: c.read_f32()?,
+            scale_x: c.read_f32()?,
+            scale_z: c.read_f32()?,
+        })
     }
     fn serialize(&self, w: &mut Writer) {
         w.write_f32(self.translation_x);
@@ -258,18 +258,18 @@ pub struct MaterialTexCoordGen {
 }
 
 impl MaterialTexCoordGen {
-    fn parse(c: &mut Cursor) -> Self {
-        Self {
-            reserve0: c.read_u8(),
-            tex_gen_source: c.read_u8().into(),
-            reserve1: c.read_u16(),
-            reserve2: c.read_u32(),
+    fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            reserve0: c.read_u8()?,
+            tex_gen_source: c.read_u8()?.into(),
+            reserve1: c.read_u16()?,
+            reserve2: c.read_u32()?,
             reserve3: {
-                let lo = c.read_u32() as u64;
-                let hi = c.read_u32() as u64;
+                let lo = c.read_u32()? as u64;
+                let hi = c.read_u32()? as u64;
                 lo | (hi << 32)
             },
-        }
+        })
     }
     fn serialize(&self, w: &mut Writer) {
         w.write_u8(self.reserve0);
@@ -290,13 +290,13 @@ pub struct MaterialTevCombiner {
 }
 
 impl MaterialTevCombiner {
-    fn parse(c: &mut Cursor) -> Self {
-        Self {
-            rgb_mode: c.read_u8().into(),
-            alpha_mode: c.read_u8().into(),
-            reserve1: c.read_u8(),
-            reserve2: c.read_u8(),
-        }
+    fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            rgb_mode: c.read_u8()?.into(),
+            alpha_mode: c.read_u8()?.into(),
+            reserve1: c.read_u8()?,
+            reserve2: c.read_u8()?,
+        })
     }
     fn serialize(&self, w: &mut Writer) {
         w.write_u8(self.rgb_mode.into());
@@ -329,13 +329,13 @@ pub struct MaterialAlphaCompare {
 }
 
 impl MaterialAlphaCompare {
-    fn parse(c: &mut Cursor) -> Self {
-        Self {
-            compare: c.read_u8().into(),
-            reserve0: c.read_u8(),
-            reserve1: c.read_u16(),
-            alpha_compare_ref_value: c.read_f32(),
-        }
+    fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            compare: c.read_u8()?.into(),
+            reserve0: c.read_u8()?,
+            reserve1: c.read_u16()?,
+            alpha_compare_ref_value: c.read_f32()?,
+        })
     }
 
     fn serialize(&self, w: &mut Writer) {
@@ -413,13 +413,13 @@ pub enum MaterialBlendMode {
 }
 
 impl MaterialBlendMode {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        let blend_op_raw = cursor.read_u8();
-        let src_factor_raw = cursor.read_u8();
-        let dst_factor_raw = cursor.read_u8();
-        let logic_op_raw = cursor.read_u8();
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let blend_op_raw = cursor.read_u8()?;
+        let src_factor_raw = cursor.read_u8()?;
+        let dst_factor_raw = cursor.read_u8()?;
+        let logic_op_raw = cursor.read_u8()?;
 
-        if logic_op_raw != 0 && blend_op_raw == 0 {
+        let out = if logic_op_raw != 0 && blend_op_raw == 0 {
             Self::Logic {
                 logic_op: logic_op_raw.into(),
             }
@@ -431,7 +431,9 @@ impl MaterialBlendMode {
             }
         } else {
             Self::None
-        }
+        };
+
+        Ok(out)
     }
 
     pub fn serialize(&self, w: &mut Writer) {
@@ -464,11 +466,11 @@ pub struct MaterialIndirectMatrix {
 }
 
 impl MaterialIndirectMatrix {
-    fn parse(c: &mut Cursor) -> Self {
-        Self {
-            rotation: c.read_f32(),
-            scale: Vector2f::parse(c),
-        }
+    fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            rotation: c.read_f32()?,
+            scale: Vector2f::parse(c)?,
+        })
     }
 
     fn serialize(&self, w: &mut Writer) {
@@ -485,13 +487,14 @@ pub struct MaterialProjectionTexGen {
 }
 
 impl MaterialProjectionTexGen {
-    fn parse(c: &mut Cursor) -> Self {
-        Self {
-            translation: [c.read_f32(), c.read_f32()],
-            scale: [c.read_f32(), c.read_f32()],
-            rotation: c.read_f32(),
-        }
+    fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            translation: [c.read_f32()?, c.read_f32()?],
+            scale: [c.read_f32()?, c.read_f32()?],
+            rotation: c.read_f32()?,
+        })
     }
+
     fn serialize(&self, w: &mut Writer) {
         for v in &self.translation {
             w.write_f32(*v);
@@ -510,12 +513,13 @@ pub struct MaterialFontShadowColor {
 }
 
 impl MaterialFontShadowColor {
-    fn parse(c: &mut Cursor) -> Self {
-        Self {
-            color0: Color4u8::parse(c),
-            color1: Color4u8::parse(c),
-        }
+    fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            color0: Color4u8::parse(c)?,
+            color1: Color4u8::parse(c)?,
+        })
     }
+
     fn serialize(&self, w: &mut Writer) {
         self.color0.serialize(w);
         self.color1.serialize(w);
@@ -664,11 +668,11 @@ pub struct MaterialDetailedCombinerEntry {
 }
 
 impl MaterialDetailedCombinerEntry {
-    pub fn parse(c: &mut Cursor) -> Self {
-        let color_flags = c.read_u32();
-        let alpha_flags = c.read_u32();
-        let constant_selectors = c.read_u32();
-        let reserve0 = c.read_u32();
+    pub fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
+        let color_flags = c.read_u32()?;
+        let alpha_flags = c.read_u32()?;
+        let constant_selectors = c.read_u32()?;
+        let reserve0 = c.read_u32()?;
 
         let color_config = DetailedCombinerColorStageConfig {
             sources: [
@@ -704,11 +708,11 @@ impl MaterialDetailedCombinerEntry {
             konst_sel: ((constant_selectors & 0xF) as u8).into(),
         };
 
-        Self {
+        Ok(Self {
             color_config,
             alpha_config,
             reserve0,
-        }
+        })
     }
 
     pub fn serialize(&self, w: &mut Writer) {
@@ -760,24 +764,24 @@ pub struct MaterialDetailedCombiner {
 }
 
 impl MaterialDetailedCombiner {
-    pub fn parse(c: &mut Cursor, count: u8) -> Self {
+    pub fn parse(c: &mut Cursor, count: u8) -> Result<Self, FormatError> {
         let mut combiner = Self {
-            value: c.read_i32(),
-            color1: Color4u8::parse(c),
-            color2: Color4u8::parse(c),
-            color3: Color4u8::parse(c),
-            color4: Color4u8::parse(c),
-            color5: Color4u8::parse(c),
-            stage_flags: c.read_u32(),
+            value: c.read_i32()?,
+            color1: Color4u8::parse(c)?,
+            color2: Color4u8::parse(c)?,
+            color3: Color4u8::parse(c)?,
+            color4: Color4u8::parse(c)?,
+            color5: Color4u8::parse(c)?,
+            stage_flags: c.read_u32()?,
             entries: Vec::new(),
         };
 
         for _ in 0..count {
-            let entry = MaterialDetailedCombinerEntry::parse(c);
+            let entry = MaterialDetailedCombinerEntry::parse(c)?;
             combiner.entries.push(entry);
         }
 
-        combiner
+        Ok(combiner)
     }
 
     pub fn serialize(&self, w: &mut Writer) {
@@ -802,18 +806,22 @@ pub struct MaterialUserCombiner {
 }
 
 impl MaterialUserCombiner {
-    fn parse(c: &mut Cursor) -> Self {
-        let name = c.read_fixed_string(0x60);
-        let mut r = [0u32; 5];
-        for v in &mut r {
-            *v = c.read_u32();
+    fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
+        let name = c.read_fixed_string(0x60)?;
+        let mut reserve = [0u32; 5];
+
+        for val in &mut reserve {
+            *val = c.read_u32()?;
         }
-        Self { name, reserve: r }
+
+        Ok(Self { name, reserve })
     }
+
     fn serialize(&self, w: &mut Writer) {
         w.write_fixed_string(&self.name, 0x60);
-        for v in &self.reserve {
-            w.write_u32(*v);
+
+        for val in &self.reserve {
+            w.write_u32(*val);
         }
     }
 }
@@ -825,16 +833,17 @@ pub struct MaterialVectorTextureInfo {
     pub reserve0: u64,
 }
 impl MaterialVectorTextureInfo {
-    fn parse(c: &mut Cursor) -> Self {
-        let time = c.read_f32();
-        let color = Color4u8::parse(c);
-        let lo = c.read_u32() as u64;
-        let hi = c.read_u32() as u64;
-        Self {
+    fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
+        let time = c.read_f32()?;
+        let color = Color4u8::parse(c)?;
+        let lo = c.read_u32()? as u64;
+        let hi = c.read_u32()? as u64;
+
+        Ok(Self {
             time,
             color,
             reserve0: lo | (hi << 32),
-        }
+        })
     }
     fn serialize(&self, w: &mut Writer) {
         w.write_f32(self.time);
@@ -849,9 +858,10 @@ pub struct MaterialBrickRepeatShaderInfo {
     pub data: Vec<u8>,
 }
 impl MaterialBrickRepeatShaderInfo {
-    fn parse(c: &mut Cursor) -> Self {
-        let data = c.read_bytes(0x58).to_vec();
-        Self { data }
+    fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
+        let data = c.read_bytes(0x58)?.to_vec();
+
+        Ok(Self { data })
     }
     fn serialize(&self, w: &mut Writer) {
         w.write_bytes(&self.data);
@@ -973,38 +983,40 @@ pub struct BflytMaterial {
 }
 
 impl BflytMaterial {
-    pub fn parse(cursor: &mut Cursor, mat_base: usize) -> Self {
-        cursor.seek(mat_base);
-        let material_name = cursor.read_fixed_string(MATERIAL_NAME_LEN);
-        let material_info = MaterialInfo::decode(cursor.read_u32());
+    pub fn parse(cursor: &mut Cursor, mat_base: usize) -> Result<Self, FormatError> {
+        cursor.seek(mat_base)?;
+        let material_name = cursor.read_fixed_string(MATERIAL_NAME_LEN)?;
+        let material_info = MaterialInfo::decode(cursor.read_u32()?);
 
-        let color_types_byte = cursor.read_u8();
-        let color_count = cursor.read_u8();
+        let color_types_byte = cursor.read_u8()?;
+        let color_count = cursor.read_u8()?;
 
         let color_data_base = mat_base + 0x20;
         let mut color_offset_bytes = Vec::new();
         for _ in 0..color_count {
-            color_offset_bytes.push(cursor.read_u8());
+            color_offset_bytes.push(cursor.read_u8()?);
         }
 
         let mut colors = Vec::new();
         for (i, &offset) in color_offset_bytes.iter().enumerate() {
             let is_float = ((color_types_byte >> i) & 1) != 0;
             let saved = cursor.pos;
-            cursor.seek(color_data_base + offset as usize);
+            cursor.seek(color_data_base + offset as usize)?;
+
             let entry = if is_float {
                 MaterialColorEntry {
                     color_u8: None,
-                    color_f32: Some(Color4f::parse(cursor)),
+                    color_f32: Some(Color4f::parse(cursor)?),
                 }
             } else {
                 MaterialColorEntry {
-                    color_u8: Some(Color4u8::parse(cursor)),
+                    color_u8: Some(Color4u8::parse(cursor)?),
                     color_f32: None,
                 }
             };
+
             colors.push(entry);
-            cursor.seek(saved);
+            cursor.seek(saved)?;
         }
 
         let color_section_size = {
@@ -1022,54 +1034,55 @@ impl BflytMaterial {
         let after_color = mat_base + 0x20 + color_section_size;
 
         let tex_maps_base = after_color;
-        cursor.seek(tex_maps_base);
+        cursor.seek(tex_maps_base)?;
+
         let mut tex_maps = Vec::new();
         for _ in 0..material_info.tex_map_count {
-            tex_maps.push(MaterialTextureMap::parse(cursor));
+            tex_maps.push(MaterialTextureMap::parse(cursor)?);
         }
 
         let mut tex_extensions = Vec::new();
         if material_info.has_texture_extensions != 0 {
             for _ in 0..material_info.tex_map_count {
-                tex_extensions.push(MaterialTextureExtension::decode(cursor.read_u32()));
+                tex_extensions.push(MaterialTextureExtension::decode(cursor.read_u32()?));
             }
         }
 
         let mut tex_srts = Vec::new();
         for _ in 0..material_info.tex_srt_count {
-            tex_srts.push(MaterialTextureSrt::parse(cursor));
+            tex_srts.push(MaterialTextureSrt::parse(cursor)?);
         }
 
         let mut tex_coord_gens = Vec::new();
         for _ in 0..material_info.tex_coord_gen_count {
-            tex_coord_gens.push(MaterialTexCoordGen::parse(cursor));
+            tex_coord_gens.push(MaterialTexCoordGen::parse(cursor)?);
         }
 
         let mut tev_combiners = Vec::new();
         for _ in 0..material_info.tev_combiner_count {
-            tev_combiners.push(MaterialTevCombiner::parse(cursor));
+            tev_combiners.push(MaterialTevCombiner::parse(cursor)?);
         }
 
         let alpha_compare = if material_info.has_alpha_compare {
-            Some(MaterialAlphaCompare::parse(cursor))
+            Some(MaterialAlphaCompare::parse(cursor)?)
         } else {
             None
         };
 
         let blend_mode = if material_info.has_color_blend_mode {
-            Some(MaterialBlendMode::parse(cursor))
+            Some(MaterialBlendMode::parse(cursor)?)
         } else {
             None
         };
 
         let blend_mode_alpha = if material_info.has_alpha_blend_mode {
-            Some(MaterialBlendMode::parse(cursor))
+            Some(MaterialBlendMode::parse(cursor)?)
         } else {
             None
         };
 
         let indirect_matrix = if material_info.has_indirect_matrix {
-            Some(MaterialIndirectMatrix::parse(cursor))
+            Some(MaterialIndirectMatrix::parse(cursor)?)
         } else {
             None
         };
@@ -1078,37 +1091,37 @@ impl BflytMaterial {
             Some(MaterialDetailedCombiner::parse(
                 cursor,
                 material_info.tev_combiner_count,
-            ))
+            )?)
         } else {
             None
         };
 
         let mut projection_tex_gens = Vec::new();
         for _ in 0..material_info.projection_tex_gen_count {
-            projection_tex_gens.push(MaterialProjectionTexGen::parse(cursor));
+            projection_tex_gens.push(MaterialProjectionTexGen::parse(cursor)?);
         }
 
         let mut font_shadow_colors = Vec::new();
         for _ in 0..material_info.font_shadow_color {
-            font_shadow_colors.push(MaterialFontShadowColor::parse(cursor));
+            font_shadow_colors.push(MaterialFontShadowColor::parse(cursor)?);
         }
 
         let mut user_combiners = Vec::new();
         for _ in 0..material_info.user_combiner_count {
-            user_combiners.push(MaterialUserCombiner::parse(cursor));
+            user_combiners.push(MaterialUserCombiner::parse(cursor)?);
         }
 
         let mut vector_texture_infos = Vec::new();
         for _ in 0..material_info.vector_texture_info_count {
-            vector_texture_infos.push(MaterialVectorTextureInfo::parse(cursor));
+            vector_texture_infos.push(MaterialVectorTextureInfo::parse(cursor)?);
         }
 
         let mut brick_repeat_shader_infos = Vec::new();
         for _ in 0..material_info.brick_repeat_shader_info_count {
-            brick_repeat_shader_infos.push(MaterialBrickRepeatShaderInfo::parse(cursor));
+            brick_repeat_shader_infos.push(MaterialBrickRepeatShaderInfo::parse(cursor)?);
         }
 
-        Self {
+        Ok(Self {
             material_name,
             color_types_byte,
             reserve0: material_info.reserve0,
@@ -1129,7 +1142,7 @@ impl BflytMaterial {
             user_combiners,
             vector_texture_infos,
             brick_repeat_shader_infos,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -1245,26 +1258,28 @@ pub struct BflytMaterialList {
 }
 
 impl BflytMaterialList {
-    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Self {
+    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Result<Self, FormatError> {
         let mat_list_base = section_start;
 
-        let material_count = cursor.read_u16();
-        let _reserve0 = cursor.read_u16();
+        let material_count = cursor.read_u16()?;
+        let _reserve0 = cursor.read_u16()?;
 
         let mut offsets = Vec::new();
         for _ in 0..material_count {
-            offsets.push(cursor.read_u32());
+            offsets.push(cursor.read_u32()?);
         }
 
         let saved = cursor.pos;
         let mut materials = Vec::new();
+
         for offset in offsets {
             let mat_base = mat_list_base + offset as usize;
-            materials.push(BflytMaterial::parse(cursor, mat_base));
+            materials.push(BflytMaterial::parse(cursor, mat_base)?);
         }
-        cursor.seek(saved);
 
-        Self { materials }
+        cursor.seek(saved)?;
+
+        Ok(Self { materials })
     }
 
     pub fn serialize(&self, writer: &mut Writer, section_start: usize) {
@@ -1302,31 +1317,34 @@ pub struct BflytCaptureTextureList {
 }
 
 impl BflytCaptureTextureList {
-    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Self {
+    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Result<Self, FormatError> {
         let ctl_base = section_start;
-        let count = cursor.read_u32();
+        let count = cursor.read_u32()?;
 
         let mut infos = Vec::new();
         for _ in 0..count {
-            let pane_name_offset0 = cursor.read_u32();
-            let pane_name_offset1 = cursor.read_u32();
+            let pane_name_offset0 = cursor.read_u32()?;
+            let pane_name_offset1 = cursor.read_u32()?;
             let mut reserve0 = [0u32; 6];
-            for v in &mut reserve0 {
-                *v = cursor.read_u32();
+
+            for val in &mut reserve0 {
+                *val = cursor.read_u32()?;
             }
+
             let mut values = [0u8; 8];
-            for v in &mut values {
-                *v = cursor.read_u8();
+            for val in &mut values {
+                *val = cursor.read_u8()?;
             }
-            let reserve1 = cursor.read_f32();
-            let reserve2 = cursor.read_f32();
+
+            let reserve1 = cursor.read_f32()?;
+            let reserve2 = cursor.read_f32()?;
 
             let saved = cursor.pos;
-            cursor.seek(ctl_base + pane_name_offset0 as usize);
-            let pane_name0 = cursor.read_null_terminated_string();
-            cursor.seek(ctl_base + pane_name_offset1 as usize);
-            let pane_name1 = cursor.read_null_terminated_string();
-            cursor.seek(saved);
+            cursor.seek(ctl_base + pane_name_offset0 as usize)?;
+            let pane_name0 = cursor.read_null_terminated_string()?;
+            cursor.seek(ctl_base + pane_name_offset1 as usize)?;
+            let pane_name1 = cursor.read_null_terminated_string()?;
+            cursor.seek(saved)?;
 
             infos.push(CapturePaneInfo {
                 pane_name0,
@@ -1338,7 +1356,7 @@ impl BflytCaptureTextureList {
             });
         }
 
-        Self { infos }
+        Ok(Self { infos })
     }
 
     pub fn serialize(&self, writer: &mut Writer, section_start: usize) {
@@ -1387,23 +1405,23 @@ pub struct BflytVectorGraphicsList {
 }
 
 impl BflytVectorGraphicsList {
-    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Self {
+    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Result<Self, FormatError> {
         let vgl_base = section_start;
-        let count = cursor.read_u32();
+        let count = cursor.read_u32()?;
 
         let mut offsets = Vec::new();
         for _ in 0..count {
-            offsets.push(cursor.read_u32());
+            offsets.push(cursor.read_u32()?);
         }
 
         let saved = cursor.pos;
         let mut infos = Vec::new();
         for offset in offsets {
-            cursor.seek(vgl_base + offset as usize);
-            let reserve1 = cursor.read_u32();
-            let reserve2 = cursor.read_u32();
-            let reserve3 = cursor.read_u32();
-            let bnvg_name = cursor.read_null_terminated_string();
+            cursor.seek(vgl_base + offset as usize)?;
+            let reserve1 = cursor.read_u32()?;
+            let reserve2 = cursor.read_u32()?;
+            let reserve3 = cursor.read_u32()?;
+            let bnvg_name = cursor.read_null_terminated_string()?;
             infos.push(VectorGraphicsInfo {
                 reserve1,
                 reserve2,
@@ -1411,9 +1429,10 @@ impl BflytVectorGraphicsList {
                 bnvg_name,
             });
         }
-        cursor.seek(saved);
 
-        Self { infos }
+        cursor.seek(saved)?;
+
+        Ok(Self { infos })
     }
 
     pub fn serialize(&self, writer: &mut Writer, section_start: usize) {
@@ -1447,19 +1466,21 @@ pub struct BflytGroup {
 }
 
 impl BflytGroup {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        let group_name = cursor.read_fixed_string(GROUP_NAME_LEN);
-        let reserve0 = cursor.read_u8();
-        let child_count = cursor.read_u16();
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let group_name = cursor.read_fixed_string(GROUP_NAME_LEN)?;
+        let reserve0 = cursor.read_u8()?;
+        let child_count = cursor.read_u16()?;
         let mut child_names = Vec::new();
+
         for _ in 0..child_count {
-            child_names.push(cursor.read_fixed_string(GROUP_PANE_NAME_LEN));
+            child_names.push(cursor.read_fixed_string(GROUP_PANE_NAME_LEN)?);
         }
-        Self {
+
+        Ok(Self {
             group_name,
             reserve0,
             child_names,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -1484,79 +1505,79 @@ pub struct BflytControlSource {
 }
 
 impl BflytControlSource {
-    pub fn parse(cursor: &mut Cursor) -> Self {
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
         let section_start = cursor.pos - 8;
 
-        let reserve0_offset = cursor.read_u32() as usize;
-        let name_array_offset = cursor.read_u32() as usize;
-        let pane_count = cursor.read_u16() as usize;
-        let anim_count = cursor.read_u16() as usize;
-        let pane_name_offset_arr = cursor.read_u32() as usize;
-        let anim_name_offset_arr = cursor.read_u32() as usize;
+        let reserve0_offset = cursor.read_u32()? as usize;
+        let name_array_offset = cursor.read_u32()? as usize;
+        let pane_count = cursor.read_u16()? as usize;
+        let anim_count = cursor.read_u16()? as usize;
+        let pane_name_offset_arr = cursor.read_u32()? as usize;
+        let anim_name_offset_arr = cursor.read_u32()? as usize;
 
-        let control_name = cursor.read_null_terminated_string();
+        let control_name = cursor.read_null_terminated_string()?;
 
-        cursor.seek(section_start + reserve0_offset);
-        let reserve0_name = cursor.read_null_terminated_string();
+        cursor.seek(section_start + reserve0_offset)?;
+        let reserve0_name = cursor.read_null_terminated_string()?;
 
         let na_base = section_start + name_array_offset;
-        cursor.seek(na_base);
+        cursor.seek(na_base)?;
 
         let mut pane_bindings = Vec::with_capacity(pane_count);
         for _ in 0..pane_count {
-            pane_bindings.push(cursor.read_fixed_string(GROUP_PANE_NAME_LEN));
+            pane_bindings.push(cursor.read_fixed_string(GROUP_PANE_NAME_LEN)?);
         }
 
         let core_table_base = na_base + (pane_count * GROUP_PANE_NAME_LEN);
-        cursor.seek(core_table_base);
+        cursor.seek(core_table_base)?;
 
         let mut core_offsets = Vec::with_capacity(anim_count);
         for _ in 0..anim_count {
-            core_offsets.push(cursor.read_u32() as usize);
+            core_offsets.push(cursor.read_u32()? as usize);
         }
 
         let mut core_anims = Vec::with_capacity(anim_count);
         for offset in core_offsets {
-            cursor.seek(core_table_base + offset);
-            core_anims.push(cursor.read_null_terminated_string());
+            cursor.seek(core_table_base + offset)?;
+            core_anims.push(cursor.read_null_terminated_string()?);
         }
 
         let pane_table_base = section_start + pane_name_offset_arr;
-        cursor.seek(pane_table_base);
+        cursor.seek(pane_table_base)?;
 
         let mut pane_offsets = Vec::with_capacity(pane_count);
         for _ in 0..pane_count {
-            pane_offsets.push(cursor.read_u32() as usize);
+            pane_offsets.push(cursor.read_u32()? as usize);
         }
 
         let mut pane_names = Vec::with_capacity(pane_count);
         for offset in pane_offsets {
-            cursor.seek(pane_table_base + offset);
-            pane_names.push(cursor.read_null_terminated_string());
+            cursor.seek(pane_table_base + offset)?;
+            pane_names.push(cursor.read_null_terminated_string()?);
         }
 
         let anim_table_base = section_start + anim_name_offset_arr;
-        cursor.seek(anim_table_base);
+        cursor.seek(anim_table_base)?;
 
         let mut anim_offsets = Vec::with_capacity(anim_count);
         for _ in 0..anim_count {
-            anim_offsets.push(cursor.read_u32() as usize);
+            anim_offsets.push(cursor.read_u32()? as usize);
         }
 
         let mut anim_names = Vec::with_capacity(anim_count);
         for offset in anim_offsets {
             cursor.seek(anim_table_base + offset);
-            anim_names.push(cursor.read_null_terminated_string());
+            anim_names.push(cursor.read_null_terminated_string()?);
         }
 
-        Self {
+        Ok(Self {
             control_name,
             reserve0_name,
             pane_bindings,
             core_anims,
             pane_names,
             anim_names,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer, section_start: usize) {

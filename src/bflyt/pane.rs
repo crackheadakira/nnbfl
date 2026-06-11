@@ -7,7 +7,7 @@ use crate::{
         file::BflytSection,
         flags::{BflytOrigins, PaneFlags, PaneFlagsEx, TextPaneFlags, WindowFlags},
     },
-    core::{Cursor, Writer},
+    core::{Cursor, FormatError, Writer},
     ui2d::types::{Vector2f, Vector3f},
 };
 
@@ -20,13 +20,13 @@ pub struct Color4u8 {
 }
 
 impl Color4u8 {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            r: cursor.read_u8(),
-            g: cursor.read_u8(),
-            b: cursor.read_u8(),
-            a: cursor.read_u8(),
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            r: cursor.read_u8()?,
+            g: cursor.read_u8()?,
+            b: cursor.read_u8()?,
+            a: cursor.read_u8()?,
+        })
     }
     pub fn serialize(&self, writer: &mut Writer) {
         writer.write_u8(self.r);
@@ -54,19 +54,19 @@ pub struct BflytPane {
 }
 
 impl BflytPane {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            pane_flags: PaneFlags::decode(cursor.read_u8()),
-            origin: BflytOrigins::decode(cursor.read_u8()),
-            alpha: cursor.read_u8(),
-            flag_ex: PaneFlagsEx::decode(cursor.read_u8()),
-            pane_name: cursor.read_fixed_string(PANE_NAME_LEN),
-            user_name: cursor.read_fixed_string(USER_NAME_LEN),
-            translation: Vector3f::parse(cursor),
-            rotation: Vector3f::parse(cursor),
-            scale: Vector2f::parse(cursor),
-            size: Vector2f::parse(cursor),
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            pane_flags: PaneFlags::decode(cursor.read_u8()?),
+            origin: BflytOrigins::decode(cursor.read_u8()?),
+            alpha: cursor.read_u8()?,
+            flag_ex: PaneFlagsEx::decode(cursor.read_u8()?),
+            pane_name: cursor.read_fixed_string(PANE_NAME_LEN)?,
+            user_name: cursor.read_fixed_string(USER_NAME_LEN)?,
+            translation: Vector3f::parse(cursor)?,
+            rotation: Vector3f::parse(cursor)?,
+            scale: Vector2f::parse(cursor)?,
+            size: Vector2f::parse(cursor)?,
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -94,14 +94,15 @@ pub struct TextureUv {
 }
 
 impl TextureUv {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            top_left: Vector2f::parse(cursor),
-            top_right: Vector2f::parse(cursor),
-            bottom_left: Vector2f::parse(cursor),
-            bottom_right: Vector2f::parse(cursor),
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            top_left: Vector2f::parse(cursor)?,
+            top_right: Vector2f::parse(cursor)?,
+            bottom_left: Vector2f::parse(cursor)?,
+            bottom_right: Vector2f::parse(cursor)?,
+        })
     }
+
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("TextureUv");
 
@@ -125,20 +126,22 @@ pub struct BflytPicturePane {
 }
 
 impl BflytPicturePane {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        let base = BflytPane::parse(cursor);
-        let top_left_vertex_color = Color4u8::parse(cursor);
-        let top_right_vertex_color = Color4u8::parse(cursor);
-        let bottom_left_vertex_color = Color4u8::parse(cursor);
-        let bottom_right_vertex_color = Color4u8::parse(cursor);
-        let material_index = cursor.read_u16();
-        let texture_count = cursor.read_u8();
-        let is_shape = cursor.read_u8() != 0;
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let base = BflytPane::parse(cursor)?;
+        let top_left_vertex_color = Color4u8::parse(cursor)?;
+        let top_right_vertex_color = Color4u8::parse(cursor)?;
+        let bottom_left_vertex_color = Color4u8::parse(cursor)?;
+        let bottom_right_vertex_color = Color4u8::parse(cursor)?;
+        let material_index = cursor.read_u16()?;
+        let texture_count = cursor.read_u8()?;
+        let is_shape = cursor.read_u8()? != 0;
+
         let mut texture_uvs = Vec::new();
         for _ in 0..texture_count {
-            texture_uvs.push(TextureUv::parse(cursor));
+            texture_uvs.push(TextureUv::parse(cursor)?);
         }
-        Self {
+
+        Ok(Self {
             base,
             top_left_vertex_color,
             top_right_vertex_color,
@@ -147,7 +150,7 @@ impl BflytPicturePane {
             material_index,
             is_shape,
             texture_uvs,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -183,32 +186,32 @@ pub struct PerCharacterTransform {
 }
 
 impl PerCharacterTransform {
-    pub fn parse(cursor: &mut Cursor) -> Self {
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
         let mut transform = Self {
-            eval_time_offset: cursor.read_f32(),
-            eval_time_width: cursor.read_f32(),
-            loop_type: cursor.read_u8(),
-            origin_v: cursor.read_u8(),
-            has_anim_info: cursor.read_u8(),
-            reserve0: cursor.read_u8(),
-            reserve1: cursor.read_u32(),
+            eval_time_offset: cursor.read_f32()?,
+            eval_time_width: cursor.read_f32()?,
+            loop_type: cursor.read_u8()?,
+            origin_v: cursor.read_u8()?,
+            has_anim_info: cursor.read_u8()?,
+            reserve0: cursor.read_u8()?,
+            reserve1: cursor.read_u32()?,
             char_list: [
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
-                cursor.read_u8(),
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
+                cursor.read_u8()?,
             ],
             anim_info: None,
         };
@@ -217,7 +220,7 @@ impl PerCharacterTransform {
             transform.anim_info = Some(AnimInfo::parse(cursor, cursor.pos));
         }
 
-        transform
+        Ok(transform)
     }
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("PerCharacterTransform");
@@ -282,49 +285,49 @@ pub struct BflytTextBoxPane {
 }
 
 impl BflytTextBoxPane {
-    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Self {
-        let base = BflytPane::parse(cursor);
+    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Result<Self, FormatError> {
+        let base = BflytPane::parse(cursor)?;
         let txt1_base = section_start + 8;
 
-        let text_buffer_size = cursor.read_u16();
-        let text_length = cursor.read_u16();
-        let material_index = cursor.read_u16();
-        let font_index = cursor.read_u16();
-        let text_origin = cursor.read_u8();
-        let text_alignment = cursor.read_u8().into();
-        let text_flags = TextPaneFlags::decode(cursor.read_u16());
-        let italic_tilt = cursor.read_f32();
-        let text_offset = cursor.read_u32();
-        let font_top_color = Color4u8::parse(cursor);
-        let font_bottom_color = Color4u8::parse(cursor);
-        let font_size_x = cursor.read_f32();
-        let font_size_y = cursor.read_f32();
-        let character_space = cursor.read_f32();
-        let line_space = cursor.read_f32();
-        let label_offset = cursor.read_u32();
-        let shadow_translation_x = cursor.read_f32();
-        let shadow_translation_y = cursor.read_f32();
-        let shadow_size_x = cursor.read_f32();
-        let shadow_size_y = cursor.read_f32();
-        let shadow_top_color = Color4u8::parse(cursor);
-        let shadow_bottom_color = Color4u8::parse(cursor);
-        let shadow_italic_tilt = cursor.read_f32();
-        let line_transform_offset = cursor.read_u32();
-        let per_character_transform_offset = cursor.read_u32();
+        let text_buffer_size = cursor.read_u16()?;
+        let text_length = cursor.read_u16()?;
+        let material_index = cursor.read_u16()?;
+        let font_index = cursor.read_u16()?;
+        let text_origin = cursor.read_u8()?;
+        let text_alignment = cursor.read_u8()?.into();
+        let text_flags = TextPaneFlags::decode(cursor.read_u16()?);
+        let italic_tilt = cursor.read_f32()?;
+        let text_offset = cursor.read_u32()?;
+        let font_top_color = Color4u8::parse(cursor)?;
+        let font_bottom_color = Color4u8::parse(cursor)?;
+        let font_size_x = cursor.read_f32()?;
+        let font_size_y = cursor.read_f32()?;
+        let character_space = cursor.read_f32()?;
+        let line_space = cursor.read_f32()?;
+        let label_offset = cursor.read_u32()?;
+        let shadow_translation_x = cursor.read_f32()?;
+        let shadow_translation_y = cursor.read_f32()?;
+        let shadow_size_x = cursor.read_f32()?;
+        let shadow_size_y = cursor.read_f32()?;
+        let shadow_top_color = Color4u8::parse(cursor)?;
+        let shadow_bottom_color = Color4u8::parse(cursor)?;
+        let shadow_italic_tilt = cursor.read_f32()?;
+        let line_transform_offset = cursor.read_u32()?;
+        let per_character_transform_offset = cursor.read_u32()?;
 
         let text = if text_offset != 0 {
             let addr = txt1_base + text_offset as usize - 8;
             let saved = cursor.pos;
-            cursor.seek(addr);
+            cursor.seek(addr)?;
 
             let char_count = (text_length / 2) as usize;
             let mut utf16_chars = Vec::with_capacity(char_count);
 
             for _ in 0..char_count {
-                utf16_chars.push(cursor.read_u16());
+                utf16_chars.push(cursor.read_u16()?);
             }
 
-            cursor.seek(saved);
+            cursor.seek(saved)?;
 
             String::from_utf16(&utf16_chars).ok()
         } else {
@@ -334,9 +337,10 @@ impl BflytTextBoxPane {
         let label = if label_offset != 0 {
             let addr = txt1_base + label_offset as usize - 8;
             let saved = cursor.pos;
-            cursor.seek(addr);
-            let s = cursor.read_null_terminated_string();
-            cursor.seek(saved);
+            cursor.seek(addr)?;
+            let s = cursor.read_null_terminated_string()?;
+            cursor.seek(saved)?;
+
             Some(s)
         } else {
             None
@@ -345,14 +349,14 @@ impl BflytTextBoxPane {
         let per_character_transform =
             if text_flags.is_per_character_transform && per_character_transform_offset != 0 {
                 let addr = txt1_base + per_character_transform_offset as usize - 8;
-                cursor.seek(addr);
+                cursor.seek(addr)?;
 
-                Some(PerCharacterTransform::parse(cursor))
+                Some(PerCharacterTransform::parse(cursor)?)
             } else {
                 None
             };
 
-        Self {
+        Ok(Self {
             base,
             text_buffer_size,
             text_length,
@@ -380,7 +384,7 @@ impl BflytTextBoxPane {
             text,
             label,
             per_character_transform,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer, section_start: usize) {
@@ -460,21 +464,21 @@ pub struct WindowContent {
 }
 
 impl WindowContent {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        let top_left_vertex_color = Color4u8::parse(cursor);
-        let top_right_vertex_color = Color4u8::parse(cursor);
-        let bottom_left_vertex_color = Color4u8::parse(cursor);
-        let bottom_right_vertex_color = Color4u8::parse(cursor);
-        let material_index = cursor.read_u16();
-        let uv_coordinate_count = cursor.read_u8();
-        let reserve0 = cursor.read_u8();
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let top_left_vertex_color = Color4u8::parse(cursor)?;
+        let top_right_vertex_color = Color4u8::parse(cursor)?;
+        let bottom_left_vertex_color = Color4u8::parse(cursor)?;
+        let bottom_right_vertex_color = Color4u8::parse(cursor)?;
+        let material_index = cursor.read_u16()?;
+        let uv_coordinate_count = cursor.read_u8()?;
+        let reserve0 = cursor.read_u8()?;
         let mut picture_uvs = Vec::new();
 
         for _ in 0..uv_coordinate_count {
-            picture_uvs.push(TextureUv::parse(cursor));
+            picture_uvs.push(TextureUv::parse(cursor)?);
         }
 
-        Self {
+        Ok(Self {
             top_left_vertex_color,
             top_right_vertex_color,
             bottom_left_vertex_color,
@@ -483,7 +487,7 @@ impl WindowContent {
             uv_coordinate_count,
             reserve0,
             picture_uvs,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -511,13 +515,14 @@ pub struct WindowFrame {
 }
 
 impl WindowFrame {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            material_index: cursor.read_u16(),
-            texture_flip_mode: cursor.read_u8(),
-            reserve0: cursor.read_u8(),
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            material_index: cursor.read_u16()?,
+            texture_flip_mode: cursor.read_u8()?,
+            reserve0: cursor.read_u8()?,
+        })
     }
+
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("WindowFrame");
         writer.write_u16(self.material_index);
@@ -545,44 +550,44 @@ pub struct BflytWindowPane {
 }
 
 impl BflytWindowPane {
-    pub fn parse(cursor: &mut Cursor) -> Self {
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
         let wnd_base = cursor.pos - 8;
-        let base = BflytPane::parse(cursor);
+        let base = BflytPane::parse(cursor)?;
 
-        let inflation_left = cursor.read_i16();
-        let inflation_right = cursor.read_i16();
-        let inflation_top = cursor.read_i16();
-        let inflation_bottom = cursor.read_i16();
-        let frame_size_left = cursor.read_i16();
-        let frame_size_right = cursor.read_i16();
-        let frame_size_top = cursor.read_i16();
-        let frame_size_bottom = cursor.read_i16();
+        let inflation_left = cursor.read_i16()?;
+        let inflation_right = cursor.read_i16()?;
+        let inflation_top = cursor.read_i16()?;
+        let inflation_bottom = cursor.read_i16()?;
+        let frame_size_left = cursor.read_i16()?;
+        let frame_size_right = cursor.read_i16()?;
+        let frame_size_top = cursor.read_i16()?;
+        let frame_size_bottom = cursor.read_i16()?;
 
-        let frame_count = cursor.read_u8();
-        let flag = WindowFlags::decode(cursor.read_u8());
-        let reserve0 = cursor.read_u16();
-        let content_offset = cursor.read_u32();
-        let frame_offset_array_offset = cursor.read_u32();
+        let frame_count = cursor.read_u8()?;
+        let flag = WindowFlags::decode(cursor.read_u8()?);
+        let reserve0 = cursor.read_u16()?;
+        let content_offset = cursor.read_u32()?;
+        let frame_offset_array_offset = cursor.read_u32()?;
 
         let restore_point = cursor.pos;
-        cursor.seek(wnd_base + content_offset as usize);
-        let content = WindowContent::parse(cursor);
+        cursor.seek(wnd_base + content_offset as usize)?;
+        let content = WindowContent::parse(cursor)?;
 
-        cursor.seek(wnd_base + frame_offset_array_offset as usize);
+        cursor.seek(wnd_base + frame_offset_array_offset as usize)?;
         let mut frame_offsets = Vec::new();
         for _ in 0..frame_count {
-            frame_offsets.push(cursor.read_u32());
+            frame_offsets.push(cursor.read_u32()?);
         }
 
         let mut frames = Vec::new();
         for offset in frame_offsets {
-            cursor.seek(wnd_base + offset as usize);
-            frames.push(WindowFrame::parse(cursor));
+            cursor.seek(wnd_base + offset as usize)?;
+            frames.push(WindowFrame::parse(cursor)?);
         }
 
-        cursor.seek(restore_point);
+        cursor.seek(restore_point)?;
 
-        Self {
+        Ok(Self {
             base,
             inflation_left,
             inflation_right,
@@ -597,7 +602,7 @@ impl BflytWindowPane {
             reserve0,
             content,
             frames,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -660,24 +665,25 @@ pub struct PartsPaneBasicInfo {
 }
 
 impl PartsPaneBasicInfo {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            user_name: cursor.read_fixed_string(USER_NAME_LEN),
-            translation_x: cursor.read_f32(),
-            translation_y: cursor.read_f32(),
-            translation_z: cursor.read_f32(),
-            rotation_x: cursor.read_f32(),
-            rotation_y: cursor.read_f32(),
-            rotation_z: cursor.read_f32(),
-            scale_x: cursor.read_f32(),
-            scale_y: cursor.read_f32(),
-            size_x: cursor.read_f32(),
-            size_y: cursor.read_f32(),
-            pane_alpha: cursor.read_u8(),
-            reserve0: cursor.read_u8(),
-            reserve1: cursor.read_u8(),
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            user_name: cursor.read_fixed_string(USER_NAME_LEN)?,
+            translation_x: cursor.read_f32()?,
+            translation_y: cursor.read_f32()?,
+            translation_z: cursor.read_f32()?,
+            rotation_x: cursor.read_f32()?,
+            rotation_y: cursor.read_f32()?,
+            rotation_z: cursor.read_f32()?,
+            scale_x: cursor.read_f32()?,
+            scale_y: cursor.read_f32()?,
+            size_x: cursor.read_f32()?,
+            size_y: cursor.read_f32()?,
+            pane_alpha: cursor.read_u8()?,
+            reserve0: cursor.read_u8()?,
+            reserve1: cursor.read_u8()?,
+        })
     }
+
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("PaneBasicInfo");
         writer.write_fixed_string(&self.user_name, USER_NAME_LEN);
@@ -718,35 +724,39 @@ pub struct PartsProperty {
 }
 
 impl PartsProperty {
-    pub fn parse(cursor: &mut Cursor, last_parts_pane: usize, is_pane: &mut bool) -> Self {
+    pub fn parse(
+        cursor: &mut Cursor,
+        last_parts_pane: usize,
+        is_pane: &mut bool,
+    ) -> Result<Self, FormatError> {
         let mut property = Self {
-            property_name: cursor.read_fixed_string(PANE_NAME_LEN),
-            usage_flag: cursor.read_u8(),
-            basic_usage_flag: cursor.read_u8(),
-            material_usage_flag: cursor.read_u8(),
-            user_data_type: cursor.read_u8(),
+            property_name: cursor.read_fixed_string(PANE_NAME_LEN)?,
+            usage_flag: cursor.read_u8()?,
+            basic_usage_flag: cursor.read_u8()?,
+            material_usage_flag: cursor.read_u8()?,
+            user_data_type: cursor.read_u8()?,
             o_section: None,
             o_user_data: None,
             o_basic_info: None,
         };
 
-        let pane_offset = cursor.read_u32();
-        let user_data_offset = cursor.read_u32();
-        let pane_basic_info_offset = cursor.read_u32();
+        let pane_offset = cursor.read_u32()?;
+        let user_data_offset = cursor.read_u32()?;
+        let pane_basic_info_offset = cursor.read_u32()?;
 
         let restore_point = cursor.pos;
 
         if pane_offset > 0 {
-            cursor.seek(last_parts_pane + pane_offset as usize);
-            let pane = BflytSection::parse(cursor, is_pane, true);
+            cursor.seek(last_parts_pane + pane_offset as usize)?;
+            let pane = BflytSection::parse(cursor, is_pane, true)?;
 
             property.o_section = Some(pane);
             cursor.seek(restore_point);
         }
 
         if user_data_offset > 0 {
-            cursor.seek(last_parts_pane + user_data_offset as usize);
-            let user_data = BflytSection::parse(cursor, is_pane, true);
+            cursor.seek(last_parts_pane + user_data_offset as usize)?;
+            let user_data = BflytSection::parse(cursor, is_pane, true)?;
 
             property.o_user_data = Some(user_data);
             cursor.seek(restore_point);
@@ -754,13 +764,13 @@ impl PartsProperty {
 
         if pane_basic_info_offset > 0 {
             cursor.seek(last_parts_pane + pane_basic_info_offset as usize);
-            let basic_info = PartsPaneBasicInfo::parse(cursor);
+            let basic_info = PartsPaneBasicInfo::parse(cursor)?;
 
             property.o_basic_info = Some(basic_info);
             cursor.seek(restore_point);
         }
 
-        property
+        Ok(property)
     }
 
     pub fn serialize_header(&self, writer: &mut Writer) -> (usize, usize, usize) {
@@ -788,33 +798,33 @@ pub struct BflytPartsPane {
 }
 
 impl BflytPartsPane {
-    pub fn parse(cursor: &mut Cursor, is_pane: &mut bool) -> Self {
+    pub fn parse(cursor: &mut Cursor, is_pane: &mut bool) -> Result<Self, FormatError> {
         let base_offset = cursor.pos;
-        let base = BflytPane::parse(cursor);
+        let base = BflytPane::parse(cursor)?;
 
-        let property_count = cursor.read_u32();
-        let magnify_x = cursor.read_f32();
-        let magnify_y = cursor.read_f32();
+        let property_count = cursor.read_u32()?;
+        let magnify_x = cursor.read_f32()?;
+        let magnify_y = cursor.read_f32()?;
 
         let props_start = cursor.pos;
 
         let mut properties = Vec::new();
 
         for _ in 0..property_count {
-            let property = PartsProperty::parse(cursor, base_offset - 8, is_pane);
+            let property = PartsProperty::parse(cursor, base_offset - 8, is_pane)?;
             properties.push(property);
         }
 
-        let o_layout_name = cursor.read_null_terminated_string();
-        cursor.seek(props_start + 0x28 * property_count as usize + o_layout_name.len() + 1);
+        let o_layout_name = cursor.read_null_terminated_string()?;
+        cursor.seek(props_start + 0x28 * property_count as usize + o_layout_name.len() + 1)?;
 
-        Self {
+        Ok(Self {
             base,
             magnify_x,
             magnify_y,
             properties,
             o_layout_name,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer, section_start: usize) {
@@ -868,16 +878,17 @@ pub struct BflytAlignmentPane {
 }
 
 impl BflytAlignmentPane {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        let base = BflytPane::parse(cursor);
-        Self {
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let base = BflytPane::parse(cursor)?;
+
+        Ok(Self {
             base,
-            direction: cursor.read_u32(),
-            default_margin: cursor.read_f32(),
-            is_align_last_pane: cursor.read_u8() != 0,
-            is_vertical_alignment: cursor.read_u8() != 0,
-            reserve0: cursor.read_u16(),
-        }
+            direction: cursor.read_u32()?,
+            default_margin: cursor.read_f32()?,
+            is_align_last_pane: cursor.read_u8()? != 0,
+            is_vertical_alignment: cursor.read_u8()? != 0,
+            reserve0: cursor.read_u16()?,
+        })
     }
     pub fn serialize(&self, writer: &mut Writer) {
         self.base.serialize(writer);
@@ -906,30 +917,30 @@ pub struct BflytCapturePane {
 }
 
 impl BflytCapturePane {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        let base = BflytPane::parse(cursor);
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let base = BflytPane::parse(cursor)?;
         let mut reserve0 = [0u32; 4];
 
-        for v in &mut reserve0 {
-            *v = cursor.read_u32();
+        for val in &mut reserve0 {
+            *val = cursor.read_u32()?;
         }
 
         let clear_color = [
-            cursor.read_f32(),
-            cursor.read_f32(),
-            cursor.read_f32(),
-            cursor.read_f32(),
+            cursor.read_f32()?,
+            cursor.read_f32()?,
+            cursor.read_f32()?,
+            cursor.read_f32()?,
         ];
 
-        let image_format = cursor.read_u16();
-        let is_copy_framebuffer = cursor.read_u8() != 0;
-        let is_create_resource = cursor.read_u8() != 0;
-        let reserve1 = cursor.read_u16();
-        let reserve2 = [cursor.read_u8(), cursor.read_u8(), cursor.read_u8()];
-        let reserve3 = [cursor.read_u8(), cursor.read_u8(), cursor.read_u8()];
-        let scale = cursor.read_f32();
+        let image_format = cursor.read_u16()?;
+        let is_copy_framebuffer = cursor.read_u8()? != 0;
+        let is_create_resource = cursor.read_u8()? != 0;
+        let reserve1 = cursor.read_u16()?;
+        let reserve2 = [cursor.read_u8()?, cursor.read_u8()?, cursor.read_u8()?];
+        let reserve3 = [cursor.read_u8()?, cursor.read_u8()?, cursor.read_u8()?];
+        let scale = cursor.read_f32()?;
 
-        Self {
+        Ok(Self {
             base,
             reserve0,
             clear_color,
@@ -940,7 +951,7 @@ impl BflytCapturePane {
             reserve2,
             reserve3,
             scale,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -950,19 +961,24 @@ impl BflytCapturePane {
         for v in &self.reserve0 {
             writer.write_u32(*v);
         }
+
         for v in &self.clear_color {
             writer.write_f32(*v);
         }
+
         writer.write_u16(self.image_format);
         writer.write_u8(self.is_copy_framebuffer.into());
         writer.write_u8(self.is_create_resource.into());
         writer.write_u16(self.reserve1);
+
         for v in &self.reserve2 {
             writer.write_u8(*v);
         }
+
         for v in &self.reserve3 {
             writer.write_u8(*v);
         }
+
         writer.write_f32(self.scale);
     }
 }

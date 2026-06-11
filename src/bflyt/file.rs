@@ -12,7 +12,7 @@ use crate::{
             BflytTextBoxPane, BflytWindowPane,
         },
     },
-    core::{Cursor, ReadWriteable, SectionHeader, Writer, tchar_code32},
+    core::{Cursor, FormatError, ReadWriteable, SectionHeader, Writer, tchar_code32},
     ui2d::userdata::ResUi2dUserDataSection,
 };
 
@@ -44,42 +44,46 @@ pub enum BflytSection {
 }
 
 impl BflytSection {
-    pub fn parse(cursor: &mut Cursor, last_was_pane: &mut bool, is_embed: bool) -> Self {
+    pub fn parse(
+        cursor: &mut Cursor,
+        last_was_pane: &mut bool,
+        is_embed: bool,
+    ) -> Result<Self, FormatError> {
         let section_start = cursor.pos;
-        let magic = cursor.read_u32();
-        let section_size = cursor.read_u32();
+        let magic = cursor.read_u32()?;
+        let section_size = cursor.read_u32()?;
         let end = section_start + section_size as usize;
 
         let section = match magic {
             MAGIC_USERDATA => {
-                let s = ResUi2dUserDataSection::parse(cursor, *last_was_pane);
+                let s = ResUi2dUserDataSection::parse(cursor, *last_was_pane)?;
                 BflytSection::UserData(s)
             }
             MAGIC_LAYOUT => {
-                let s = BflytLayout::parse(cursor);
+                let s = BflytLayout::parse(cursor)?;
                 if !is_embed {
                     *last_was_pane = false;
                 }
                 BflytSection::Layout(s)
             }
             MAGIC_TEXTURELIST => {
-                let s = BflytTextureList::parse(cursor);
+                let s = BflytTextureList::parse(cursor)?;
                 BflytSection::TextureList(s)
             }
             MAGIC_FONTLIST => {
-                let s = BflytFontList::parse(cursor);
+                let s = BflytFontList::parse(cursor)?;
                 BflytSection::FontList(s)
             }
             MAGIC_MATERIALLIST => {
-                let s = BflytMaterialList::parse(cursor, section_start);
+                let s = BflytMaterialList::parse(cursor, section_start)?;
                 BflytSection::MaterialList(s)
             }
             MAGIC_CAPTURETEXTURELIST => {
-                let s = BflytCaptureTextureList::parse(cursor, section_start);
+                let s = BflytCaptureTextureList::parse(cursor, section_start)?;
                 BflytSection::CaptureTextureList(s)
             }
             MAGIC_VECTORGRAPHICSLIST => {
-                let s = BflytVectorGraphicsList::parse(cursor, section_start);
+                let s = BflytVectorGraphicsList::parse(cursor, section_start)?;
                 BflytSection::VectorGraphicsList(s)
             }
             MAGIC_PANESTART => BflytSection::PaneStart,
@@ -87,50 +91,50 @@ impl BflytSection {
             MAGIC_GROUPSTART => BflytSection::GroupStart,
             MAGIC_GROUPEND => BflytSection::GroupEnd,
             MAGIC_PANE => {
-                let s = BflytPane::parse(cursor);
+                let s = BflytPane::parse(cursor)?;
                 if !is_embed {
                     *last_was_pane = true;
                 }
                 BflytSection::Pane(s)
             }
             MAGIC_PICTUREPANE => {
-                let s = BflytPicturePane::parse(cursor);
+                let s = BflytPicturePane::parse(cursor)?;
                 BflytSection::PicturePane(s)
             }
             MAGIC_TEXTBOXPANE => {
-                let s = BflytTextBoxPane::parse(cursor, section_start);
+                let s = BflytTextBoxPane::parse(cursor, section_start)?;
                 BflytSection::TextBoxPane(s)
             }
             MAGIC_WINDOWPANE => {
-                let s = BflytWindowPane::parse(cursor);
+                let s = BflytWindowPane::parse(cursor)?;
                 BflytSection::WindowPane(s)
             }
             MAGIC_PARTSPANE => {
-                let s = BflytPartsPane::parse(cursor, last_was_pane);
+                let s = BflytPartsPane::parse(cursor, last_was_pane)?;
                 BflytSection::PartsPane(s)
             }
             MAGIC_ALIGNMENTPANE => {
-                let s = BflytAlignmentPane::parse(cursor);
+                let s = BflytAlignmentPane::parse(cursor)?;
                 BflytSection::AlignmentPane(s)
             }
             MAGIC_CAPTUREPANE => {
-                let s = BflytCapturePane::parse(cursor);
+                let s = BflytCapturePane::parse(cursor)?;
                 BflytSection::CapturePane(s)
             }
             MAGIC_BOUNDINGPANE => {
-                let s = BflytPane::parse(cursor);
+                let s = BflytPane::parse(cursor)?;
                 BflytSection::BoundingPane(s)
             }
             MAGIC_SCISSORPANE => {
-                let s = BflytPane::parse(cursor);
+                let s = BflytPane::parse(cursor)?;
                 BflytSection::ScissorPane(s)
             }
             MAGIC_GROUP => {
-                let s = BflytGroup::parse(cursor);
+                let s = BflytGroup::parse(cursor)?;
                 BflytSection::Group(s)
             }
             MAGIC_CONTROLSOURCE => {
-                let s = BflytControlSource::parse(cursor);
+                let s = BflytControlSource::parse(cursor)?;
                 BflytSection::ControlSource(s)
             }
             _ => {
@@ -138,8 +142,9 @@ impl BflytSection {
 
                 let data_size = (section_size as usize).saturating_sub(8);
                 let data = cursor
-                    .read_bytes(data_size.min(end.saturating_sub(cursor.pos)))
+                    .read_bytes(data_size.min(end.saturating_sub(cursor.pos)))?
                     .to_vec();
+
                 BflytSection::Unknown(
                     SectionHeader {
                         magic,
@@ -150,9 +155,9 @@ impl BflytSection {
             }
         };
 
-        cursor.seek(end);
+        cursor.seek(end)?;
 
-        section
+        Ok(section)
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -206,29 +211,40 @@ pub struct Bflyt {
 impl ReadWriteable for Bflyt {
     const EXTENSION: &'static str = "bflyt";
 
-    fn parse(file: &[u8]) -> Result<Self, String> {
+    fn parse(file: &[u8]) -> Result<Self, FormatError> {
         let mut cursor = Cursor { data: file, pos: 0 };
 
-        let magic = cursor.read_u32();
+        let magic = cursor.read_u32()?;
         if magic != tchar_code32(b"FLYT") {
-            return Err("bad magic: expected FLYT".into());
+            return Err(FormatError::InvalidMagic {
+                expected: "FLYT",
+                found: magic,
+                offset: 0,
+            });
         }
 
-        let endianness = cursor.read_u16();
-        let header_size = cursor.read_u16();
-        let micro_version = cursor.read_u16();
-        let minor_version = cursor.read_u8();
-        let major_version = cursor.read_u8();
-        let _file_size = cursor.read_u32();
-        let section_count = cursor.read_u32();
+        let endianness = cursor.read_u16()?;
+        let header_size = cursor.read_u16()?;
+        let micro_version = cursor.read_u16()?;
+        let minor_version = cursor.read_u8()?;
+        let major_version = cursor.read_u8()?;
+        let _file_size = cursor.read_u32()?;
+        let section_count = cursor.read_u32()?;
 
-        cursor.seek(header_size as usize);
+        cursor.seek(header_size as usize)?;
 
         let mut sections = Vec::new();
 
         let mut last_was_pane = false;
-        for _ in 0..section_count {
-            let section = BflytSection::parse(&mut cursor, &mut last_was_pane, false);
+        for i in 0..section_count {
+            let section =
+                BflytSection::parse(&mut cursor, &mut last_was_pane, false).map_err(|e| {
+                    FormatError::SectionCountMismatch {
+                        expected: section_count,
+                        actual: i,
+                        source: Box::new(e),
+                    }
+                })?;
 
             sections.push(section);
         }
