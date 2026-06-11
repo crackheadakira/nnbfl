@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     bflan::{anim_info::PaneAnimInfo, anim_tag::ResBflanPaneAnimTag, constants::*},
     bflyt::constants::*,
-    core::{Cursor, SectionHeader, Writer, tchar_code32},
+    core::{Cursor, ReadWriteable, SectionHeader, Writer, tchar_code32},
     ui2d::userdata::ResUi2dUserDataSection,
 };
 
@@ -19,8 +19,10 @@ pub struct Bflan {
     pub sections: Vec<BflanSections>,
 }
 
-impl Bflan {
-    pub fn parse(file: &[u8]) -> Result<Self, String> {
+impl ReadWriteable for Bflan {
+    const EXTENSION: &'static str = "bflan";
+
+    fn parse(file: &[u8]) -> Result<Self, String> {
         let mut cursor = Cursor { data: file, pos: 0 };
 
         let magic = cursor.read_u32();
@@ -50,7 +52,7 @@ impl Bflan {
         })
     }
 
-    pub fn serialize(&self) -> Writer {
+    fn write(&self) -> Writer {
         let mut writer = Writer::new();
 
         writer.mark("File header");

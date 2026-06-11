@@ -2,8 +2,9 @@ use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    Format,
     bflyt::flags::{DropShadowFlags, TexOptions},
-    core::{Cursor, Writer},
+    core::{Cursor, FormatError, Writer},
     ui2d::types::{Color4f, VertexPos},
 };
 
@@ -15,12 +16,12 @@ pub struct ResUi2dSystemDataArray {
 }
 
 impl ResUi2dSystemDataArray {
-    pub fn parse(cursor: &mut Cursor, is_pane: bool) -> Self {
+    pub fn parse(cursor: &mut Cursor, is_pane: bool) -> Result<Self, FormatError> {
         let base_offset = cursor.pos;
 
-        let reserve0 = cursor.read_u16();
-        let count = cursor.read_u16();
-        let offset = cursor.read_u32();
+        let reserve0 = cursor.read_u16()?;
+        let count = cursor.read_u16()?;
+        let offset = cursor.read_u32()?;
 
         let post_header_point = cursor.pos;
 
@@ -37,10 +38,10 @@ impl ResUi2dSystemDataArray {
             data_array.push(data);
         }
 
-        Self {
+        Ok(Self {
             reserve0,
             data_array,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -121,10 +122,11 @@ pub enum ResUi2dPaneData {
 }
 
 impl ResUi2dPaneData {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        let data_type: Ui2dPaneSystemDataType = cursor.read_u32().into();
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let offset = cursor.pos;
+        let data_type: Ui2dPaneSystemDataType = cursor.read_u32()?.into();
 
-        match data_type {
+        let res = match data_type {
             Ui2dPaneSystemDataType::VertexPos0 => Self::VertexPos0(VertexPos::parse(cursor)),
             Ui2dPaneSystemDataType::VertexPos1 => Self::VertexPos1(VertexPos::parse(cursor)),
             Ui2dPaneSystemDataType::MaskTexture => {
@@ -139,8 +141,16 @@ impl ResUi2dPaneData {
             Ui2dPaneSystemDataType::ProceduralShape => {
                 Self::ProceduralShape(ResUi2dSystemDataProceduralShape::parse(cursor))
             }
-            _ => panic!("Got invalid pane system data type"),
-        }
+            _ => {
+                return Err(FormatError::UnknownTag {
+                    enum_name: "Ui2dPaneSystemDataType",
+                    tag: data_type.into(),
+                    offset: offset,
+                });
+            }
+        };
+
+        Ok(res)
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -246,11 +256,11 @@ pub struct ResUi2dSystemDataAlignment {
 }
 
 impl ResUi2dSystemDataAlignment {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            options: cursor.read_u32(),
-            margin: cursor.read_f32(),
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            options: cursor.read_u32()?,
+            margin: cursor.read_f32()?,
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -308,41 +318,41 @@ pub struct ResUi2dSystemDataDropShadow {
 }
 
 impl ResUi2dSystemDataDropShadow {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            texture_id: cursor.read_u16(),
-            u_options: TexOptions::decode(cursor.read_u8()),
-            v_options: TexOptions::decode(cursor.read_u8()),
-            flags: DropShadowFlags::decode(cursor.read_u8()),
-            reserve0: [cursor.read_u8(), cursor.read_u8(), cursor.read_u8()],
-            max_size: cursor.read_u8(),
-            stroke_blend_mode: cursor.read_u8().into(),
-            outer_glow_blend_mode: cursor.read_u8().into(),
-            drop_shadow_blend_mode: cursor.read_u8().into(),
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            texture_id: cursor.read_u16()?,
+            u_options: TexOptions::decode(cursor.read_u8()?),
+            v_options: TexOptions::decode(cursor.read_u8()?),
+            flags: DropShadowFlags::decode(cursor.read_u8()?),
+            reserve0: [cursor.read_u8()?, cursor.read_u8()?, cursor.read_u8()?],
+            max_size: cursor.read_u8()?,
+            stroke_blend_mode: cursor.read_u8()?.into(),
+            outer_glow_blend_mode: cursor.read_u8()?.into(),
+            drop_shadow_blend_mode: cursor.read_u8()?.into(),
             reserve5: [
-                cursor.read_u32(),
-                cursor.read_u32(),
-                cursor.read_u32(),
-                cursor.read_u32(),
+                cursor.read_u32()?,
+                cursor.read_u32()?,
+                cursor.read_u32()?,
+                cursor.read_u32()?,
             ],
-            stroke_size: cursor.read_f32(),
-            stroke_color: Color4f::parse(cursor),
+            stroke_size: cursor.read_f32()?,
+            stroke_color: Color4f::parse(cursor)?,
 
-            outer_glow_color: Color4f::parse(cursor),
-            outer_glow_spread: cursor.read_f32(),
-            outer_glow_size: cursor.read_f32(),
+            outer_glow_color: Color4f::parse(cursor)?,
+            outer_glow_spread: cursor.read_f32()?,
+            outer_glow_size: cursor.read_f32()?,
 
-            drop_shadow_color: Color4f::parse(cursor),
-            drop_shadow_angle: cursor.read_f32(),
-            drop_shadow_distance: cursor.read_f32(),
-            drop_shadow_spread: cursor.read_f32(),
-            drop_shadow_size: cursor.read_f32(),
+            drop_shadow_color: Color4f::parse(cursor)?,
+            drop_shadow_angle: cursor.read_f32()?,
+            drop_shadow_distance: cursor.read_f32()?,
+            drop_shadow_spread: cursor.read_f32()?,
+            drop_shadow_size: cursor.read_f32()?,
 
-            reserve15: cursor.read_u32(),
-            reserve16: cursor.read_u32(),
-            reserve17: cursor.read_u32(),
-            reserve18: cursor.read_u32(),
-        }
+            reserve15: cursor.read_u32()?,
+            reserve16: cursor.read_u32()?,
+            reserve17: cursor.read_u32()?,
+            reserve18: cursor.read_u32()?,
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -404,23 +414,23 @@ pub struct ResUi2dSystemDataMaskTexture {
 }
 
 impl ResUi2dSystemDataMaskTexture {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            flags: cursor.read_u8(),
-            reserve0: [cursor.read_u8(), cursor.read_u8(), cursor.read_u8()],
-            texture_id: cursor.read_u16(),
-            u_options: cursor.read_u8(),
-            v_options: cursor.read_u8(),
-            tex_ext_flags: cursor.read_u32(),
-            capture_texture_id: cursor.read_u16(),
-            capture_u_options: cursor.read_u8(),
-            capture_v_options: cursor.read_u8(),
-            is_use_capture_mask: cursor.read_u8() != 0,
-            reserve1: [cursor.read_u8(), cursor.read_u8(), cursor.read_u8()],
-            translation: [cursor.read_f32(), cursor.read_f32()],
-            rotation: cursor.read_f32(),
-            scale: [cursor.read_f32(), cursor.read_f32()],
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            flags: cursor.read_u8()?,
+            reserve0: [cursor.read_u8()?, cursor.read_u8()?, cursor.read_u8()?],
+            texture_id: cursor.read_u16()?,
+            u_options: cursor.read_u8()?,
+            v_options: cursor.read_u8()?,
+            tex_ext_flags: cursor.read_u32()?,
+            capture_texture_id: cursor.read_u16()?,
+            capture_u_options: cursor.read_u8()?,
+            capture_v_options: cursor.read_u8()?,
+            is_use_capture_mask: cursor.read_u8()? != 0,
+            reserve1: [cursor.read_u8()?, cursor.read_u8()?, cursor.read_u8()?],
+            translation: [cursor.read_f32()?, cursor.read_f32()?],
+            rotation: cursor.read_f32()?,
+            scale: [cursor.read_f32()?, cursor.read_f32()?],
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {

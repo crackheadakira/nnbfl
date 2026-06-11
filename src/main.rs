@@ -3,13 +3,15 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::exit;
+use thiserror::Error;
 
 use crate::bflan::file::Bflan;
 use crate::bflyt::file::Bflyt;
-use crate::core::Writer;
+use crate::core::{ReadWriteable, Writer};
 
 mod bflan;
 mod bflyt;
+mod cli;
 mod core;
 mod ui2d;
 
@@ -63,44 +65,75 @@ enum Action {
     },
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Command {
+    Extract,
+    Pack,
+}
+
 fn main() {
     let cli = Cli::parse();
 
-    let had_failures = match &cli.format {
-        Format::Bflan { action } => handle_action("bflan", action),
-        Format::Bflyt { action } => handle_action("bflyt", action),
-    };
+    let had_failures = cli.format.execute();
 
     if had_failures {
         exit(1);
     }
 }
 
-fn handle_action(ext: &str, action: &Action) -> bool {
-    match action {
-        Action::Extract { input, output } => {
-            validate_input(input);
-            let output = resolve_output(input, output.as_deref(), "json");
-            process_command("extract", ext, input, &output)
+impl Format {
+    fn execute(&self) -> bool {
+        match &self {
+            Self::Bflan { action } => action.handle::<Bflan>(),
+            Self::Bflyt { action } => action.handle::<Bflyt>(),
         }
-        Action::Pack { input, output } => {
-            validate_input(input);
-            let output = resolve_output(input, output.as_deref(), ext);
-            process_command("pack", ext, input, &output)
-        }
-        Action::Test {
-            input,
-            verbose,
-            quiet,
-        } => {
-            validate_input(input);
-            let mut files = Vec::new();
-            if input.is_dir() {
-                find_files(input, ext, &mut files);
-            } else {
-                files.push(input.clone());
+    }
+}
+
+impl Action {
+    fn handle<T: ReadWriteable>(&self) -> bool {
+        match self {
+            Self::Extract { input, output } | Self::Pack { input, output } => {
+                validate_input(input);
+
+                let ext = match self {
+                    Self::Extract { .. } => "json",
+                    _ => T::EXTENSION,
+                };
+
+                let resolved_output = resolve_output(input, output.as_deref(), ext);
+
+                let cmd = match self {
+                    Self::Extract { .. } => Command::Extract,
+                    _ => Command::Pack,
+                };
+
+                process_command::<T>(cmd, input, &resolved_output)
             }
-            test_roundtrip(ext, input, files, *verbose, *quiet)
+
+            Self::Test {
+                input,
+                verbose,
+                quiet,
+            } => {
+                validate_input(input);
+                let mut files = Vec::new();
+                if input.is_dir() {
+                    find_files(input, T::EXTENSION, &mut files);
+                } else {
+                    files.push(input.clone());
+                }
+                test_roundtrip::<T>(input, files, *verbose, *quiet)
+            }
+        }
+    }
+}
+
+impl Command {
+    pub fn route<T: ReadWriteable>(&self, input: &Path, output: &Path) -> bool {
+        match self {
+            Self::Extract => extract_file::<T>(input, output),
+            Self::Pack => pack_file::<T>(input, output),
         }
     }
 }
@@ -119,26 +152,23 @@ fn validate_input(input: &Path) {
     }
 }
 
-fn process_command(command: &str, ext: &str, input_path: &Path, output_path: &Path) -> bool {
+fn process_command<T: ReadWriteable>(
+    command: Command,
+    input_path: &Path,
+    output_path: &Path,
+) -> bool {
     if input_path.is_dir() {
-        process_batch(command, ext, input_path, output_path)
+        process_batch::<T>(command, input_path, output_path)
     } else {
         if let Some(parent) = output_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        match (command, ext) {
-            ("extract", "bflan") => extract_bflan_file(input_path, output_path),
-            ("pack", "bflan") => pack_bflan_file(input_path, output_path),
-            ("extract", "bflyt") => extract_bflyt_file(input_path, output_path),
-            ("pack", "bflyt") => pack_bflyt_file(input_path, output_path),
-            _ => unreachable!(),
-        }
+        command.route::<T>(input_path, output_path)
     }
 }
 
-fn test_roundtrip(
-    ext: &str,
+fn test_roundtrip<T: ReadWriteable>(
     input_dir: &Path,
     files: Vec<PathBuf>,
     verbose: bool,
@@ -159,7 +189,7 @@ fn test_roundtrip(
             continue;
         }
 
-        if path.extension().is_none_or(|e| e != ext) {
+        if path.extension().is_none_or(|e| e != T::EXTENSION) {
             continue;
         }
 
@@ -176,11 +206,7 @@ fn test_roundtrip(
             }
         };
 
-        let writer_result = match ext {
-            "bflan" => Bflan::parse(&file_in).map(|f| f.serialize()),
-            "bflyt" => Bflyt::parse(&file_in).map(|f| f.serialize()),
-            _ => unreachable!(),
-        };
+        let writer_result = T::parse(&file_in).map(|f| f.write());
 
         let writer = match writer_result {
             Ok(w) => w,
@@ -291,7 +317,7 @@ fn find_files(dir: &Path, target_ext: &str, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn extract_bflan_file(input_path: &Path, output_path: &Path) -> bool {
+fn extract_file<T: ReadWriteable>(input_path: &Path, output_path: &Path) -> bool {
     let file_in = match fs::read(input_path) {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -300,7 +326,7 @@ fn extract_bflan_file(input_path: &Path, output_path: &Path) -> bool {
         }
     };
 
-    let parsed = match Bflan::parse(&file_in) {
+    let parsed = match T::parse(&file_in) {
         Ok(res) => res,
         Err(e) => {
             eprintln!("Failed to parse {input_path:?}: {e}");
@@ -331,47 +357,7 @@ fn extract_bflan_file(input_path: &Path, output_path: &Path) -> bool {
     }
 }
 
-fn extract_bflyt_file(input_path: &Path, output_path: &Path) -> bool {
-    let file_in = match fs::read(input_path) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("Failed to read {input_path:?}: {e}");
-            return true;
-        }
-    };
-
-    let parsed = match Bflyt::parse(&file_in) {
-        Ok(res) => res,
-        Err(e) => {
-            eprintln!("Failed to parse {input_path:?}: {e}");
-            return true;
-        }
-    };
-
-    let json = match serde_json::to_string_pretty(&parsed) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to serialize {input_path:?}: {e}");
-            return true;
-        }
-    };
-
-    match fs::write(output_path, json) {
-        Ok(_) => {
-            println!(
-                "Extracted {:?} to {output_path:?}",
-                input_path.file_name().unwrap()
-            );
-            false
-        }
-        Err(e) => {
-            eprintln!("Failed to write {output_path:?}: {e}");
-            true
-        }
-    }
-}
-
-fn pack_bflan_file(input_path: &Path, output_path: &Path) -> bool {
+fn pack_file<T: ReadWriteable>(input_path: &Path, output_path: &Path) -> bool {
     let json = match fs::read_to_string(input_path) {
         Ok(s) => s,
         Err(e) => {
@@ -380,7 +366,7 @@ fn pack_bflan_file(input_path: &Path, output_path: &Path) -> bool {
         }
     };
 
-    let parsed: Bflan = match serde_json::from_str(&json) {
+    let parsed: T = match serde_json::from_str(&json) {
         Ok(data) => data,
         Err(e) => {
             eprintln!("Failed to deserialize {input_path:?}: {e}");
@@ -388,7 +374,7 @@ fn pack_bflan_file(input_path: &Path, output_path: &Path) -> bool {
         }
     };
 
-    let out = parsed.serialize().buffer;
+    let out = parsed.write().buffer;
 
     match fs::write(output_path, out) {
         Ok(_) => {
@@ -402,44 +388,14 @@ fn pack_bflan_file(input_path: &Path, output_path: &Path) -> bool {
     }
 }
 
-fn pack_bflyt_file(input_path: &Path, output_path: &Path) -> bool {
-    let json = match fs::read_to_string(input_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to read {input_path:?}: {e}");
-            return true;
-        }
-    };
-
-    let parsed: Bflyt = match serde_json::from_str(&json) {
-        Ok(data) => data,
-        Err(e) => {
-            eprintln!("Failed to deserialize {input_path:?}: {e}");
-            return true;
-        }
-    };
-
-    let out = parsed.serialize().buffer;
-    match fs::write(output_path, out) {
-        Ok(_) => {
-            println!("Packed: {:?}", input_path.file_name().unwrap());
-            false
-        }
-        Err(e) => {
-            eprintln!("Failed to write {output_path:?}: {e}");
-            true
-        }
-    }
-}
-
-fn process_batch(command: &str, format_ext: &str, in_dir: &Path, out_dir: &Path) -> bool {
+fn process_batch<T: ReadWriteable>(command: Command, in_dir: &Path, out_dir: &Path) -> bool {
     if let Err(e) = fs::create_dir_all(out_dir) {
         eprintln!("Failed to create output directory {out_dir:?}: {e}");
         exit(1);
     }
 
-    let search_ext = if command == "extract" {
-        format_ext
+    let search_ext = if command == Command::Extract {
+        T::EXTENSION
     } else {
         "json"
     };
@@ -460,23 +416,17 @@ fn process_batch(command: &str, format_ext: &str, in_dir: &Path, out_dir: &Path)
     for path in target_files {
         let relative = path.strip_prefix(in_dir).unwrap_or(&path);
         let mut out_path = out_dir.join(relative);
-        out_path.set_extension(if command == "extract" {
+        out_path.set_extension(if command == Command::Extract {
             "json"
         } else {
-            format_ext
+            T::EXTENSION
         });
 
         if let Some(parent) = out_path.parent() {
             let _ = fs::create_dir_all(parent);
         }
 
-        let fail = match (command, format_ext) {
-            ("extract", "bflan") => extract_bflan_file(&path, &out_path),
-            ("pack", "bflan") => pack_bflan_file(&path, &out_path),
-            ("extract", "bflyt") => extract_bflyt_file(&path, &out_path),
-            ("pack", "bflyt") => pack_bflyt_file(&path, &out_path),
-            _ => unreachable!(),
-        };
+        let fail = command.route::<T>(&path, &out_path);
 
         if fail {
             failed += 1;
@@ -485,6 +435,6 @@ fn process_batch(command: &str, format_ext: &str, in_dir: &Path, out_dir: &Path)
         }
     }
 
-    println!("Batch {command} complete: {success} succeeded, {failed} failed.");
+    println!("Batch {command:?} complete: {success} succeeded, {failed} failed.");
     failed > 0
 }

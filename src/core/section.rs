@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::core::Cursor;
+use crate::core::{Cursor, FormatError};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct SectionHeader {
@@ -9,10 +9,10 @@ pub struct SectionHeader {
 }
 
 impl SectionHeader {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            magic: cursor.read_u32(),
-            size: cursor.read_u32(),
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            magic: cursor.read_u32()?,
+            size: cursor.read_u32()?,
+        })
     }
 }

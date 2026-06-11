@@ -12,7 +12,7 @@ use crate::{
             BflytTextBoxPane, BflytWindowPane,
         },
     },
-    core::{Cursor, SectionHeader, Writer, tchar_code32},
+    core::{Cursor, ReadWriteable, SectionHeader, Writer, tchar_code32},
     ui2d::userdata::ResUi2dUserDataSection,
 };
 
@@ -203,8 +203,10 @@ pub struct Bflyt {
     pub sections: Vec<BflytSection>,
 }
 
-impl Bflyt {
-    pub fn parse(file: &[u8]) -> Result<Self, String> {
+impl ReadWriteable for Bflyt {
+    const EXTENSION: &'static str = "bflyt";
+
+    fn parse(file: &[u8]) -> Result<Self, String> {
         let mut cursor = Cursor { data: file, pos: 0 };
 
         let magic = cursor.read_u32();
@@ -245,7 +247,7 @@ impl Bflyt {
         Ok(bflyt)
     }
 
-    pub fn serialize(&self) -> Writer {
+    fn write(&self) -> Writer {
         let mut this = Self {
             magic: self.magic,
             endianness: self.endianness,
@@ -283,7 +285,9 @@ impl Bflyt {
 
         writer
     }
+}
 
+impl Bflyt {
     fn get_texture_names(&self) -> Vec<String> {
         self.sections
             .iter()
