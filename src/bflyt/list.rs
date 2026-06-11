@@ -66,7 +66,7 @@ impl BflytTextureList {
 
         let mut textures = Vec::new();
         for offset in offsets {
-            cursor.seek(offsets_start + offset as usize);
+            cursor.seek(offsets_start + offset as usize)?;
             textures.push(cursor.read_null_terminated_string()?);
         }
 
@@ -109,7 +109,7 @@ impl BflytFontList {
 
         let mut fonts = Vec::new();
         for offset in offsets {
-            cursor.seek(offsets_start + offset as usize);
+            cursor.seek(offsets_start + offset as usize)?;
             fonts.push(cursor.read_null_terminated_string()?);
         }
 
@@ -1566,7 +1566,7 @@ impl BflytControlSource {
 
         let mut anim_names = Vec::with_capacity(anim_count);
         for offset in anim_offsets {
-            cursor.seek(anim_table_base + offset);
+            cursor.seek(anim_table_base + offset)?;
             anim_names.push(cursor.read_null_terminated_string()?);
         }
 

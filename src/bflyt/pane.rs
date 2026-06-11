@@ -217,7 +217,7 @@ impl PerCharacterTransform {
         };
 
         if transform.has_anim_info != 0 {
-            transform.anim_info = Some(AnimInfo::parse(cursor, cursor.pos));
+            transform.anim_info = Some(AnimInfo::parse(cursor, cursor.pos)?);
         }
 
         Ok(transform)
@@ -751,7 +751,7 @@ impl PartsProperty {
             let pane = BflytSection::parse(cursor, is_pane, true)?;
 
             property.o_section = Some(pane);
-            cursor.seek(restore_point);
+            cursor.seek(restore_point)?;
         }
 
         if user_data_offset > 0 {
@@ -759,15 +759,15 @@ impl PartsProperty {
             let user_data = BflytSection::parse(cursor, is_pane, true)?;
 
             property.o_user_data = Some(user_data);
-            cursor.seek(restore_point);
+            cursor.seek(restore_point)?;
         }
 
         if pane_basic_info_offset > 0 {
-            cursor.seek(last_parts_pane + pane_basic_info_offset as usize);
+            cursor.seek(last_parts_pane + pane_basic_info_offset as usize)?;
             let basic_info = PartsPaneBasicInfo::parse(cursor)?;
 
             property.o_basic_info = Some(basic_info);
-            cursor.seek(restore_point);
+            cursor.seek(restore_point)?;
         }
 
         Ok(property)

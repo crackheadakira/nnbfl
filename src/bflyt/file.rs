@@ -231,6 +231,13 @@ impl ReadWriteable for Bflyt {
         let _file_size = cursor.read_u32()?;
         let section_count = cursor.read_u32()?;
 
+        if (header_size as usize) > file.len() {
+            return Err(FormatError::InvalidHeaderSize {
+                specified_size: header_size as usize,
+                actual_size: file.len(),
+            });
+        }
+
         cursor.seek(header_size as usize)?;
 
         let mut sections = Vec::new();
