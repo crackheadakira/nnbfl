@@ -24,7 +24,7 @@ impl ResUi2dSystemDataArray {
 
         let post_header_point = cursor.pos;
 
-        cursor.seek(base_offset + offset as usize);
+        cursor.seek(base_offset + offset as usize)?;
 
         let mut data_array = Vec::new();
 
@@ -195,10 +195,10 @@ impl ResUi2dLayoutData {
                     let string_offset = cursor.read_u32()?;
                     let restore_point = cursor.pos;
 
-                    cursor.seek(base_offset + string_offset as usize);
+                    cursor.seek(base_offset + string_offset as usize)?;
                     let string = cursor.read_null_terminated_string()?;
 
-                    cursor.seek(restore_point);
+                    cursor.seek(restore_point)?;
 
                     strings.push(string)
                 }

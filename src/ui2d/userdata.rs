@@ -163,7 +163,7 @@ impl ResUi2dUserData {
         let restore_point = cursor.pos;
 
         if data_array_offset > 0 {
-            cursor.seek(base_offset + data_array_offset as usize);
+            cursor.seek(base_offset + data_array_offset as usize)?;
 
             match data.data_type {
                 Ui2dUserDataType::Float => {
@@ -193,10 +193,10 @@ impl ResUi2dUserData {
             }
         }
 
-        cursor.seek(base_offset + name_offset as usize);
+        cursor.seek(base_offset + name_offset as usize)?;
         data.o_name = cursor.read_null_terminated_string()?;
 
-        cursor.seek(restore_point);
+        cursor.seek(restore_point)?;
 
         Ok(data)
     }

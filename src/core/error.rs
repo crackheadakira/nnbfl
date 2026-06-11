@@ -17,6 +17,9 @@ pub enum NnbflError {
     #[error("Serialization error: {0}")]
     Serialization(#[from] SerializationError),
 
+    #[error("The specified path does not exist: {0}")]
+    MissingPath(PathBuf),
+
     #[error("Command execution failed for batch operation")]
     BatchFailure,
 }

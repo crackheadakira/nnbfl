@@ -3,11 +3,10 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::exit;
-use thiserror::Error;
 
 use crate::bflan::file::Bflan;
 use crate::bflyt::file::Bflyt;
-use crate::core::{ReadWriteable, Writer};
+use crate::core::{NnbflError, ReadWriteable, Writer};
 
 mod bflan;
 mod bflyt;
@@ -74,15 +73,14 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
 
-    let had_failures = cli.format.execute();
-
-    if had_failures {
+    if let Err(e) = cli.format.execute() {
+        eprintln!("Fatal Error: {e}");
         exit(1);
     }
 }
 
 impl Format {
-    fn execute(&self) -> bool {
+    fn execute(&self) -> Result<(), NnbflError> {
         match &self {
             Self::Bflan { action } => action.handle::<Bflan>(),
             Self::Bflyt { action } => action.handle::<Bflyt>(),
@@ -91,10 +89,10 @@ impl Format {
 }
 
 impl Action {
-    fn handle<T: ReadWriteable>(&self) -> bool {
+    fn handle<T: ReadWriteable>(&self) -> Result<(), NnbflError> {
         match self {
             Self::Extract { input, output } | Self::Pack { input, output } => {
-                validate_input(input);
+                validate_input(input)?;
 
                 let ext = match self {
                     Self::Extract { .. } => "json",
@@ -108,7 +106,7 @@ impl Action {
                     _ => Command::Pack,
                 };
 
-                process_command::<T>(cmd, input, &resolved_output)
+                process_command::<T>(cmd, input, &resolved_output)?
             }
 
             Self::Test {
@@ -116,21 +114,28 @@ impl Action {
                 verbose,
                 quiet,
             } => {
-                validate_input(input);
+                validate_input(input)?;
                 let mut files = Vec::new();
+
                 if input.is_dir() {
-                    find_files(input, T::EXTENSION, &mut files);
+                    find_files(input, T::EXTENSION, &mut files)?;
                 } else {
                     files.push(input.clone());
                 }
-                test_roundtrip::<T>(input, files, *verbose, *quiet)
+
+                let had_failures = test_roundtrip::<T>(input, files, *verbose, *quiet)?;
+                if had_failures {
+                    return Err(NnbflError::BatchFailure);
+                }
             }
         }
+
+        Ok(())
     }
 }
 
 impl Command {
-    pub fn route<T: ReadWriteable>(&self, input: &Path, output: &Path) -> bool {
+    pub fn route<T: ReadWriteable>(&self, input: &Path, output: &Path) -> Result<(), NnbflError> {
         match self {
             Self::Extract => extract_file::<T>(input, output),
             Self::Pack => pack_file::<T>(input, output),
@@ -145,23 +150,27 @@ fn resolve_output(input: &Path, output: Option<&Path>, new_ext: &str) -> PathBuf
     }
 }
 
-fn validate_input(input: &Path) {
+fn validate_input(input: &Path) -> Result<(), NnbflError> {
     if !input.exists() {
-        eprintln!("Error: Input path {:?} does not exist.", input);
-        exit(1);
+        return Err(NnbflError::MissingPath(input.to_path_buf()));
     }
+
+    Ok(())
 }
 
 fn process_command<T: ReadWriteable>(
     command: Command,
     input_path: &Path,
     output_path: &Path,
-) -> bool {
+) -> Result<(), NnbflError> {
     if input_path.is_dir() {
         process_batch::<T>(command, input_path, output_path)
     } else {
         if let Some(parent) = output_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            fs::create_dir_all(parent).map_err(|e| NnbflError::Io {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
         }
 
         command.route::<T>(input_path, output_path)
@@ -173,7 +182,7 @@ fn test_roundtrip<T: ReadWriteable>(
     files: Vec<PathBuf>,
     verbose: bool,
     quiet: bool,
-) -> bool {
+) -> Result<bool, NnbflError> {
     let mut success_count = 0i32;
     let mut fail_count = 0i32;
 
@@ -199,7 +208,11 @@ fn test_roundtrip<T: ReadWriteable>(
             Ok(bytes) => bytes,
             Err(e) => {
                 if !quiet {
-                    eprintln!("Failed to read {file_name:?}: {e}");
+                    let wrapped_err = NnbflError::Io {
+                        path: path.clone(),
+                        source: e,
+                    };
+                    eprintln!("Failed to read {file_name:?}: {wrapped_err}");
                 }
                 fail_count += 1;
                 continue;
@@ -244,7 +257,7 @@ fn test_roundtrip<T: ReadWriteable>(
         }
     }
 
-    fail_count > 0
+    Ok(fail_count > 0)
 }
 
 fn compare_files(
@@ -304,95 +317,70 @@ fn compare_files(
     false
 }
 
-fn find_files(dir: &Path, target_ext: &str, files: &mut Vec<PathBuf>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                find_files(&path, target_ext, files);
-            } else if path.is_file() && path.extension().is_some_and(|e| e == target_ext) {
-                files.push(path);
-            }
+fn find_files(dir: &Path, target_ext: &str, files: &mut Vec<PathBuf>) -> Result<(), NnbflError> {
+    let entries = fs::read_dir(dir).map_err(|e| NnbflError::Io {
+        path: dir.to_path_buf(),
+        source: e,
+    })?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            find_files(&path, target_ext, files)?;
+        } else if path.is_file() && path.extension().is_some_and(|e| e == target_ext) {
+            files.push(path);
         }
     }
+
+    Ok(())
 }
 
-fn extract_file<T: ReadWriteable>(input_path: &Path, output_path: &Path) -> bool {
-    let file_in = match fs::read(input_path) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("Failed to read {input_path:?}: {e}");
-            return true;
-        }
-    };
+fn extract_file<T: ReadWriteable>(input_path: &Path, output_path: &Path) -> Result<(), NnbflError> {
+    let file_in = fs::read(input_path).map_err(|e| NnbflError::Io {
+        path: input_path.to_path_buf(),
+        source: e,
+    })?;
 
-    let parsed = match T::parse(&file_in) {
-        Ok(res) => res,
-        Err(e) => {
-            eprintln!("Failed to parse {input_path:?}: {e}");
-            return true;
-        }
-    };
+    let parsed = T::parse(&file_in).map_err(NnbflError::Format)?;
+    let json =
+        serde_json::to_string_pretty(&parsed).map_err(|e| NnbflError::Serialization(e.into()))?;
 
-    let json = match serde_json::to_string_pretty(&parsed) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to serialize {input_path:?}: {e}");
-            return true;
-        }
-    };
+    fs::write(output_path, json).map_err(|e| NnbflError::Io {
+        path: output_path.to_path_buf(),
+        source: e,
+    })?;
 
-    match fs::write(output_path, json) {
-        Ok(_) => {
-            println!(
-                "Extracted: {:?} to {output_path:?}",
-                input_path.file_name().unwrap()
-            );
-            false
-        }
-        Err(e) => {
-            eprintln!("Failed to write {output_path:?}: {e}");
-            true
-        }
-    }
+    println!("Extracted: {:?}", input_path.file_name().unwrap());
+    Ok(())
 }
 
-fn pack_file<T: ReadWriteable>(input_path: &Path, output_path: &Path) -> bool {
-    let json = match fs::read_to_string(input_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to read {input_path:?}: {e}");
-            return true;
-        }
-    };
+fn pack_file<T: ReadWriteable>(input_path: &Path, output_path: &Path) -> Result<(), NnbflError> {
+    let json = fs::read_to_string(input_path).map_err(|e| NnbflError::Io {
+        path: input_path.to_path_buf(),
+        source: e,
+    })?;
 
-    let parsed: T = match serde_json::from_str(&json) {
-        Ok(data) => data,
-        Err(e) => {
-            eprintln!("Failed to deserialize {input_path:?}: {e}");
-            return true;
-        }
-    };
-
+    let parsed: T = serde_json::from_str(&json).map_err(|e| NnbflError::Serialization(e.into()))?;
     let out = parsed.write().buffer;
 
-    match fs::write(output_path, out) {
-        Ok(_) => {
-            println!("Packed: {:?}", input_path.file_name().unwrap());
-            false
-        }
-        Err(e) => {
-            eprintln!("Failed to write {output_path:?}: {e}");
-            true
-        }
-    }
+    fs::write(output_path, out).map_err(|e| NnbflError::Io {
+        path: output_path.to_path_buf(),
+        source: e,
+    })?;
+
+    println!("Packed: {:?}", input_path.file_name().unwrap());
+    Ok(())
 }
 
-fn process_batch<T: ReadWriteable>(command: Command, in_dir: &Path, out_dir: &Path) -> bool {
-    if let Err(e) = fs::create_dir_all(out_dir) {
-        eprintln!("Failed to create output directory {out_dir:?}: {e}");
-        exit(1);
-    }
+fn process_batch<T: ReadWriteable>(
+    command: Command,
+    in_dir: &Path,
+    out_dir: &Path,
+) -> Result<(), NnbflError> {
+    fs::create_dir_all(out_dir).map_err(|e| NnbflError::Io {
+        path: out_dir.to_path_buf(),
+        source: e,
+    })?;
 
     let search_ext = if command == Command::Extract {
         T::EXTENSION
@@ -401,11 +389,11 @@ fn process_batch<T: ReadWriteable>(command: Command, in_dir: &Path, out_dir: &Pa
     };
 
     let mut target_files = Vec::new();
-    find_files(in_dir, search_ext, &mut target_files);
+    find_files(in_dir, search_ext, &mut target_files)?;
 
     if target_files.is_empty() {
         println!("No .{search_ext} files found in {in_dir:?}");
-        return false;
+        return Ok(());
     }
 
     println!("Found {} file(s). Processing...", target_files.len());
@@ -423,18 +411,26 @@ fn process_batch<T: ReadWriteable>(command: Command, in_dir: &Path, out_dir: &Pa
         });
 
         if let Some(parent) = out_path.parent() {
-            let _ = fs::create_dir_all(parent);
+            fs::create_dir_all(parent).map_err(|e| NnbflError::Io {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
         }
 
-        let fail = command.route::<T>(&path, &out_path);
-
-        if fail {
-            failed += 1;
-        } else {
-            success += 1;
+        match command.route::<T>(&path, &out_path) {
+            Ok(_) => success += 1,
+            Err(e) => {
+                eprintln!("Error processing {path:?}: {e}");
+                failed += 1;
+            }
         }
     }
 
     println!("Batch {command:?} complete: {success} succeeded, {failed} failed.");
-    failed > 0
+
+    if failed > 0 {
+        Err(NnbflError::BatchFailure)
+    } else {
+        Ok(())
+    }
 }

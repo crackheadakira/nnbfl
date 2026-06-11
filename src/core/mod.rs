@@ -4,7 +4,7 @@ mod section;
 mod writer;
 
 pub use cursor::Cursor;
-pub use error::{FormatError, NnbflError, SerializationError};
+pub use error::{FormatError, NnbflError};
 pub use section::SectionHeader;
 pub use writer::Writer;
 
