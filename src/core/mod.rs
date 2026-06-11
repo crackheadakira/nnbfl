@@ -1,6 +1,7 @@
 mod cursor;
 mod error;
 mod section;
+mod tests;
 mod writer;
 
 pub use cursor::Cursor;
