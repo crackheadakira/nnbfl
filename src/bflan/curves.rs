@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::core::{Cursor, Writer};
+use crate::core::{Cursor, FormatError, Writer};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Curve {
@@ -10,12 +10,16 @@ pub enum Curve {
 }
 
 impl Curve {
-    pub fn parse(cursor: &mut Cursor, curve_type: u8, frame_count: usize) -> Self {
-        match curve_type {
+    pub fn parse(
+        cursor: &mut Cursor,
+        curve_type: u8,
+        frame_count: usize,
+    ) -> Result<Self, FormatError> {
+        let out = match curve_type {
             0 => {
                 let mut keys = Vec::with_capacity(frame_count);
                 for _ in 0..frame_count {
-                    keys.push(cursor.read_f32());
+                    keys.push(cursor.read_f32()?);
                 }
                 Curve::Constant(keys)
             }
@@ -23,9 +27,10 @@ impl Curve {
                 let mut keys = Vec::with_capacity(frame_count);
                 for _ in 0..frame_count {
                     keys.push(StepKey {
-                        frame: cursor.read_f32(),
-                        value: cursor.read_u16(),
+                        frame: cursor.read_f32()?,
+                        value: cursor.read_u16()?,
                     });
+
                     cursor.seek_relative(2);
                 }
                 Curve::Step(keys)
@@ -34,15 +39,17 @@ impl Curve {
                 let mut keys = Vec::with_capacity(frame_count);
                 for _ in 0..frame_count {
                     keys.push(HermiteKey {
-                        frame: cursor.read_f32(),
-                        value: cursor.read_f32(),
-                        slope: cursor.read_f32(),
+                        frame: cursor.read_f32()?,
+                        value: cursor.read_f32()?,
+                        slope: cursor.read_f32()?,
                     });
                 }
                 Curve::Hermite(keys)
             }
             _ => Curve::Constant(Vec::new()),
-        }
+        };
+
+        Ok(out)
     }
 
     pub fn serialize(&self, writer: &mut Writer) {

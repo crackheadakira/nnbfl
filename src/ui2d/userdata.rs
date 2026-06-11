@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core::{Cursor, Writer},
+    core::{Cursor, FormatError, Writer},
     ui2d::{systemdata::ResUi2dSystemDataArray, types::Ui2dUserDataType},
 };
 
@@ -28,19 +28,19 @@ pub enum ResUi2dUserDataInner {
 }
 
 impl ResUi2dUserDataSection {
-    pub fn parse(cursor: &mut Cursor, is_pane: bool) -> Self {
-        let user_data_count = cursor.read_u16();
-        let reserve0 = cursor.read_u16();
+    pub fn parse(cursor: &mut Cursor, is_pane: bool) -> Result<Self, FormatError> {
+        let user_data_count = cursor.read_u16()?;
+        let reserve0 = cursor.read_u16()?;
         let mut user_data = Vec::new();
 
         for _ in 0..user_data_count {
-            user_data.push(ResUi2dUserData::parse(cursor, is_pane))
+            user_data.push(ResUi2dUserData::parse(cursor, is_pane)?)
         }
 
-        Self {
+        Ok(Self {
             reserve0,
             user_data,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -146,16 +146,16 @@ impl ResUi2dUserDataSection {
 }
 
 impl ResUi2dUserData {
-    pub fn parse(cursor: &mut Cursor, is_pane: bool) -> Self {
+    pub fn parse(cursor: &mut Cursor, is_pane: bool) -> Result<Self, FormatError> {
         let base_offset = cursor.pos;
 
-        let name_offset = cursor.read_u32();
-        let data_array_offset = cursor.read_u32();
-        let data_count = cursor.read_u16();
+        let name_offset = cursor.read_u32()?;
+        let data_array_offset = cursor.read_u32()?;
+        let data_count = cursor.read_u16()?;
 
         let mut data = Self {
-            data_type: cursor.read_u8().into(),
-            reserve0: cursor.read_u8(),
+            data_type: cursor.read_u8()?.into(),
+            reserve0: cursor.read_u8()?,
             data_array: Vec::new(),
             o_name: String::new(),
         };
@@ -163,28 +163,28 @@ impl ResUi2dUserData {
         let restore_point = cursor.pos;
 
         if data_array_offset > 0 {
-            cursor.seek(base_offset + data_array_offset as usize);
+            cursor.seek(base_offset + data_array_offset as usize)?;
 
             match data.data_type {
                 Ui2dUserDataType::Float => {
                     for _ in 0..data_count {
                         data.data_array
-                            .push(ResUi2dUserDataInner::Float(cursor.read_f32()));
+                            .push(ResUi2dUserDataInner::Float(cursor.read_f32()?));
                     }
                 }
                 Ui2dUserDataType::S32 => {
                     for _ in 0..data_count {
                         data.data_array
-                            .push(ResUi2dUserDataInner::S32(cursor.read_i32()));
+                            .push(ResUi2dUserDataInner::S32(cursor.read_i32()?));
                     }
                 }
                 Ui2dUserDataType::String => {
-                    let str_data = cursor.read_string(data_count as usize);
+                    let str_data = cursor.read_string(data_count as usize)?;
                     data.data_array.push(ResUi2dUserDataInner::String(str_data));
                 }
                 Ui2dUserDataType::SystemData => {
                     for _ in 0..data_count {
-                        let sys_data = ResUi2dSystemDataArray::parse(cursor, is_pane);
+                        let sys_data = ResUi2dSystemDataArray::parse(cursor, is_pane)?;
                         data.data_array
                             .push(ResUi2dUserDataInner::SystemData(sys_data));
                     }
@@ -193,11 +193,11 @@ impl ResUi2dUserData {
             }
         }
 
-        cursor.seek(base_offset + name_offset as usize);
-        data.o_name = cursor.read_null_terminated_string();
+        cursor.seek(base_offset + name_offset as usize)?;
+        data.o_name = cursor.read_null_terminated_string()?;
 
-        cursor.seek(restore_point);
+        cursor.seek(restore_point)?;
 
-        data
+        Ok(data)
     }
 }

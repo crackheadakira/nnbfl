@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     bflan::{anim_info::PaneAnimInfo, anim_tag::ResBflanPaneAnimTag, constants::*},
     bflyt::constants::*,
-    core::{Cursor, SectionHeader, Writer, tchar_code32},
+    core::{Cursor, FormatError, ReadWriteable, SectionHeader, Writer, tchar_code32},
     ui2d::userdata::ResUi2dUserDataSection,
 };
 
@@ -19,25 +19,37 @@ pub struct Bflan {
     pub sections: Vec<BflanSections>,
 }
 
-impl Bflan {
-    pub fn parse(file: &[u8]) -> Result<Self, String> {
+impl ReadWriteable for Bflan {
+    const EXTENSION: &'static str = "bflan";
+
+    fn parse(file: &[u8]) -> Result<Self, FormatError> {
         let mut cursor = Cursor { data: file, pos: 0 };
 
-        let magic = cursor.read_u32();
-
+        let magic = cursor.read_u32()?;
         if magic != tchar_code32(b"FLAN") {
-            return Err("bad magic".into());
+            return Err(FormatError::InvalidMagic {
+                expected: "FLAN",
+                found: magic,
+                offset: 0,
+            });
         }
 
-        let endianness = cursor.read_u16();
-        let header_size = cursor.read_u16();
-        let micro_version = cursor.read_u16();
-        let minor_version = cursor.read_u8();
-        let major_version = cursor.read_u8();
-        let _file_size = cursor.read_u32();
-        let section_count = cursor.read_u32();
+        let endianness = cursor.read_u16()?;
+        let header_size = cursor.read_u16()?;
+        let micro_version = cursor.read_u16()?;
+        let minor_version = cursor.read_u8()?;
+        let major_version = cursor.read_u8()?;
+        let _file_size = cursor.read_u32()?;
+        let section_count = cursor.read_u32()?;
 
-        let sections = BflanSections::parse(&mut cursor, section_count);
+        if (header_size as usize) > file.len() {
+            return Err(FormatError::InvalidHeaderSize {
+                specified_size: header_size as usize,
+                actual_size: file.len(),
+            });
+        }
+
+        let sections = BflanSections::parse(&mut cursor, section_count)?;
 
         Ok(Self {
             magic,
@@ -50,7 +62,7 @@ impl Bflan {
         })
     }
 
-    pub fn serialize(&self) -> Writer {
+    fn write(&self) -> Writer {
         let mut writer = Writer::new();
 
         writer.mark("File header");
@@ -84,41 +96,70 @@ pub enum BflanSections {
 }
 
 impl BflanSections {
-    pub fn parse(cursor: &mut Cursor, count: u32) -> Vec<Self> {
+    pub fn parse(cursor: &mut Cursor, count: u32) -> Result<Vec<Self>, FormatError> {
         let mut sections = Vec::new();
 
-        for _ in 0..count {
+        for i in 0..count {
             let section_start = cursor.pos;
 
-            let header = SectionHeader::parse(cursor);
+            let header =
+                SectionHeader::parse(cursor).map_err(|e| FormatError::SectionCountMismatch {
+                    expected: count,
+                    actual: i,
+                    source: Box::new(e),
+                })?;
 
-            match header.magic {
-                MAGIC_USERDATA => {
-                    sections.push(Self::UserData(ResUi2dUserDataSection::parse(cursor, false)));
-                }
-                MAGIC_ANIMTAG => {
-                    sections.push(Self::PaneAnimTag(ResBflanPaneAnimTag::parse(
-                        cursor,
-                        section_start,
-                    )));
-                }
-                MAGIC_ANIMINFO => {
-                    sections.push(Self::PaneAnimInfo(PaneAnimInfo::parse(
-                        cursor,
-                        section_start,
-                    )));
-                }
-                _ => {
-                    let data = cursor.read_bytes((header.size - 8) as usize).to_vec();
-
-                    sections.push(Self::Unknown(header, data));
-                }
+            if header.size < 8 {
+                return Err(FormatError::SectionCountMismatch {
+                    expected: count,
+                    actual: i,
+                    source: Box::new(FormatError::MalformedSection {
+                        section_type: format!("Header(0x{:08X})", header.magic),
+                        offset: section_start,
+                        reason: format!(
+                            "Declared section size ({}) is smaller than minimum header size of 8 bytes",
+                            header.size
+                        ),
+                    }),
+                });
             }
 
-            cursor.seek(section_start + header.size as usize);
+            let parse_body = |cursor: &mut Cursor| -> Result<Self, FormatError> {
+                let section_variant = match header.magic {
+                    MAGIC_USERDATA => Self::UserData(ResUi2dUserDataSection::parse(cursor, false)?),
+                    MAGIC_ANIMTAG => {
+                        Self::PaneAnimTag(ResBflanPaneAnimTag::parse(cursor, section_start)?)
+                    }
+                    MAGIC_ANIMINFO => {
+                        Self::PaneAnimInfo(PaneAnimInfo::parse(cursor, section_start)?)
+                    }
+                    _ => {
+                        let remaining_payload = (header.size - 8) as usize;
+                        let data = cursor.read_bytes(remaining_payload)?.to_vec();
+                        Self::Unknown(header, data)
+                    }
+                };
+                Ok(section_variant)
+            };
+
+            let section = parse_body(cursor).map_err(|e| FormatError::SectionCountMismatch {
+                expected: count,
+                actual: i,
+                source: Box::new(e),
+            })?;
+
+            sections.push(section);
+
+            cursor
+                .seek(section_start + header.size as usize)
+                .map_err(|e| FormatError::SectionCountMismatch {
+                    expected: count,
+                    actual: i,
+                    source: Box::new(e),
+                })?;
         }
 
-        sections
+        Ok(sections)
     }
 
     pub fn serialize(&self, writer: &mut Writer) {

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     bflan::targets::AnimTarget,
-    core::{Cursor, Writer, tchar_code32},
+    core::{Cursor, FormatError, Writer, tchar_code32},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,21 +84,21 @@ pub enum AnimInfo {
 }
 
 impl AnimInfo {
-    pub fn parse(cursor: &mut Cursor, base_offset: usize) -> Self {
-        cursor.seek(base_offset);
+    pub fn parse(cursor: &mut Cursor, base_offset: usize) -> Result<Self, FormatError> {
+        cursor.seek(base_offset)?;
 
-        let magic_val = cursor.read_u32();
+        let magic_val = cursor.read_u32()?;
         let magic: AnimInfoType = magic_val.into();
 
-        let anim_target_count = cursor.read_u8();
-        let _reserve0 = cursor.read_u8();
-        let _reserve1 = cursor.read_u16();
+        let anim_target_count = cursor.read_u8()?;
+        let _reserve0 = cursor.read_u8()?;
+        let _reserve1 = cursor.read_u16()?;
 
-        match magic {
+        let out = match magic {
             AnimInfoType::ExtendedUserDataAnim => {
                 let mut data_array = Vec::new();
                 for _ in 0..anim_target_count {
-                    let data = ExtendedUserDataAnim::parse(cursor);
+                    let data = ExtendedUserDataAnim::parse(cursor)?;
                     data_array.push(data);
                 }
 
@@ -110,7 +110,7 @@ impl AnimInfo {
             _ => {
                 let mut target_offsets = Vec::with_capacity(anim_target_count as usize);
                 for _ in 0..anim_target_count {
-                    target_offsets.push(cursor.read_u32());
+                    target_offsets.push(cursor.read_u32()?);
                 }
 
                 let mut targets = Vec::with_capacity(anim_target_count as usize);
@@ -119,12 +119,14 @@ impl AnimInfo {
                         cursor,
                         base_offset + offset as usize,
                         magic_val,
-                    ));
+                    )?);
                 }
 
                 Self::Standard { magic, targets }
             }
-        }
+        };
+
+        Ok(out)
     }
 
     pub fn serialize(&self, writer: &mut Writer, base_offset: usize) {
@@ -183,32 +185,32 @@ pub struct ExtendedUserDataAnim {
 }
 
 impl ExtendedUserDataAnim {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        let header_size = cursor.read_u32();
-        let unk_1 = cursor.read_u16();
-        let unk_2 = cursor.read_u16();
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let header_size = cursor.read_u32()?;
+        let unk_1 = cursor.read_u16()?;
+        let unk_2 = cursor.read_u16()?;
 
-        let base_count = cursor.read_u32();
-        let unk_3 = cursor.read_u32();
+        let base_count = cursor.read_u32()?;
+        let unk_3 = cursor.read_u32()?;
 
         let mut values = Vec::with_capacity(3);
         for _ in 0..3 {
             let mut inner_values = Vec::with_capacity(base_count as usize);
 
             for _ in 0..base_count {
-                inner_values.push(cursor.read_f32())
+                inner_values.push(cursor.read_f32()?)
             }
 
             values.push(inner_values);
         }
 
-        let string_start = cursor.pos + cursor.read_u32() as usize;
+        let string_start = cursor.pos + cursor.read_u32()? as usize;
 
-        cursor.seek(string_start);
+        cursor.seek(string_start)?;
 
-        let key = cursor.read_null_terminated_string();
+        let key = cursor.read_null_terminated_string()?;
 
-        Self {
+        Ok(Self {
             header_size,
             unk_1,
             unk_2,
@@ -217,7 +219,7 @@ impl ExtendedUserDataAnim {
             values,
 
             key,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -253,43 +255,43 @@ pub struct PaneAnimInfo {
 }
 
 impl PaneAnimInfo {
-    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Self {
-        let frame_count = cursor.read_u16();
-        let is_looping = cursor.read_u8() != 0;
-        let _reserve0 = cursor.read_u8();
-        let texture_count = cursor.read_u16();
-        let anim_content_count = cursor.read_u16();
-        let anim_content_offset_array_offset = cursor.read_u32();
+    pub fn parse(cursor: &mut Cursor, section_start: usize) -> Result<Self, FormatError> {
+        let frame_count = cursor.read_u16()?;
+        let is_looping = cursor.read_u8()? != 0;
+        let _reserve0 = cursor.read_u8()?;
+        let texture_count = cursor.read_u16()?;
+        let anim_content_count = cursor.read_u16()?;
+        let anim_content_offset_array_offset = cursor.read_u32()?;
 
         let texture_offsets_start = cursor.pos;
         let mut texture_offsets = Vec::with_capacity(texture_count as usize);
         for _ in 0..texture_count {
-            texture_offsets.push(cursor.read_u32());
+            texture_offsets.push(cursor.read_u32()?);
         }
 
         let mut textures = Vec::with_capacity(texture_count as usize);
         for offset in texture_offsets {
-            cursor.seek(texture_offsets_start + offset as usize);
-            textures.push(cursor.read_null_terminated_string());
+            cursor.seek(texture_offsets_start + offset as usize)?;
+            textures.push(cursor.read_null_terminated_string()?);
         }
 
-        cursor.seek(section_start + anim_content_offset_array_offset as usize);
+        cursor.seek(section_start + anim_content_offset_array_offset as usize)?;
         let mut content_offsets = Vec::with_capacity(anim_content_count as usize);
         for _ in 0..anim_content_count {
-            content_offsets.push(cursor.read_u32());
+            content_offsets.push(cursor.read_u32()?);
         }
 
         let mut contents = Vec::with_capacity(anim_content_count as usize);
         for offset in content_offsets {
-            contents.push(AnimContent::parse(cursor, section_start + offset as usize));
+            contents.push(AnimContent::parse(cursor, section_start + offset as usize)?);
         }
 
-        Self {
+        Ok(Self {
             frame_count,
             is_looping,
             textures,
             contents,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer, section_start: usize) {
@@ -347,36 +349,36 @@ pub struct AnimContent {
     pub infos: Vec<AnimInfo>,
 }
 impl AnimContent {
-    pub fn parse(cursor: &mut Cursor, base_offset: usize) -> Self {
-        cursor.seek(base_offset);
+    pub fn parse(cursor: &mut Cursor, base_offset: usize) -> Result<Self, FormatError> {
+        cursor.seek(base_offset)?;
 
-        let name = cursor.read_fixed_string(0x1C);
-        let anim_info_count = cursor.read_u8();
-        let anim_type: AnimType = cursor.read_u8().into();
-        let _reserve0 = cursor.read_u16();
+        let name = cursor.read_fixed_string(0x1C)?;
+        let anim_info_count = cursor.read_u8()?;
+        let anim_type: AnimType = cursor.read_u8()?.into();
+        let _reserve0 = cursor.read_u16()?;
 
         // Workaround for MiniGame_PictQuiz_00_MosaicNormal.bflan
         if matches!(anim_type, AnimType::User) {
-            let info_array_offset = cursor.read_u32();
+            let info_array_offset = cursor.read_u32()?;
 
-            cursor.seek(base_offset + info_array_offset as usize);
+            cursor.seek(base_offset + info_array_offset as usize)?;
         }
 
         let mut info_offsets = Vec::with_capacity(anim_info_count as usize);
         for _ in 0..anim_info_count {
-            info_offsets.push(cursor.read_u32());
+            info_offsets.push(cursor.read_u32()?);
         }
 
         let mut infos = Vec::with_capacity(anim_info_count as usize);
         for offset in info_offsets {
-            infos.push(AnimInfo::parse(cursor, base_offset + offset as usize));
+            infos.push(AnimInfo::parse(cursor, base_offset + offset as usize)?);
         }
 
-        Self {
+        Ok(Self {
             name,
             anim_type,
             infos,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer, base_offset: usize) {

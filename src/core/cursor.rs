@@ -1,86 +1,110 @@
+use crate::core::FormatError;
+
 pub struct Cursor<'a> {
     pub data: &'a [u8],
     pub pos: usize,
 }
 
 impl<'a> Cursor<'a> {
-    fn read<T: Copy>(&mut self) -> T {
-        let size = std::mem::size_of::<T>();
-        let end = self.pos + size;
-        let bytes = &self.data[self.pos..end];
-        self.pos = end;
+    pub fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], FormatError> {
+        let end = self.pos + len;
 
-        unsafe { std::ptr::read_unaligned(bytes.as_ptr() as *const T) }
-    }
-
-    pub fn read_u32(&mut self) -> u32 {
-        u32::from_le(self.read::<u32>())
-    }
-
-    pub fn read_i32(&mut self) -> i32 {
-        i32::from_le(self.read::<i32>())
-    }
-
-    pub fn read_i16(&mut self) -> i16 {
-        i16::from_le(self.read::<i16>())
-    }
-
-    pub fn read_u16(&mut self) -> u16 {
-        u16::from_le(self.read::<u16>())
-    }
-
-    pub fn read_u8(&mut self) -> u8 {
-        u8::from_le(self.read::<u8>())
-    }
-
-    pub fn read_f32(&mut self) -> f32 {
-        let bytes = self.read_bytes(4);
-        let arr: [u8; 4] = bytes.try_into().unwrap();
-        f32::from_le_bytes(arr)
-    }
-
-    pub fn read_string(&mut self, len: usize) -> String {
-        let bytes = self.read_bytes(len);
-        String::from_utf8_lossy(bytes).into_owned()
-    }
-
-    pub fn read_fixed_string(&mut self, len: usize) -> String {
-        let remaining_bytes = self.data.len().saturating_sub(self.pos);
-        let actual_len = len.min(remaining_bytes);
-
-        if actual_len == 0 {
-            eprintln!("Found actual len 0 for a fixed string.");
-            return String::new();
+        if end > self.data.len() {
+            return Err(FormatError::UnexpectedEof {
+                offset: self.pos,
+                requested_bytes: len,
+            });
         }
 
-        let bytes = self.read_bytes(actual_len);
-        let end = bytes.iter().position(|&b| b == 0).unwrap_or(actual_len);
-        String::from_utf8_lossy(&bytes[..end]).into_owned()
+        let slice = &self.data[self.pos..end];
+        self.pos = end;
+
+        Ok(slice)
     }
 
-    pub fn read_null_terminated_string(&mut self) -> String {
+    pub fn read_u8(&mut self) -> Result<u8, FormatError> {
+        let bytes = self.read_bytes(1)?;
+        Ok(bytes[0])
+    }
+
+    pub fn read_u16(&mut self) -> Result<u16, FormatError> {
+        let b = self.read_bytes(2)?;
+        Ok(u16::from_le_bytes([b[0], b[1]]))
+    }
+
+    pub fn read_u32(&mut self) -> Result<u32, FormatError> {
+        let b = self.read_bytes(4)?;
+        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    pub fn read_i16(&mut self) -> Result<i16, FormatError> {
+        let b = self.read_bytes(2)?;
+        Ok(i16::from_le_bytes([b[0], b[1]]))
+    }
+
+    pub fn read_i32(&mut self) -> Result<i32, FormatError> {
+        let b = self.read_bytes(4)?;
+        Ok(i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    pub fn read_f32(&mut self) -> Result<f32, FormatError> {
+        let b = self.read_bytes(4)?;
+        Ok(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    pub fn read_string(&mut self, len: usize) -> Result<String, FormatError> {
+        let bytes = self.read_bytes(len)?;
+        Ok(String::from_utf8_lossy(bytes).into_owned())
+    }
+
+    pub fn read_fixed_string(&mut self, len: usize) -> Result<String, FormatError> {
+        let remaining_bytes = self.data.len().saturating_sub(self.pos);
+
+        if remaining_bytes == 0 && len > 0 {
+            return Err(FormatError::UnexpectedEof {
+                offset: self.pos,
+                requested_bytes: len,
+            });
+        }
+
+        let actual_len = len.min(remaining_bytes);
+        let bytes = self.read_bytes(actual_len)?;
+        let end = bytes.iter().position(|&b| b == 0).unwrap_or(actual_len);
+
+        Ok(String::from_utf8_lossy(&bytes[..end]).into_owned())
+    }
+
+    pub fn read_null_terminated_string(&mut self) -> Result<String, FormatError> {
         let start = self.pos;
         let mut end = start;
 
         while end < self.data.len() && self.data[end] != 0 {
             end += 1;
         }
+        if end >= self.data.len() {
+            return Err(FormatError::MalformedSection {
+                section_type: "StringPool".to_string(),
+                offset: start,
+                reason: "Unterminated string literal reached EOF".to_string(),
+            });
+        }
 
         let bytes = &self.data[start..end];
+        self.pos = end + 1;
 
-        self.pos = if end < self.data.len() { end + 1 } else { end };
-
-        String::from_utf8_lossy(bytes).into_owned()
+        Ok(String::from_utf8_lossy(bytes).into_owned())
     }
 
-    pub fn read_bytes(&mut self, len: usize) -> &[u8] {
-        let start = self.pos;
-        self.pos += len;
-        &self.data[start..start + len]
-    }
+    pub fn seek(&mut self, pos: usize) -> Result<(), FormatError> {
+        if pos > self.data.len() {
+            return Err(FormatError::UnexpectedEof {
+                offset: self.data.len(),
+                requested_bytes: pos - self.data.len(),
+            });
+        }
 
-    pub fn seek(&mut self, pos: usize) {
         self.pos = pos;
+        Ok(())
     }
 
     pub fn seek_relative(&mut self, pos: usize) {

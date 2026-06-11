@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     bflan::curves::Curve,
-    core::{Cursor, Writer, tchar_code32},
+    core::{Cursor, FormatError, Writer, tchar_code32},
 };
 
 #[derive(Debug, Serialize, Clone, Deserialize)]
@@ -13,28 +13,32 @@ pub struct AnimTarget {
 }
 
 impl AnimTarget {
-    pub fn parse(cursor: &mut Cursor, base_offset: usize, parent_magic: u32) -> Self {
-        cursor.seek(base_offset);
+    pub fn parse(
+        cursor: &mut Cursor,
+        base_offset: usize,
+        parent_magic: u32,
+    ) -> Result<Self, FormatError> {
+        cursor.seek(base_offset)?;
 
-        let reserve0 = cursor.read_u8();
-        let target_raw = cursor.read_u8();
-        let curve_type = cursor.read_u8();
-        let _reserve1 = cursor.read_u8();
-        let frame_count = cursor.read_u16();
-        let _reserve2 = cursor.read_u16();
-        let key_array_offset = cursor.read_u32();
+        let reserve0 = cursor.read_u8()?;
+        let target_raw = cursor.read_u8()?;
+        let curve_type = cursor.read_u8()?;
+        let _reserve1 = cursor.read_u8()?;
+        let frame_count = cursor.read_u16()?;
+        let _reserve2 = cursor.read_u16()?;
+        let key_array_offset = cursor.read_u32()?;
 
         let target = TargetIndex::resolve(parent_magic, target_raw);
 
-        cursor.seek(base_offset + key_array_offset as usize);
+        cursor.seek(base_offset + key_array_offset as usize)?;
 
-        let curve = Curve::parse(cursor, curve_type, frame_count as usize);
+        let curve = Curve::parse(cursor, curve_type, frame_count as usize)?;
 
-        Self {
+        Ok(Self {
             reserve0,
             target,
             curve,
-        }
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer, base_offset: usize) {

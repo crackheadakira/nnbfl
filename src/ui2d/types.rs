@@ -1,7 +1,7 @@
 use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 
-use crate::core::{Cursor, Writer};
+use crate::core::{Cursor, FormatError, Writer};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct Color4f {
@@ -12,13 +12,13 @@ pub struct Color4f {
 }
 
 impl Color4f {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            r: cursor.read_f32(),
-            g: cursor.read_f32(),
-            b: cursor.read_f32(),
-            a: cursor.read_f32(),
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            r: cursor.read_f32()?,
+            g: cursor.read_f32()?,
+            b: cursor.read_f32()?,
+            a: cursor.read_f32()?,
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -38,11 +38,11 @@ pub struct Vector2f {
 }
 
 impl Vector2f {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            x: cursor.read_f32(),
-            y: cursor.read_f32(),
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            x: cursor.read_f32()?,
+            y: cursor.read_f32()?,
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -61,12 +61,12 @@ pub struct Vector3f {
 }
 
 impl Vector3f {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            x: cursor.read_f32(),
-            y: cursor.read_f32(),
-            z: cursor.read_f32(),
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            x: cursor.read_f32()?,
+            y: cursor.read_f32()?,
+            z: cursor.read_f32()?,
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -98,13 +98,13 @@ pub struct VertexPos {
 }
 
 impl VertexPos {
-    pub fn parse(cursor: &mut Cursor) -> Self {
-        Self {
-            size_scale_width: cursor.read_f32(),
-            size_scale_height: cursor.read_f32(),
-            position_x_scale: cursor.read_f32(),
-            position_y_scale: cursor.read_f32(),
-        }
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(Self {
+            size_scale_width: cursor.read_f32()?,
+            size_scale_height: cursor.read_f32()?,
+            position_x_scale: cursor.read_f32()?,
+            position_y_scale: cursor.read_f32()?,
+        })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
