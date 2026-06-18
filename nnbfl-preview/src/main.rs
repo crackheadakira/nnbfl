@@ -20,14 +20,7 @@ use winit::{
 use bflyt_view::{BflytView, build_view};
 use ui::{UiState, draw_ui};
 
-fn parse_args() -> PathBuf {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: nnbfl-preview <file.bflyt>");
-        std::process::exit(1);
-    }
-    PathBuf::from(&args[1])
-}
+use crate::ui::UiAction;
 
 struct GpuState {
     surface: wgpu::Surface<'static>,
@@ -39,7 +32,7 @@ struct GpuState {
 }
 
 impl GpuState {
-    fn new(window: Arc<Window>, view: &BflytView) -> Self {
+    fn new(window: Arc<Window>) -> Self {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -92,7 +85,7 @@ impl GpuState {
         surface.configure(&device, &config);
 
         let mut quad_renderer = QuadRenderer::new(&device, surface_format);
-        quad_renderer.upload_quads(&device, &view.quads);
+        quad_renderer.upload_quads(&device, &[]);
 
         let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, None, 1, false);
 
@@ -120,7 +113,7 @@ impl GpuState {
         window: &Window,
         egui_ctx: &egui::Context,
         egui_state: &mut egui_winit::State,
-        bflyt_view: &BflytView,
+        bflyt_view: &Option<BflytView>,
         ui_state: &mut UiState,
         camera: &Camera,
     ) {
@@ -134,7 +127,7 @@ impl GpuState {
                 return;
             }
             Err(e) => {
-                log::error!("Surface error: {:?}", e);
+                log::error!("Surface error: {e:?}");
                 return;
             }
         };
@@ -147,14 +140,17 @@ impl GpuState {
         let full_output = egui_ctx.run(raw_input, |ctx| {
             draw_ui(ctx, bflyt_view, ui_state);
         });
+
         egui_state.handle_platform_output(window, full_output.platform_output.clone());
 
-        self.quad_renderer.update_selection(
-            &self.queue,
-            &bflyt_view.quads,
-            ui_state.selected_pane,
-            &ui_state.hidden_panes,
-        );
+        if let Some(bflyt_view) = bflyt_view {
+            self.quad_renderer.update_selection(
+                &self.queue,
+                &bflyt_view.quads,
+                ui_state.selected_pane,
+                &ui_state.hidden_panes,
+            );
+        }
 
         let paint_jobs = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
         let screen_descriptor = ScreenDescriptor {
@@ -213,7 +209,7 @@ impl GpuState {
 }
 
 struct App {
-    bflyt_path: PathBuf,
+    bflyt_path: Option<PathBuf>,
     bflyt_view: Option<BflytView>,
     ui_state: UiState,
     camera: Camera,
@@ -224,9 +220,9 @@ struct App {
 }
 
 impl App {
-    fn new(path: PathBuf) -> Self {
+    fn new() -> Self {
         Self {
-            bflyt_path: path,
+            bflyt_path: None,
             bflyt_view: None,
             ui_state: UiState::default(),
             camera: Camera::new(),
@@ -238,12 +234,31 @@ impl App {
     }
 
     fn load_file(&mut self) {
-        let bytes = std::fs::read(&self.bflyt_path).expect("read bflyt file");
+        let Some(bflyt_path) = &self.bflyt_path else {
+            return;
+        };
+
+        let bytes = std::fs::read(bflyt_path).expect("read bflyt file");
         let file = Bflyt::parse(&bytes).expect("parse bflyt file");
         let view = build_view(&file);
         self.camera.zoom = 1.0;
         self.camera.offset = [0.0, 0.0];
         self.bflyt_view = Some(view);
+
+        if let Some(gpu) = &mut self.gpu {
+            let view = self.bflyt_view.as_ref().unwrap();
+            gpu.quad_renderer.upload_quads(&gpu.device, &view.quads);
+
+            if let Some(window) = &self.window {
+                let size = window.inner_size();
+                self.camera.fit(
+                    view.layout_width,
+                    view.layout_height,
+                    size.width as f32,
+                    size.height as f32,
+                );
+            }
+        }
 
         log::info!(
             "Loaded {} panes from {:?}",
@@ -259,17 +274,17 @@ impl ApplicationHandler for App {
             return;
         }
 
-        self.load_file();
-        let bflyt_view = self.bflyt_view.as_ref().unwrap();
+        let title_path = if let Some(bflyt_path) = &self.bflyt_path {
+            bflyt_path.file_name().unwrap().to_string_lossy()
+        } else {
+            "No file loaded".into()
+        };
 
         let window = Arc::new(
             event_loop
                 .create_window(
                     winit::window::WindowAttributes::default()
-                        .with_title(format!(
-                            "nnbfl-preview - {}",
-                            self.bflyt_path.file_name().unwrap().to_string_lossy()
-                        ))
+                        .with_title(format!("nnbfl-preview - {title_path}"))
                         .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32)),
                 )
                 .expect("create window"),
@@ -284,15 +299,13 @@ impl ApplicationHandler for App {
             None,
         );
 
-        let size = window.inner_size();
-        self.camera.fit(
-            bflyt_view.layout_width,
-            bflyt_view.layout_height,
-            size.width as f32,
-            size.height as f32,
-        );
+        self.load_file();
 
-        let gpu = GpuState::new(window.clone(), bflyt_view);
+        let size = window.inner_size();
+        self.camera
+            .fit(1280.0, 720.0, size.width as f32, size.height as f32);
+
+        let gpu = GpuState::new(window.clone());
 
         self.egui_state = Some(egui_state);
         self.gpu = Some(gpu);
@@ -311,6 +324,19 @@ impl ApplicationHandler for App {
 
         let egui_wants_pointer = self.egui_ctx.wants_pointer_input();
         let egui_wants_scroll = self.egui_ctx.wants_pointer_input();
+
+        if let Some(action) = self.ui_state.pending_action.take() {
+            match action {
+                UiAction::LoadFile(path) => {
+                    self.bflyt_path = Some(path);
+                    self.load_file();
+
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+            }
+        }
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -365,21 +391,29 @@ impl ApplicationHandler for App {
                 }
             }
 
+            WindowEvent::DroppedFile(path) => {
+                if path.extension().and_then(|s| s.to_str()) == Some("bflyt") {
+                    self.bflyt_path = Some(path);
+                    self.load_file();
+                } else {
+                    self.ui_state.error_message =
+                        Some("Invalid file type. Please drop a .bflyt file".to_string());
+                }
+            }
+
             WindowEvent::RedrawRequested => {
-                if let (Some(gpu), Some(window), Some(egui_state), Some(view)) = (
-                    &mut self.gpu,
-                    &self.window,
-                    &mut self.egui_state,
-                    &self.bflyt_view,
-                ) {
+                if let (Some(gpu), Some(window), Some(egui_state)) =
+                    (&mut self.gpu, &self.window, &mut self.egui_state)
+                {
                     gpu.render(
                         window,
                         &self.egui_ctx,
                         egui_state,
-                        view,
+                        &self.bflyt_view,
                         &mut self.ui_state,
                         &self.camera,
                     );
+
                     window.request_redraw();
                 }
             }
@@ -391,8 +425,8 @@ impl ApplicationHandler for App {
 
 fn main() {
     env_logger::init();
-    let path = parse_args();
     let event_loop = EventLoop::new().expect("create event loop");
-    let mut app = App::new(path);
+    let mut app = App::new();
+
     event_loop.run_app(&mut app).expect("run event loop");
 }
