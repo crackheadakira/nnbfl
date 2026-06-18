@@ -1,0 +1,21 @@
+[package]
+name = "nnbfl-preview"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "nnbfl-preview"
+path = "src/main.rs"
+
+[dependencies]
+nnbfl = { path = "../nnbfl" }
+
+wgpu = "22"
+winit = "0.30"
+egui = "0.29"
+egui-wgpu = "0.29"
+egui-winit = "0.29"
+bytemuck = { version = "1.16", features = ["derive"] }
+pollster = "0.4"
+log = "0.4"
+env_logger = "0.11"
