@@ -25,32 +25,52 @@ pub fn draw_ui(ctx: &Context, view: &BflytView, state: &mut UiState) {
             ui.heading("Pane Tree");
             ui.separator();
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for (i, pane) in view.panes.iter().enumerate() {
-                    let indent = pane.depth as f32 * 12.0;
-                    ui.horizontal(|ui| {
-                        ui.add_space(indent);
+            egui::ScrollArea::vertical()
+                .auto_shrink(false)
+                .show(ui, |ui| {
+                    for (i, pane) in view.panes.iter().enumerate() {
+                        let indent = pane.depth as f32 * 12.0;
+                        ui.horizontal(|ui| {
+                            ui.add_space(indent);
 
-                        let is_hidden = state.hidden_panes.contains(&i);
-                        let shown_text = if is_hidden { "Show" } else { "Hide" };
+                            let selected = state.selected_pane == Some(i);
+                            let label =
+                                egui::RichText::new(format!("[{}] {}", pane.kind, pane.label));
+                            let is_hidden = state.hidden_panes.contains(&i);
 
-                        if ui.selectable_label(!is_hidden, shown_text).clicked() {
                             if is_hidden {
-                                state.hidden_panes.remove(&i);
-                            } else {
-                                state.hidden_panes.insert(i);
+                                ui.label("Hidden");
                             }
-                        }
 
-                        let selected = state.selected_pane == Some(i);
-                        let label = egui::RichText::new(format!("[{}] {}", pane.kind, pane.label));
+                            let response = ui.selectable_label(selected, label);
+                            response.context_menu(|ui| {
+                                if !is_hidden && ui.button("Hide").clicked() {
+                                    state.hidden_panes.insert(i);
+                                    ui.close_menu();
+                                }
 
-                        if ui.selectable_label(selected, label).clicked() {
-                            state.selected_pane = Some(i);
-                        }
-                    });
-                }
-            });
+                                if !is_hidden && ui.button("Hide All").clicked() {
+                                    hide_pane_recursive(i, view, &mut state.hidden_panes);
+                                    ui.close_menu();
+                                }
+
+                                if is_hidden && ui.button("Show").clicked() {
+                                    state.hidden_panes.remove(&i);
+                                    ui.close_menu();
+                                }
+
+                                if is_hidden && ui.button("Show All").clicked() {
+                                    show_pane_recursive(i, view, &mut state.hidden_panes);
+                                    ui.close_menu();
+                                }
+                            });
+
+                            if response.clicked() {
+                                state.selected_pane = Some(i);
+                            }
+                        });
+                    }
+                });
         });
 
     egui::TopBottomPanel::bottom("properties")
@@ -67,6 +87,32 @@ pub fn draw_ui(ctx: &Context, view: &BflytView, state: &mut UiState) {
                 ui.label("Select a pane in the tree to inspect it.");
             }
         });
+}
+
+fn hide_pane_recursive(idx: usize, view: &BflytView, hidden_set: &mut HashSet<usize>) {
+    hidden_set.insert(idx);
+
+    let base_depth = view.panes[idx].depth;
+    for next_idx in (idx + 1)..view.panes.len() {
+        if view.panes[next_idx].depth > base_depth {
+            hidden_set.insert(next_idx);
+        } else {
+            break;
+        }
+    }
+}
+
+fn show_pane_recursive(idx: usize, view: &BflytView, hidden_set: &mut HashSet<usize>) {
+    hidden_set.remove(&idx);
+
+    let base_depth = view.panes[idx].depth;
+    for next_idx in (idx + 1)..view.panes.len() {
+        if view.panes[next_idx].depth > base_depth {
+            hidden_set.remove(&next_idx);
+        } else {
+            break;
+        }
+    }
 }
 
 fn draw_pane_properties(ui: &mut egui::Ui, pane: &PaneInfo) {
