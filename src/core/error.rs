@@ -69,6 +69,11 @@ pub enum FormatError {
     },
 
     #[error(
+        "File is missing a layout section which is mandatory, this means your file is either incomplete or corrupted."
+    )]
+    MissingLayout,
+
+    #[error(
         "Unknown or unsupported enum tag 0x{tag:08X} for type '{enum_name}' at offset 0x{offset:X}"
     )]
     UnknownTag {

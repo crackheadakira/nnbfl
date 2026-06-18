@@ -40,6 +40,7 @@ pub enum BflytSection {
     PaneEnd,
     GroupStart,
     GroupEnd,
+
     Unknown(SectionHeader, Vec<u8>),
 }
 
@@ -205,7 +206,14 @@ pub struct Bflyt {
     pub micro_version: u16,
     pub minor_version: u8,
     pub major_version: u8,
-    pub sections: Vec<BflytSection>,
+
+    pub layout: BflytLayout,
+    pub user_data: Option<ResUi2dUserDataSection>,
+    pub texture_list: Option<BflytTextureList>,
+    pub font_list: Option<BflytFontList>,
+    pub material_list: Option<BflytMaterialList>,
+
+    pub nodes: Vec<BflytNode>,
 }
 
 impl ReadWriteable for Bflyt {
@@ -240,8 +248,15 @@ impl ReadWriteable for Bflyt {
 
         cursor.seek(header_size as usize)?;
 
-        let mut sections = Vec::new();
+        let mut layout = None;
+        let mut user_data = None;
+        let mut texture_list = None;
+        let mut font_list = None;
+        let mut material_list = None;
 
+        let mut tree_stack = vec![Vec::new()];
+
+        let mut has_entered_hierarchy = false;
         let mut last_was_pane = false;
         for i in 0..section_count {
             let section =
@@ -253,7 +268,65 @@ impl ReadWriteable for Bflyt {
                     }
                 })?;
 
-            sections.push(section);
+            match section {
+                BflytSection::Layout(l) => {
+                    layout = Some(l);
+                }
+
+                BflytSection::TextureList(t) => {
+                    texture_list = Some(t);
+                }
+
+                BflytSection::FontList(f) => {
+                    font_list = Some(f);
+                }
+
+                BflytSection::MaterialList(m) => {
+                    material_list = Some(m);
+                }
+
+                BflytSection::UserData(usd) if !has_entered_hierarchy && user_data.is_none() => {
+                    user_data = Some(usd);
+                }
+
+                BflytSection::PaneStart => {
+                    has_entered_hierarchy = true;
+                    tree_stack.push(Vec::new());
+                }
+
+                BflytSection::PaneEnd => {
+                    has_entered_hierarchy = true;
+                    if let Some(children) = tree_stack.pop() {
+                        if let Some(current_layer) = tree_stack.last_mut() {
+                            current_layer.push(BflytNode::Panes(children));
+                        }
+                    }
+                }
+                BflytSection::GroupStart => {
+                    has_entered_hierarchy = true;
+                    tree_stack.push(Vec::new());
+                }
+                BflytSection::GroupEnd => {
+                    has_entered_hierarchy = true;
+                    if let Some(children) = tree_stack.pop() {
+                        if let Some(current_layer) = tree_stack.last_mut() {
+                            current_layer.push(BflytNode::Groups(children));
+                        }
+                    }
+                }
+                s => {
+                    has_entered_hierarchy = true;
+                    if let Some(current_layer) = tree_stack.last_mut() {
+                        current_layer.push(BflytNode::Section(s));
+                    }
+                }
+            }
+        }
+
+        let nodes = tree_stack.pop().unwrap_or_default();
+
+        if layout.is_none() {
+            return Err(FormatError::MissingLayout);
         }
 
         let mut bflyt = Self {
@@ -263,7 +336,12 @@ impl ReadWriteable for Bflyt {
             micro_version,
             minor_version,
             major_version,
-            sections,
+            layout: layout.unwrap(),
+            user_data,
+            texture_list,
+            font_list,
+            material_list,
+            nodes,
         };
 
         bflyt.resolve_names();
@@ -271,17 +349,9 @@ impl ReadWriteable for Bflyt {
     }
 
     fn write(&self) -> Writer {
-        let mut this = Self {
-            magic: self.magic,
-            endianness: self.endianness,
-            header_size: self.header_size,
-            micro_version: self.micro_version,
-            minor_version: self.minor_version,
-            major_version: self.major_version,
-            sections: self.sections.clone(),
-        };
-
+        let mut this = self.clone();
         this.rebuild_indices();
+
         let mut writer = Writer::new();
 
         writer.mark("File header");
@@ -293,14 +363,39 @@ impl ReadWriteable for Bflyt {
         writer.write_u8(self.major_version);
 
         let file_size_pos = writer.write_placeholder_u32();
-        writer.write_u32(self.sections.len() as u32);
+        let mut total_sections = this.nodes.iter().map(|n| n.section_count()).sum();
+        total_sections += 1;
+        total_sections += self.user_data.is_some() as u32;
+        total_sections += self.texture_list.is_some() as u32;
+        total_sections += self.font_list.is_some() as u32;
+        total_sections += self.material_list.is_some() as u32;
+
+        writer.write_u32(total_sections);
 
         while writer.pos() < self.header_size as usize {
             writer.write_u8(0);
         }
 
-        for section in &this.sections {
-            section.serialize(&mut writer);
+        BflytSection::Layout(self.layout.clone()).serialize(&mut writer);
+
+        if let Some(usd) = &self.user_data {
+            BflytSection::UserData(usd.clone()).serialize(&mut writer);
+        }
+
+        if let Some(t) = &self.texture_list {
+            BflytSection::TextureList(t.clone()).serialize(&mut writer);
+        }
+
+        if let Some(f) = &self.font_list {
+            BflytSection::FontList(f.clone()).serialize(&mut writer);
+        }
+
+        if let Some(m) = &self.material_list {
+            BflytSection::MaterialList(m.clone()).serialize(&mut writer);
+        }
+
+        for node in &this.nodes {
+            node.serialize(&mut writer);
         }
 
         let total = writer.pos() as u32;
@@ -311,30 +406,18 @@ impl ReadWriteable for Bflyt {
 }
 
 impl Bflyt {
-    fn get_texture_names(&self) -> Vec<String> {
-        self.sections
-            .iter()
-            .find_map(|s| {
-                if let BflytSection::TextureList(t) = s {
-                    Some(t.textures.clone())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default()
-    }
-
     fn resolve_names(&mut self) {
-        let textures = self.get_texture_names();
+        let Some(t_list) = &self.texture_list else {
+            return;
+        };
 
-        for section in &mut self.sections {
-            if let BflytSection::MaterialList(ml) = section {
-                for mat in &mut ml.materials {
-                    for tm in &mut mat.tex_maps {
-                        tm.texture_name = textures
-                            .get(tm.texture_index as usize)
-                            .cloned()
-                            .unwrap_or_default();
+        let textures = &t_list.textures;
+
+        if let Some(ml) = &mut self.material_list {
+            for mat in &mut ml.materials {
+                for tm in &mut mat.tex_maps {
+                    if let Some(name) = textures.get(tm.texture_index as usize) {
+                        tm.texture_name = name.to_string();
                     }
                 }
             }
@@ -342,18 +425,63 @@ impl Bflyt {
     }
 
     fn rebuild_indices(&mut self) {
-        let textures = self.get_texture_names();
+        let Some(t_list) = &self.texture_list else {
+            return;
+        };
 
-        for section in &mut self.sections {
-            if let BflytSection::MaterialList(ml) = section {
-                for mat in &mut ml.materials {
-                    for tm in &mut mat.tex_maps {
-                        tm.texture_index = textures
-                            .iter()
-                            .position(|t| t == &tm.texture_name)
-                            .unwrap_or(0) as u16;
-                    }
+        let textures = &t_list.textures;
+
+        if let Some(ml) = &mut self.material_list {
+            for mat in &mut ml.materials {
+                for tm in &mut mat.tex_maps {
+                    tm.texture_index = textures
+                        .iter()
+                        .position(|t| t == &tm.texture_name)
+                        .unwrap_or(0) as u16;
                 }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BflytNode {
+    Section(BflytSection),
+    Panes(Vec<BflytNode>),
+    Groups(Vec<BflytNode>),
+}
+
+impl BflytNode {
+    pub fn serialize(&self, writer: &mut Writer) {
+        match self {
+            Self::Section(section) => section.serialize(writer),
+            Self::Panes(children) => {
+                BflytSection::PaneStart.serialize(writer);
+
+                for child in children {
+                    child.serialize(writer);
+                }
+
+                BflytSection::PaneEnd.serialize(writer);
+            }
+
+            Self::Groups(children) => {
+                BflytSection::GroupStart.serialize(writer);
+
+                for child in children {
+                    child.serialize(writer);
+                }
+
+                BflytSection::GroupEnd.serialize(writer);
+            }
+        }
+    }
+
+    pub fn section_count(&self) -> u32 {
+        match self {
+            Self::Section(_) => 1,
+            Self::Panes(children) | Self::Groups(children) => {
+                2 + children.iter().map(|c| c.section_count()).sum::<u32>()
             }
         }
     }
