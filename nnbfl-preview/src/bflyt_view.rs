@@ -1,7 +1,13 @@
-use nnbfl::bflyt::{
-    file::{Bflyt, BflytNode, BflytSection},
-    flags::{BflytOrigin, BflytParentOrigin},
-    pane::BflytPane,
+use std::{collections::HashMap, path::Path};
+
+use nnbfl::{
+    bflyt::{
+        file::{Bflyt, BflytNode, BflytSection},
+        flags::{BflytOrigin, BflytParentOrigin},
+        pane::BflytPane,
+    },
+    core::ReadWriteable,
+    sarc::file::Sarc,
 };
 
 use crate::renderer::quad::Quad;
@@ -10,14 +16,13 @@ use crate::renderer::quad::Quad;
 pub struct PaneInfo {
     pub label: String,
     pub kind: String,
-
     pub section: BflytSection,
-
     pub x: f32,
     pub y: f32,
     pub width: f32,
     pub height: f32,
     pub depth: usize,
+    pub parts_source: Option<String>,
 }
 
 pub struct BflytView {
@@ -70,14 +75,37 @@ fn section_kind_name(section: &BflytSection) -> &'static str {
     }
 }
 
+fn base_pane(section: &BflytSection) -> Option<&BflytPane> {
+    match section {
+        BflytSection::Pane(p) | BflytSection::BoundingPane(p) | BflytSection::ScissorPane(p) => {
+            Some(p)
+        }
+        BflytSection::PicturePane(p) => Some(&p.base),
+        BflytSection::TextBoxPane(p) => Some(&p.base),
+        BflytSection::WindowPane(p) => Some(&p.base),
+        BflytSection::PartsPane(p) => Some(&p.base),
+        BflytSection::AlignmentPane(p) => Some(&p.base),
+        BflytSection::CapturePane(p) => Some(&p.base),
+        _ => None,
+    }
+}
+
+fn pane_name(section: &BflytSection) -> String {
+    if let Some(p) = base_pane(section) {
+        let name = p.pane_name.trim_end_matches('\0');
+        if !name.is_empty() {
+            return name.to_string();
+        }
+    }
+    section_kind_name(section).to_string()
+}
+
 fn resolve_rect(
     pane: &BflytPane,
     parent_x: f32,
     parent_y: f32,
     parent_w: f32,
     parent_h: f32,
-    layout_w: f32,
-    layout_h: f32,
 ) -> (f32, f32, f32, f32) {
     let anchor_x = match pane.origin.parent_origin_x {
         BflytParentOrigin::None => parent_x + parent_w * 0.5,
@@ -107,35 +135,48 @@ fn resolve_rect(
         BflytOrigin::RightBottom => cy - h,
     };
 
-    let x = tl_x.max(-layout_w).min(layout_w * 2.0);
-    let y = tl_y.max(-layout_h).min(layout_h * 2.0);
-
-    (x, y, w.abs().max(1.0), h.abs().max(1.0))
+    (tl_x, tl_y, w.abs().max(1.0), h.abs().max(1.0))
 }
 
-fn base_pane(section: &BflytSection) -> Option<&BflytPane> {
-    match section {
-        BflytSection::Pane(p) | BflytSection::BoundingPane(p) | BflytSection::ScissorPane(p) => {
-            Some(p)
-        }
-        BflytSection::PicturePane(p) => Some(&p.base),
-        BflytSection::TextBoxPane(p) => Some(&p.base),
-        BflytSection::WindowPane(p) => Some(&p.base),
-        BflytSection::PartsPane(p) => Some(&p.base),
-        BflytSection::AlignmentPane(p) => Some(&p.base),
-        BflytSection::CapturePane(p) => Some(&p.base),
-        _ => None,
-    }
+fn resolve_rect_in_parts(
+    pane: &BflytPane,
+    parent_x: f32,
+    parent_y: f32,
+    parent_w: f32,
+    parent_h: f32,
+    parts_center_x: f32,
+    parts_center_y: f32,
+    parts_scale_x: f32,
+    parts_scale_y: f32,
+) -> (f32, f32, f32, f32) {
+    let (lx, ly, lw, lh) = resolve_rect(pane, parent_x, parent_y, parent_w, parent_h);
+    let x = parts_center_x + lx * parts_scale_x;
+    let y = parts_center_y + ly * parts_scale_y;
+    let w = (lw * parts_scale_x).abs().max(1.0);
+    let h = (lh * parts_scale_y).abs().max(1.0);
+    (x, y, w, h)
 }
 
-fn pane_name(section: &BflytSection) -> String {
-    if let Some(p) = base_pane(section) {
-        let name = p.pane_name.trim_end_matches('\0');
-        if !name.is_empty() {
-            return name.to_string();
+pub fn load_bflyt_from_blarc_dir(blarc_dir: &Path, layout_name: &str) -> Option<Vec<u8>> {
+    let entry = std::fs::read_dir(blarc_dir).ok()?.find_map(|e| {
+        let e = e.ok()?;
+        let fname = e.file_name();
+        let fname = fname.to_string_lossy();
+        if fname.starts_with(layout_name) && (fname.ends_with(".blarc") || fname.ends_with(".sarc"))
+        {
+            Some(e.path())
+        } else {
+            None
         }
-    }
-    section_kind_name(section).to_string()
+    })?;
+
+    let bytes = std::fs::read(&entry).ok()?;
+    let sarc = Sarc::parse(&bytes).ok()?;
+
+    sarc.files
+        .into_iter()
+        .find(|f| f.name.as_deref().is_some_and(|n| n.ends_with(".bflyt")))
+        .map(|f| f.data)
 }
 
 struct Walker<'a> {
@@ -143,7 +184,13 @@ struct Walker<'a> {
     layout_h: f32,
     quads: &'a mut Vec<Quad>,
     panes: &'a mut Vec<PaneInfo>,
+    blarc_dir: Option<&'a Path>,
+    blarc_cache: &'a mut HashMap<String, Option<Bflyt>>,
+    parts_depth: usize,
+    parts_source: Option<String>,
 }
+
+const MAX_PARTS_DEPTH: usize = 8;
 
 impl<'a> Walker<'a> {
     fn walk_nodes(
@@ -171,38 +218,37 @@ impl<'a> Walker<'a> {
     ) {
         match node {
             BflytNode::Section(section) => {
-                if let Some(pane) = base_pane(section) {
-                    let (x, y, w, h) = resolve_rect(
-                        pane,
-                        parent_x,
-                        parent_y,
-                        parent_w,
-                        parent_h,
-                        self.layout_w,
-                        self.layout_h,
-                    );
+                let Some(base) = base_pane(section) else {
+                    return;
+                };
 
-                    let label = pane_name(section);
-                    let kind = section_kind_name(section).to_string();
+                let (x, y, w, h) = resolve_rect(base, parent_x, parent_y, parent_w, parent_h);
 
-                    self.quads.push(Quad {
-                        x,
-                        y,
-                        width: w,
-                        height: h,
-                        color: section_color(section),
-                    });
+                let label = pane_name(section);
+                let kind = section_kind_name(section).to_string();
 
-                    self.panes.push(PaneInfo {
-                        label,
-                        kind,
-                        x,
-                        y,
-                        section: section.clone(),
-                        width: w,
-                        height: h,
-                        depth,
-                    });
+                self.quads.push(Quad {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                    color: section_color(section),
+                });
+
+                self.panes.push(PaneInfo {
+                    label: label.clone(),
+                    kind,
+                    x,
+                    y,
+                    section: section.clone(),
+                    width: w,
+                    height: h,
+                    depth,
+                    parts_source: self.parts_source.clone(),
+                });
+
+                if let BflytSection::PartsPane(parts) = section {
+                    self.maybe_resolve_parts(parts, x, y, w, h, depth);
                 }
             }
 
@@ -213,20 +259,220 @@ impl<'a> Walker<'a> {
             BflytNode::Groups(_) => {}
         }
     }
+
+    fn maybe_resolve_parts(
+        &mut self,
+        parts: &nnbfl::bflyt::pane::BflytPartsPane,
+        parts_x: f32,
+        parts_y: f32,
+        parts_w: f32,
+        parts_h: f32,
+        depth: usize,
+    ) {
+        if self.parts_depth >= MAX_PARTS_DEPTH {
+            return;
+        }
+        let Some(blarc_dir) = self.blarc_dir else {
+            return;
+        };
+        let layout_name = parts.o_layout_name.trim_end_matches('\0');
+        if layout_name.is_empty() {
+            return;
+        }
+
+        if !self.blarc_cache.contains_key(layout_name) {
+            let loaded = load_bflyt_from_blarc_dir(blarc_dir, layout_name)
+                .and_then(|bytes| Bflyt::parse(&bytes).ok());
+            self.blarc_cache.insert(layout_name.to_string(), loaded);
+        }
+
+        let Some(sub_bflyt) = self.blarc_cache[layout_name].as_ref() else {
+            log::warn!("PartsPane: could not load '{layout_name}'");
+            return;
+        };
+
+        let overrides: HashMap<String, &BflytSection> = parts
+            .properties
+            .iter()
+            .filter_map(|prop| {
+                let name = prop.property_name.trim_end_matches('\0');
+                if name.is_empty() {
+                    return None;
+                }
+                prop.o_section.as_ref().map(|s| (name.to_string(), s))
+            })
+            .collect();
+
+        let scale_x = parts.base.scale.x * parts.magnify_x;
+        let scale_y = parts.base.scale.y * parts.magnify_y;
+
+        let center_x = parts_x + parts_w * 0.5;
+        let center_y = parts_y + parts_h * 0.5;
+
+        let sub_w = sub_bflyt.layout.width;
+        let sub_h = sub_bflyt.layout.height;
+
+        let sub_parent_x = -sub_w * 0.5;
+        let sub_parent_y = -sub_h * 0.5;
+
+        let parts_source_label = parts.base.pane_name.trim_end_matches('\0').to_string();
+
+        self.walk_nodes_in_parts(
+            &sub_bflyt.nodes.clone(),
+            sub_parent_x,
+            sub_parent_y,
+            sub_w,
+            sub_h,
+            center_x,
+            center_y,
+            scale_x,
+            scale_y,
+            depth + 1,
+            &overrides,
+            &parts_source_label,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn walk_nodes_in_parts(
+        &mut self,
+        nodes: &[BflytNode],
+        parent_x: f32,
+        parent_y: f32,
+        parent_w: f32,
+        parent_h: f32,
+        parts_origin_x: f32,
+        parts_origin_y: f32,
+        parts_scale_x: f32,
+        parts_scale_y: f32,
+        depth: usize,
+        overrides: &HashMap<String, &BflytSection>,
+        parts_source: &str,
+    ) {
+        for node in nodes {
+            self.walk_node_in_parts(
+                node,
+                parent_x,
+                parent_y,
+                parent_w,
+                parent_h,
+                parts_origin_x,
+                parts_origin_y,
+                parts_scale_x,
+                parts_scale_y,
+                depth,
+                overrides,
+                parts_source,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn walk_node_in_parts(
+        &mut self,
+        node: &BflytNode,
+        parent_x: f32,
+        parent_y: f32,
+        parent_w: f32,
+        parent_h: f32,
+        parts_origin_x: f32,
+        parts_origin_y: f32,
+        parts_scale_x: f32,
+        parts_scale_y: f32,
+        depth: usize,
+        overrides: &HashMap<String, &BflytSection>,
+        parts_source: &str,
+    ) {
+        match node {
+            BflytNode::Section(section) => {
+                let Some(base) = base_pane(section) else {
+                    return;
+                };
+
+                let pname = pane_name(section);
+
+                let effective_section: &BflytSection =
+                    overrides.get(&pname).copied().unwrap_or(section);
+                let effective_base = base_pane(effective_section).unwrap_or(base);
+
+                let (x, y, w, h) = resolve_rect_in_parts(
+                    effective_base,
+                    parent_x,
+                    parent_y,
+                    parent_w,
+                    parent_h,
+                    parts_origin_x,
+                    parts_origin_y,
+                    parts_scale_x,
+                    parts_scale_y,
+                );
+
+                self.quads.push(Quad {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                    color: section_color(effective_section),
+                });
+
+                self.panes.push(PaneInfo {
+                    label: pname,
+                    kind: section_kind_name(effective_section).to_string(),
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                    section: effective_section.clone(),
+                    depth,
+                    parts_source: Some(parts_source.to_string()),
+                });
+
+                if let BflytSection::PartsPane(nested_parts) = effective_section {
+                    self.parts_depth += 1;
+                    self.maybe_resolve_parts(nested_parts, x, y, w, h, depth);
+                    self.parts_depth -= 1;
+                }
+            }
+
+            BflytNode::Panes(children) => {
+                self.walk_nodes_in_parts(
+                    children,
+                    parent_x,
+                    parent_y,
+                    parent_w,
+                    parent_h,
+                    parts_origin_x,
+                    parts_origin_y,
+                    parts_scale_x,
+                    parts_scale_y,
+                    depth + 1,
+                    overrides,
+                    parts_source,
+                );
+            }
+
+            BflytNode::Groups(_) => {}
+        }
+    }
 }
 
-pub fn build_view(file: &Bflyt) -> BflytView {
+pub fn build_view(file: &Bflyt, blarc_dir: Option<&Path>) -> BflytView {
     let layout_w = file.layout.width;
     let layout_h = file.layout.height;
 
     let mut quads = Vec::new();
     let mut panes = Vec::new();
+    let mut blarc_cache: HashMap<String, Option<Bflyt>> = HashMap::new();
 
     let mut walker = Walker {
         layout_w,
         layout_h,
         quads: &mut quads,
         panes: &mut panes,
+        blarc_dir,
+        blarc_cache: &mut blarc_cache,
+        parts_depth: 0,
+        parts_source: None,
     };
 
     walker.walk_nodes(&file.nodes, 0.0, 0.0, layout_w, layout_h, 0);

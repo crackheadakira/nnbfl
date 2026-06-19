@@ -91,7 +91,6 @@ impl GpuState {
         let mut quad_renderer = QuadRenderer::new(&device, surface_format);
         quad_renderer.upload_quads(&device, &[]);
 
-        // let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, None, 1, false);
         let egui_renderer =
             egui_wgpu::Renderer::new(&device, surface_format, RendererOptions::default());
 
@@ -226,6 +225,7 @@ impl GpuState {
 struct App {
     bflyt_path: Option<PathBuf>,
     bflyt_view: Option<BflytView>,
+    blarc_dir: Option<PathBuf>,
     ui_state: UiState,
     camera: Camera,
     egui_ctx: egui::Context,
@@ -239,6 +239,7 @@ impl App {
         Self {
             bflyt_path: None,
             bflyt_view: None,
+            blarc_dir: None,
             ui_state: UiState::default(),
             camera: Camera::new(),
             egui_ctx: egui::Context::default(),
@@ -260,7 +261,7 @@ impl App {
 
     fn load_file_from_buffer(&mut self, bytes: Vec<u8>, file_name: String) {
         let file = Bflyt::parse(&bytes).expect("parse bflyt file");
-        let view = build_view(&file);
+        let view = build_view(&file, self.blarc_dir.as_deref());
         self.camera.zoom = 1.0;
         self.camera.offset = [0.0, 0.0];
         self.bflyt_view = Some(view);
@@ -371,6 +372,19 @@ impl ApplicationHandler for App {
 
         if let Some(action) = self.ui_state.pending_action.take() {
             match action {
+                UiAction::SetBlarcDir(dir) => {
+                    self.blarc_dir = Some(dir);
+                    if let Some(path) = self.bflyt_path.clone() {
+                        let bytes = std::fs::read(&path).ok();
+                        if let Some(bytes) = bytes {
+                            let name = path.file_name().unwrap().to_string_lossy().to_string();
+                            self.load_file_from_buffer(bytes, name);
+                        }
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
                 UiAction::LoadFile(path) => {
                     if path
                         .extension()

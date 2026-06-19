@@ -18,6 +18,7 @@ pub struct UiState {
 
 pub enum UiAction {
     LoadFile(PathBuf),
+    SetBlarcDir(PathBuf),
 }
 
 pub fn draw_ui(
@@ -171,6 +172,13 @@ pub fn draw_ui(
                         state.selected_pane = None;
                     }
 
+                    ui.close();
+                }
+
+                if ui.button("Set blarc folder...").clicked() {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        state.pending_action = Some(UiAction::SetBlarcDir(dir));
+                    }
                     ui.close();
                 }
             })
