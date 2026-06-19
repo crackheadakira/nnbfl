@@ -12,6 +12,7 @@ mod bflan;
 mod bflyt;
 mod cli;
 mod core;
+mod sarc;
 mod ui2d;
 
 #[derive(Parser)]
@@ -288,7 +289,7 @@ fn compare_files(
 
     for i in 0..std::cmp::min(file_in.len(), file_out.len()) {
         // skip header file size
-        if (0x0C..=0x0F).contains(&i) {
+        if (0x00..=0x0F).contains(&i) {
             continue;
         }
 

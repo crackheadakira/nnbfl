@@ -7,7 +7,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use camera::Camera;
 use egui_wgpu::ScreenDescriptor;
-use nnbfl::{bflyt::file::Bflyt, core::ReadWriteable};
+use nnbfl::{bflyt::file::Bflyt, core::ReadWriteable, sarc::file::Sarc};
 use pollster::FutureExt;
 use renderer::quad::QuadRenderer;
 use winit::{
@@ -246,6 +246,11 @@ impl App {
         };
 
         let bytes = std::fs::read(bflyt_path).expect("read bflyt file");
+        let title_path = bflyt_path.file_name().unwrap().to_string_lossy();
+        self.load_file_from_buffer(bytes, title_path.to_string());
+    }
+
+    fn load_file_from_buffer(&mut self, bytes: Vec<u8>, file_name: String) {
         let file = Bflyt::parse(&bytes).expect("parse bflyt file");
         let view = build_view(&file);
         self.camera.zoom = 1.0;
@@ -265,8 +270,7 @@ impl App {
                     size.height as f32,
                 );
 
-                let title_path = bflyt_path.file_name().unwrap().to_string_lossy();
-                window.set_title(&format!("nnbfl-preview - {title_path}"));
+                window.set_title(&format!("nnbfl-preview - {file_name}"));
             }
         }
 
@@ -275,6 +279,21 @@ impl App {
             self.bflyt_view.as_ref().unwrap().panes.len(),
             self.bflyt_path
         );
+    }
+
+    fn extract_buffer_from_sarc(&self, path: &PathBuf) -> Option<(String, Vec<u8>)> {
+        let file_bytes = std::fs::read(path).ok()?;
+        let sarc = Sarc::parse(&file_bytes).ok()?;
+
+        sarc.files
+            .into_iter()
+            .find(|f| f.name.as_ref().is_some_and(|n| n.ends_with(".bflyt")))
+            .map(|f| {
+                (
+                    f.name.unwrap_or_else(|| "unnamed.bflyt".to_string()),
+                    f.data,
+                )
+            })
     }
 }
 
@@ -338,9 +357,17 @@ impl ApplicationHandler for App {
         if let Some(action) = self.ui_state.pending_action.take() {
             match action {
                 UiAction::LoadFile(path) => {
-                    self.bflyt_path = Some(path);
-                    self.load_file();
-
+                    if path
+                        .extension()
+                        .is_some_and(|ext| ext == "blarc" || ext == "sarc")
+                    {
+                        if let Some((name, data)) = self.extract_buffer_from_sarc(&path) {
+                            self.load_file_from_buffer(data, name);
+                        }
+                    } else {
+                        self.bflyt_path = Some(path);
+                        self.load_file();
+                    }
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
