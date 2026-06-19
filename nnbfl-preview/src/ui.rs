@@ -163,8 +163,8 @@ pub fn draw_ui(
             ui.menu_button("File", |ui| {
                 if ui.button("Load File...").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter(".bflyt", &["bflyt"])
                         .add_filter(".sarc", &["blarc", "sarc"])
+                        .add_filter(".bflyt", &["bflyt"])
                         .pick_file()
                     {
                         state.pending_action = Some(UiAction::LoadFile(path));

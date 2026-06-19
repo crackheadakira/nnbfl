@@ -11,6 +11,8 @@ use egui_wgpu::{RendererOptions, ScreenDescriptor};
 use nnbfl::{bflyt::file::Bflyt, core::ReadWriteable, sarc::file::Sarc};
 use pollster::FutureExt;
 use renderer::quad::QuadRenderer;
+use renderer::texture::TextureCache;
+use renderer::textured_quad::TexturedQuadRenderer;
 use wgpu::CurrentSurfaceTexture;
 use winit::{
     application::ApplicationHandler,
@@ -22,7 +24,7 @@ use winit::{
 use bflyt_view::{BflytView, build_view};
 use ui::{UiState, draw_ui};
 
-use crate::ui::UiAction;
+use crate::{bflyt_view::ResolvedBlarc, ui::UiAction};
 
 struct GpuState {
     surface: wgpu::Surface<'static>,
@@ -30,6 +32,8 @@ struct GpuState {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     quad_renderer: QuadRenderer,
+    textured_quad_renderer: Option<TexturedQuadRenderer>,
+    texture_cache: TextureCache,
     egui_renderer: egui_wgpu::Renderer,
 }
 
@@ -91,8 +95,12 @@ impl GpuState {
         let mut quad_renderer = QuadRenderer::new(&device, surface_format);
         quad_renderer.upload_quads(&device, &[]);
 
+        let texture_cache = TextureCache::new(&device);
+
+        // let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, None, 1, false);
         let egui_renderer =
             egui_wgpu::Renderer::new(&device, surface_format, RendererOptions::default());
+        let textured_quad_renderer = None; // created after textures load
 
         Self {
             surface,
@@ -100,6 +108,8 @@ impl GpuState {
             queue,
             config,
             quad_renderer,
+            textured_quad_renderer,
+            texture_cache,
             egui_renderer,
         }
     }
@@ -124,6 +134,10 @@ impl GpuState {
     ) {
         self.quad_renderer
             .update_projection(&self.queue, camera, &self.config);
+        let matrix = camera.build_matrix(self.config.width as f32, self.config.height as f32);
+        if let Some(tqr) = &self.textured_quad_renderer {
+            tqr.update_projection(&self.queue, matrix);
+        }
 
         let output = match self.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(o) => o,
@@ -211,6 +225,9 @@ impl GpuState {
             });
 
             self.quad_renderer.render(&mut rpass);
+            if let Some(tqr) = &self.textured_quad_renderer {
+                tqr.render(&mut rpass);
+            }
 
             let mut rpass = rpass.forget_lifetime();
             self.egui_renderer
@@ -226,6 +243,7 @@ struct App {
     bflyt_path: Option<PathBuf>,
     bflyt_view: Option<BflytView>,
     blarc_dir: Option<PathBuf>,
+    blarc_textures_loaded: bool,
     ui_state: UiState,
     camera: Camera,
     egui_ctx: egui::Context,
@@ -240,6 +258,7 @@ impl App {
             bflyt_path: None,
             bflyt_view: None,
             blarc_dir: None,
+            blarc_textures_loaded: false,
             ui_state: UiState::default(),
             camera: Camera::new(),
             egui_ctx: egui::Context::default(),
@@ -256,12 +275,23 @@ impl App {
 
         let bytes = std::fs::read(bflyt_path).expect("read bflyt file");
         let title_path = bflyt_path.file_name().unwrap().to_string_lossy();
-        self.load_file_from_buffer(bytes, title_path.to_string());
+
+        let res = ResolvedBlarc {
+            bflyt_bytes: bytes,
+            bntx_bytes: None,
+        };
+
+        self.load_file_from_buffer(res, title_path.to_string());
     }
 
-    fn load_file_from_buffer(&mut self, bytes: Vec<u8>, file_name: String) {
-        let file = Bflyt::parse(&bytes).expect("parse bflyt file");
-        let view = build_view(&file, self.blarc_dir.as_deref());
+    fn load_file_from_buffer(&mut self, res: ResolvedBlarc, file_name: String) {
+        let file = Bflyt::parse(&res.bflyt_bytes).expect("parse bflyt file");
+        let mut view = build_view(&file, self.blarc_dir.as_deref());
+
+        if let Some(root_bntx) = res.bntx_bytes {
+            view.discovered_bntx_buffers.push(root_bntx);
+        }
+
         self.camera.zoom = 1.0;
         self.camera.offset = [0.0, 0.0];
         self.bflyt_view = Some(view);
@@ -269,6 +299,17 @@ impl App {
         if let Some(gpu) = &mut self.gpu {
             let view = self.bflyt_view.as_ref().unwrap();
             gpu.quad_renderer.upload_quads(&gpu.device, &view.quads);
+
+            for bntx_bytes in &view.discovered_bntx_buffers {
+                gpu.texture_cache
+                    .load_from_bntx_bytes(&gpu.device, &gpu.queue, bntx_bytes);
+            }
+
+            let mut tgr =
+                TexturedQuadRenderer::new(&gpu.device, gpu.config.format, &gpu.texture_cache);
+
+            tgr.upload_quads(&gpu.device, &view.textured_quads, &gpu.texture_cache);
+            gpu.textured_quad_renderer = Some(tgr);
 
             if let Some(window) = &self.window {
                 let size = window.inner_size();
@@ -289,19 +330,32 @@ impl App {
         );
     }
 
-    fn extract_buffer_from_sarc(&self, path: &PathBuf) -> Option<(String, Vec<u8>)> {
+    fn extract_buffer_from_sarc(&self, path: &PathBuf) -> Option<(String, ResolvedBlarc)> {
         let file_bytes = std::fs::read(path).ok()?;
         let sarc = Sarc::parse(&file_bytes).ok()?;
 
-        sarc.files
-            .into_iter()
-            .find(|f| f.name.as_ref().is_some_and(|n| n.ends_with(".bflyt")))
-            .map(|f| {
-                (
-                    f.name.unwrap_or_else(|| "unnamed.bflyt".to_string()),
-                    f.data,
-                )
-            })
+        let mut bflyt_name = "unnamed.bflyt".to_string();
+        let mut bflyt_bytes = None;
+        let mut bntx_bytes = None;
+
+        for file in sarc.files {
+            if let Some(name) = &file.name {
+                if name.ends_with(".bflyt") {
+                    bflyt_name = name.clone();
+                    bflyt_bytes = Some(file.data);
+                } else if name.ends_with(".bntx") || name.contains("__Combined") {
+                    bntx_bytes = Some(file.data);
+                }
+            }
+        }
+
+        Some((
+            bflyt_name,
+            ResolvedBlarc {
+                bflyt_bytes: bflyt_bytes?,
+                bntx_bytes,
+            },
+        ))
     }
 }
 
@@ -374,17 +428,25 @@ impl ApplicationHandler for App {
             match action {
                 UiAction::SetBlarcDir(dir) => {
                     self.blarc_dir = Some(dir);
+                    self.blarc_textures_loaded = false;
                     if let Some(path) = self.bflyt_path.clone() {
                         let bytes = std::fs::read(&path).ok();
                         if let Some(bytes) = bytes {
                             let name = path.file_name().unwrap().to_string_lossy().to_string();
-                            self.load_file_from_buffer(bytes, name);
+
+                            let res = ResolvedBlarc {
+                                bflyt_bytes: bytes,
+                                bntx_bytes: None,
+                            };
+
+                            self.load_file_from_buffer(res, name);
                         }
                     }
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
                 }
+
                 UiAction::LoadFile(path) => {
                     if path
                         .extension()

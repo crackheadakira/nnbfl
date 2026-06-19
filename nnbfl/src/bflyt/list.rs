@@ -527,7 +527,7 @@ impl MaterialFontShadowColor {
 }
 
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, FromPrimitive, IntoPrimitive,
+    Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, FromPrimitive, IntoPrimitive, Hash,
 )]
 #[repr(u8)]
 pub enum TevSource {
@@ -554,7 +554,7 @@ pub enum TevScale {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, FromPrimitive, IntoPrimitive,
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, FromPrimitive, IntoPrimitive, Hash,
 )]
 #[repr(u8)]
 pub enum CombinerTevMode {
