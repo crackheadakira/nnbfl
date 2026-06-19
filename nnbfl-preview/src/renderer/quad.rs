@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
+use wgpu::{SurfaceConfiguration, util::DeviceExt};
+
+use crate::camera::Camera;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -46,10 +48,19 @@ impl Uniforms {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GridUniforms {
+    pub proj: [[f32; 4]; 4],
+    pub resolution: [f32; 2],
+    pub zoom: f32,
+    pub _padding: f32,
+}
+
 pub struct QuadRenderer {
-    pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
+    quad_pipeline: RenderPipelineContainer,
+    grid_pipeline: RenderPipelineContainer,
+
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
@@ -59,81 +70,38 @@ pub struct QuadRenderer {
 
 impl QuadRenderer {
     pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("quad_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/quad.wgsl").into()),
-        });
-
-        let uniforms = Uniforms::from_matrix([
+        let matrix = [
             [1., 0., 0., 0.],
             [0., 1., 0., 0.],
             [0., 0., 1., 0.],
             [0., 0., 0., 1.],
-        ]);
+        ];
+        let quad_uniforms = Uniforms::from_matrix(matrix);
 
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("uniform_buffer"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let quad_container = RenderPipelineContainer::new(
+            device,
+            "quad",
+            include_str!("../shaders/quad.wgsl"),
+            &[Vertex::desc()],
+            surface_format,
+            quad_uniforms,
+            wgpu::ShaderStages::VERTEX,
+        );
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("uniform_bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("uniform_bg"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("quad_pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("quad_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: &[Vertex::desc()],
-                compilation_options: Default::default(),
+        let grid_container = RenderPipelineContainer::new(
+            device,
+            "grid",
+            include_str!("../shaders/grid.wgsl"),
+            &[],
+            surface_format,
+            GridUniforms {
+                proj: matrix,
+                resolution: [1920.0, 1080.0],
+                zoom: 1.0,
+                _padding: 0.0,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+            wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
+        );
 
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("vertex_buffer"),
@@ -150,9 +118,8 @@ impl QuadRenderer {
         });
 
         Self {
-            pipeline,
-            uniform_buffer,
-            uniform_bind_group,
+            quad_pipeline: quad_container,
+            grid_pipeline: grid_container,
             vertex_buffer,
             index_buffer,
             num_indices: 0,
@@ -198,9 +165,35 @@ impl QuadRenderer {
         self.cached_vertices = vertices;
     }
 
-    pub fn update_projection(&self, queue: &wgpu::Queue, matrix: [[f32; 4]; 4]) {
-        let uniforms = Uniforms::from_matrix(matrix);
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+    pub fn update_projection(
+        &self,
+        queue: &wgpu::Queue,
+        camera: &Camera,
+        config: &SurfaceConfiguration,
+    ) {
+        let width = config.width as f32;
+        let height = config.height as f32;
+        let matrix = camera.build_matrix(width, height);
+
+        let quad_uniforms = Uniforms::from_matrix(matrix);
+        queue.write_buffer(
+            &self.quad_pipeline.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&quad_uniforms),
+        );
+
+        let grid_uniforms = GridUniforms {
+            proj: matrix,
+            resolution: [width, height],
+            zoom: camera.zoom,
+            _padding: 0.0,
+        };
+
+        queue.write_buffer(
+            &self.grid_pipeline.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&grid_uniforms),
+        );
     }
 
     pub fn update_selection(
@@ -249,13 +242,106 @@ impl QuadRenderer {
     }
 
     pub fn render<'rpass>(&'rpass self, rpass: &mut wgpu::RenderPass<'rpass>) {
-        if self.num_indices == 0 {
-            return;
+        rpass.set_pipeline(&self.grid_pipeline.pipeline);
+        rpass.set_bind_group(0, &self.grid_pipeline.bind_group, &[]);
+        rpass.draw(0..6, 0..1);
+
+        if self.num_indices > 0 {
+            rpass.set_pipeline(&self.quad_pipeline.pipeline);
+            rpass.set_bind_group(0, &self.quad_pipeline.bind_group, &[]);
+            rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            rpass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
-        rpass.set_pipeline(&self.pipeline);
-        rpass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        rpass.draw_indexed(0..self.num_indices, 0, 0..1);
+    }
+}
+
+pub struct RenderPipelineContainer {
+    pub pipeline: wgpu::RenderPipeline,
+    pub uniform_buffer: wgpu::Buffer,
+    pub bind_group: wgpu::BindGroup,
+}
+
+impl RenderPipelineContainer {
+    pub fn new<U: bytemuck::Pod + bytemuck::Zeroable>(
+        device: &wgpu::Device,
+        label: &str,
+        shader_src: &str,
+        vertex_buffers: &[wgpu::VertexBufferLayout],
+        surface_format: wgpu::TextureFormat,
+        initial_uniforms: U,
+        visibility: wgpu::ShaderStages,
+    ) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(label),
+            source: wgpu::ShaderSource::Wgsl(shader_src.into()),
+        });
+
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{}_ub", label)),
+            contents: bytemuck::bytes_of(&initial_uniforms),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(&format!("{}_bgl", label)),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("{}_bg", label)),
+            layout: &bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(&format!("{}_layout", label)),
+            bind_group_layouts: &[&bgl],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: vertex_buffers,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        Self {
+            pipeline,
+            uniform_buffer,
+            bind_group,
+        }
     }
 }

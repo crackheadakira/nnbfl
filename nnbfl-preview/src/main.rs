@@ -117,8 +117,8 @@ impl GpuState {
         ui_state: &mut UiState,
         camera: &Camera,
     ) {
-        let matrix = camera.build_matrix(self.config.width as f32, self.config.height as f32);
-        self.quad_renderer.update_projection(&self.queue, matrix);
+        self.quad_renderer
+            .update_projection(&self.queue, camera, &self.config);
 
         let output = match self.surface.get_current_texture() {
             Ok(o) => o,
