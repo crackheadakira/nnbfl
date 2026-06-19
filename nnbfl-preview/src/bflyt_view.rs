@@ -10,6 +10,9 @@ use crate::renderer::quad::Quad;
 pub struct PaneInfo {
     pub label: String,
     pub kind: String,
+
+    pub section: BflytSection,
+
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -188,7 +191,6 @@ impl<'a> Walker<'a> {
                         width: w,
                         height: h,
                         color: section_color(section),
-                        label: label.clone(),
                     });
 
                     self.panes.push(PaneInfo {
@@ -196,6 +198,7 @@ impl<'a> Walker<'a> {
                         kind,
                         x,
                         y,
+                        section: section.clone(),
                         width: w,
                         height: h,
                         depth,

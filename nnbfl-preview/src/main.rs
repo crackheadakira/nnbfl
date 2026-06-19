@@ -138,7 +138,14 @@ impl GpuState {
 
         let raw_input = egui_state.take_egui_input(window);
         let full_output = egui_ctx.run(raw_input, |ctx| {
-            draw_ui(ctx, bflyt_view, ui_state);
+            draw_ui(
+                ctx,
+                bflyt_view,
+                ui_state,
+                camera,
+                self.config.width as f32,
+                self.config.height as f32,
+            );
         });
 
         egui_state.handle_platform_output(window, full_output.platform_output.clone());
@@ -257,6 +264,9 @@ impl App {
                     size.width as f32,
                     size.height as f32,
                 );
+
+                let title_path = bflyt_path.file_name().unwrap().to_string_lossy();
+                window.set_title(&format!("nnbfl-preview - {title_path}"));
             }
         }
 
@@ -354,16 +364,14 @@ impl ApplicationHandler for App {
                 }
             }
 
-            WindowEvent::MouseInput { state, button, .. } => {
-                if button == MouseButton::Middle {
-                    match state {
-                        winit::event::ElementState::Pressed => {
-                            if !egui_wants_pointer {
-                                self.camera.start_pan(self.camera.cursor_screen);
-                            }
+            WindowEvent::MouseInput { state, button, .. } if button == MouseButton::Middle => {
+                match state {
+                    winit::event::ElementState::Pressed => {
+                        if !egui_wants_pointer {
+                            self.camera.start_pan(self.camera.cursor_screen);
                         }
-                        winit::event::ElementState::Released => self.camera.end_pan(),
                     }
+                    winit::event::ElementState::Released => self.camera.end_pan(),
                 }
             }
 

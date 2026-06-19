@@ -78,4 +78,25 @@ impl Camera {
             [tx, ty, 0.0, 1.0],
         ]
     }
+
+    pub fn world_to_screen(
+        &self,
+        world_pos: [f32; 2],
+        viewport_w: f32,
+        viewport_h: f32,
+    ) -> egui::Pos2 {
+        let sx = 2.0 / viewport_w;
+        let sy = -2.0 / viewport_h;
+
+        let tx = sx * self.offset[0] - 1.0;
+        let ty = sy * self.offset[1] + 1.0;
+
+        let ndc_x = world_pos[0] * sx * self.zoom + tx;
+        let ndc_y = world_pos[1] * sy * self.zoom + ty;
+
+        let screen_x = ((ndc_x + 1.0) / 2.0) * viewport_w;
+        let screen_y = ((1.0 - ndc_y) / 2.0) * viewport_h;
+
+        egui::pos2(screen_x, screen_y)
+    }
 }

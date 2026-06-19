@@ -32,7 +32,6 @@ pub struct Quad {
     pub height: f32,
 
     pub color: [f32; 4],
-    pub label: String,
 }
 
 #[repr(C)]
