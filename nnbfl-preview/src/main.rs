@@ -6,10 +6,12 @@ mod ui;
 use std::{path::PathBuf, sync::Arc};
 
 use camera::Camera;
-use egui_wgpu::ScreenDescriptor;
+use egui_chinese_font::{FontError, setup_chinese_fonts};
+use egui_wgpu::{RendererOptions, ScreenDescriptor};
 use nnbfl::{bflyt::file::Bflyt, core::ReadWriteable, sarc::file::Sarc};
 use pollster::FutureExt;
 use renderer::quad::QuadRenderer;
+use wgpu::CurrentSurfaceTexture;
 use winit::{
     application::ApplicationHandler,
     event::{MouseButton, MouseScrollDelta, WindowEvent},
@@ -37,7 +39,10 @@ impl GpuState {
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            backend_options: wgpu::BackendOptions::default(),
+            display: None,
         });
 
         let surface = instance.create_surface(window).expect("create surface");
@@ -52,15 +57,14 @@ impl GpuState {
             .expect("find adapter");
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: Default::default(),
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: Default::default(),
+                trace: wgpu::Trace::Off,
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            })
             .block_on()
             .expect("create device");
 
@@ -87,7 +91,9 @@ impl GpuState {
         let mut quad_renderer = QuadRenderer::new(&device, surface_format);
         quad_renderer.upload_quads(&device, &[]);
 
-        let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, None, 1, false);
+        // let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, None, 1, false);
+        let egui_renderer =
+            egui_wgpu::Renderer::new(&device, surface_format, RendererOptions::default());
 
         Self {
             surface,
@@ -121,13 +127,13 @@ impl GpuState {
             .update_projection(&self.queue, camera, &self.config);
 
         let output = match self.surface.get_current_texture() {
-            Ok(o) => o,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            CurrentSurfaceTexture::Success(o) => o,
+            CurrentSurfaceTexture::Lost | CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
                 return;
             }
-            Err(e) => {
-                log::error!("Surface error: {e:?}");
+            _ => {
+                log::error!("Unknown surface error");
                 return;
             }
         };
@@ -137,9 +143,9 @@ impl GpuState {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         let raw_input = egui_state.take_egui_input(window);
-        let full_output = egui_ctx.run(raw_input, |ctx| {
+        let full_output = egui_ctx.run_ui(raw_input, |ui| {
             draw_ui(
-                ctx,
+                ui,
                 bflyt_view,
                 ui_state,
                 camera,
@@ -197,10 +203,12 @@ impl GpuState {
                         }),
                         store: wgpu::StoreOp::Store,
                     },
+                    depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             self.quad_renderer.render(&mut rpass);
@@ -275,9 +283,8 @@ impl App {
         }
 
         log::info!(
-            "Loaded {} panes from {:?}",
+            "Loaded {} panes from {file_name:?}",
             self.bflyt_view.as_ref().unwrap().panes.len(),
-            self.bflyt_path
         );
     }
 
@@ -328,6 +335,14 @@ impl ApplicationHandler for App {
             None,
         );
 
+        if let Err(err) = setup_chinese_fonts(&self.egui_ctx) {
+            match err {
+                FontError::NotFound(e) => log::warn!("CJK font not found: {e}"),
+                FontError::ReadError(e) => log::warn!("CJK font read error: {e}"),
+                FontError::UnsupportedPlatform => log::warn!("CJK font platform unsupported"),
+            }
+        };
+
         self.load_file();
 
         let size = window.inner_size();
@@ -351,8 +366,8 @@ impl ApplicationHandler for App {
             let _ = state.on_window_event(window, &event);
         }
 
-        let egui_wants_pointer = self.egui_ctx.wants_pointer_input();
-        let egui_wants_scroll = self.egui_ctx.wants_pointer_input();
+        let egui_wants_pointer = self.egui_ctx.egui_wants_pointer_input();
+        let egui_wants_scroll = self.egui_ctx.egui_wants_pointer_input();
 
         if let Some(action) = self.ui_state.pending_action.take() {
             match action {

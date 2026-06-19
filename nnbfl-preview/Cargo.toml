@@ -10,13 +10,15 @@ path = "src/main.rs"
 [dependencies]
 nnbfl = { path = "../nnbfl" }
 
-wgpu = "22"
+wgpu = "29"
 winit = "0.30"
-egui = "0.29"
-egui-wgpu = "0.29"
-egui-winit = "0.29"
+egui = "0.34"
+egui-wgpu = "0.34"
+egui-winit = "0.34"
 bytemuck = { version = "1.16", features = ["derive"] }
 pollster = "0.4"
 log = "0.4"
 env_logger = "0.11"
 rfd = "0.17"
+
+egui-chinese-font = { git = "https://github.com/szjerrywang/egui-chinese-font", branch = "egui-0.34" }

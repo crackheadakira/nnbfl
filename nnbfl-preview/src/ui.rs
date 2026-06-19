@@ -1,6 +1,6 @@
 use std::{collections::HashSet, path::PathBuf};
 
-use egui::Context;
+use egui::Ui;
 use nnbfl::bflyt::file::BflytSection;
 
 use crate::{
@@ -21,16 +21,16 @@ pub enum UiAction {
 }
 
 pub fn draw_ui(
-    ctx: &Context,
+    ui: &mut Ui,
     view: &Option<BflytView>,
     state: &mut UiState,
     camera: &Camera,
     screen_w: f32,
     screen_h: f32,
 ) {
-    egui::SidePanel::left("pane_tree")
-        .default_width(220.0)
-        .show(ctx, |ui| {
+    egui::Panel::left("pane_tree")
+        .default_size(220.0)
+        .show_inside(ui, |ui| {
             ui.heading("Pane Tree");
             ui.separator();
 
@@ -56,22 +56,22 @@ pub fn draw_ui(
                                 response.context_menu(|ui| {
                                     if !is_hidden && ui.button("Hide").clicked() {
                                         state.hidden_panes.insert(i);
-                                        ui.close_menu();
+                                        ui.close();
                                     }
 
                                     if !is_hidden && ui.button("Hide All").clicked() {
                                         hide_pane_recursive(i, view, &mut state.hidden_panes);
-                                        ui.close_menu();
+                                        ui.close();
                                     }
 
                                     if is_hidden && ui.button("Show").clicked() {
                                         state.hidden_panes.remove(&i);
-                                        ui.close_menu();
+                                        ui.close();
                                     }
 
                                     if is_hidden && ui.button("Show All").clicked() {
                                         show_pane_recursive(i, view, &mut state.hidden_panes);
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                 });
 
@@ -87,9 +87,9 @@ pub fn draw_ui(
         });
 
     if let Some(view) = view {
-        egui::TopBottomPanel::bottom("properties")
-            .default_height(150.0)
-            .show(ctx, |ui| {
+        egui::Panel::bottom("properties")
+            .default_size(150.0)
+            .show_inside(ui, |ui| {
                 ui.heading("Properties");
                 ui.separator();
 
@@ -102,8 +102,8 @@ pub fn draw_ui(
                 }
             });
 
-        let viewport_rect = ctx.available_rect();
-        let painter = ctx
+        let viewport_rect = ui.content_rect();
+        let painter = ui
             .layer_painter(egui::LayerId::background())
             .with_clip_rect(viewport_rect);
 
@@ -147,7 +147,7 @@ pub fn draw_ui(
         egui::Window::new("Error")
             .collapsible(false)
             .resizable(false)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.label(err);
 
                 if ui.button("Close").clicked() {
@@ -156,8 +156,8 @@ pub fn draw_ui(
             });
     };
 
-    egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-        egui::menu::bar(ui, |ui| {
+    egui::Panel::top("menu_bar").show_inside(ui, |ui| {
+        egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui.button("Load File...").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
@@ -170,7 +170,7 @@ pub fn draw_ui(
                         state.selected_pane = None;
                     }
 
-                    ui.close_menu();
+                    ui.close();
                 }
             })
         })
