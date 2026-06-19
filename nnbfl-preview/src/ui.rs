@@ -28,6 +28,46 @@ pub fn draw_ui(
     screen_w: f32,
     screen_h: f32,
 ) {
+    if let Some(view) = view {
+        let viewport_rect = ui.content_rect();
+        let painter = ui.painter().with_clip_rect(viewport_rect);
+
+        for (i, pane) in view.panes.iter().enumerate() {
+            if let BflytSection::TextBoxPane(text_box) = &pane.section
+                && let Some(text) = &text_box.text
+                && let Some(quad) = view.quads.get(i)
+                && !state.hidden_panes.contains(&i)
+            {
+                let center_x = quad.x + (quad.width * 0.5);
+                let center_y = quad.y + (quad.height * 0.5);
+
+                let screen_pos = camera.world_to_screen([center_x, center_y], screen_w, screen_h);
+                let font_size = (32.0 * camera.zoom).clamp(8.0, 128.0);
+                let font_id = egui::FontId::proportional(font_size);
+
+                let shadow_offset = (font_size * 0.08).max(1.5);
+                let shadow_pos =
+                    egui::pos2(screen_pos.x + shadow_offset, screen_pos.y + shadow_offset);
+
+                painter.text(
+                    shadow_pos,
+                    egui::Align2::CENTER_CENTER,
+                    &text,
+                    font_id.clone(),
+                    egui::Color32::from_black_alpha(220),
+                );
+
+                painter.text(
+                    screen_pos,
+                    egui::Align2::CENTER_CENTER,
+                    &text,
+                    font_id,
+                    egui::Color32::WHITE,
+                );
+            }
+        }
+    }
+
     egui::Panel::left("pane_tree")
         .default_size(220.0)
         .show_inside(ui, |ui| {
@@ -101,45 +141,6 @@ pub fn draw_ui(
                     ui.label("Select a pane in the tree to inspect it.");
                 }
             });
-
-        let viewport_rect = ui.content_rect();
-        let painter = ui
-            .layer_painter(egui::LayerId::background())
-            .with_clip_rect(viewport_rect);
-
-        for (i, pane) in view.panes.iter().enumerate() {
-            if let BflytSection::TextBoxPane(text_box) = &pane.section
-                && let Some(text) = &text_box.text
-                && let Some(quad) = view.quads.get(i)
-            {
-                let center_x = quad.x + (quad.width * 0.5);
-                let center_y = quad.y + (quad.height * 0.5);
-
-                let screen_pos = camera.world_to_screen([center_x, center_y], screen_w, screen_h);
-                let font_size = (32.0 * camera.zoom).clamp(8.0, 128.0);
-                let font_id = egui::FontId::proportional(font_size);
-
-                let shadow_offset = (font_size * 0.08).max(1.5);
-                let shadow_pos =
-                    egui::pos2(screen_pos.x + shadow_offset, screen_pos.y + shadow_offset);
-
-                painter.text(
-                    shadow_pos,
-                    egui::Align2::CENTER_CENTER,
-                    &text,
-                    font_id.clone(),
-                    egui::Color32::from_black_alpha(220),
-                );
-
-                painter.text(
-                    screen_pos,
-                    egui::Align2::CENTER_CENTER,
-                    &text,
-                    font_id,
-                    egui::Color32::WHITE,
-                );
-            }
-        }
     }
 
     // maybe somehow can be done without a clone?
