@@ -540,7 +540,7 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
 
 
     var color = mat.interpolate_offset + mat.interpolate_width * tex_color;
-    color       *= in.tint;
+    // color       *= in.tint;
     color.a     = clamp(color.a, 0.0, 1.0);
 
     return color;

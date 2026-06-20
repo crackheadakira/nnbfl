@@ -8,6 +8,15 @@ use crate::{
     camera::Camera,
 };
 
+pub const SUPPORTED_SARC_EXTENSIONS: &[&str] = &[
+    "blarc",
+    "sarc",
+    "Nin_NX_NVN",
+    "blarc.zs",
+    "sarc.zs",
+    "Nin_NX_NVN.zs",
+];
+
 #[derive(Default)]
 pub struct UiState {
     pub selected_pane: Option<usize>,
@@ -56,7 +65,7 @@ pub fn draw_ui(
                 painter.text(
                     shadow_pos,
                     egui::Align2::CENTER_CENTER,
-                    &text,
+                    text,
                     font_id.clone(),
                     egui::Color32::from_black_alpha(220),
                 );
@@ -64,7 +73,7 @@ pub fn draw_ui(
                 painter.text(
                     screen_pos,
                     egui::Align2::CENTER_CENTER,
-                    &text,
+                    text,
                     font_id,
                     egui::Color32::WHITE,
                 );
@@ -168,7 +177,10 @@ pub fn draw_ui(
             ui.menu_button("File", |ui| {
                 if ui.button("Load File...").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Supported files", &["blarc", "sarc", "Nin_NX_NVN", "bflyt"])
+                        .add_filter(
+                            "Supported files",
+                            &[SUPPORTED_SARC_EXTENSIONS, &["bflyt"]].concat(),
+                        )
                         .pick_file()
                     {
                         state.pending_action = Some(UiAction::LoadFile(path));
@@ -233,6 +245,12 @@ fn draw_pane_properties(ui: &mut egui::Ui, pane: &PaneInfo) {
             ui.label("X");
             ui.label(format!("{:.2}", pane.x));
             ui.end_row();
+
+            if let Some(source) = &pane.parts_source {
+                ui.label("Parts Source");
+                ui.label(source);
+                ui.end_row();
+            }
 
             ui.label("Y");
             ui.label(format!("{:.2}", pane.y));

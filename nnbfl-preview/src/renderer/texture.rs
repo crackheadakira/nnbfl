@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use tomolib::formats::bntx::{Bntx, image::decode_texture_rgba};
+use tomolib::formats::bntx::{
+    Bntx,
+    image::{ChannelResolve, decode_texture_rgba_with},
+};
 use wgpu::util::DeviceExt;
 
 pub struct GpuTexture {
@@ -71,7 +74,7 @@ impl TextureCache {
         queue: &wgpu::Queue,
         bntx_bytes: &[u8],
     ) {
-        let bntx = match Bntx::parse(&bntx_bytes) {
+        let bntx = match Bntx::parse(bntx_bytes) {
             Ok(b) => b,
             Err(e) => {
                 log::error!("TextureCache: failed to parse BNTX: {e}");
@@ -82,34 +85,8 @@ impl TextureCache {
         log::info!("TextureCache: loading {} textures", bntx.textures.len());
 
         for tex in &bntx.textures {
-            match decode_texture_rgba(tex, 0) {
-                Ok(mut rgba) => {
-                    let needs_swizzle = tex.info.channel_r != 2
-                        || tex.info.channel_g != 3
-                        || tex.info.channel_b != 4
-                        || tex.info.channel_a != 5;
-
-                    if needs_swizzle {
-                        for pixel in &mut rgba.data.chunks_exact_mut(4) {
-                            let src = [pixel[0], pixel[1], pixel[2], pixel[3]];
-
-                            let resolve = |ch: u8| match ch {
-                                0 => 0x00,
-                                1 => 0xFF,
-                                2 => src[0], // red
-                                3 => src[1], // green
-                                4 => src[2], // blue
-                                5 => src[3], // alpha
-                                _ => 0x00,
-                            };
-
-                            pixel[0] = resolve(tex.info.channel_r);
-                            pixel[1] = resolve(tex.info.channel_g);
-                            pixel[2] = resolve(tex.info.channel_b);
-                            pixel[3] = resolve(tex.info.channel_a);
-                        }
-                    };
-
+            match decode_texture_rgba_with(tex, 0, ChannelResolve::Resolved) {
+                Ok(rgba) => {
                     let gpu_tex = upload_rgba(
                         device,
                         queue,

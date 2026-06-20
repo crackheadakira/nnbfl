@@ -20,6 +20,6 @@ pollster = "0.4"
 log = "0.4"
 env_logger = "0.11"
 rfd = "0.17"
-tomolib = "1.4"
+tomolib = "1.5"
 
 egui-chinese-font = { git = "https://github.com/szjerrywang/egui-chinese-font", branch = "egui-0.34" }

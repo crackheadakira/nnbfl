@@ -320,8 +320,8 @@ impl TexturedQuadRenderer {
 
             let mut detailed_combiner_hash = [0i32; 6];
             if q.is_detailed {
-                for i in 0..6 {
-                    detailed_combiner_hash[i] = q.detailed_combiner_material.stage_bits[i][0]
+                for (i, hash) in detailed_combiner_hash.iter_mut().enumerate() {
+                    *hash = q.detailed_combiner_material.stage_bits[i][0]
                         ^ q.detailed_combiner_material.stage_bits[i][1]
                         ^ q.detailed_combiner_material.stage_bits[i][2];
                 }
@@ -369,30 +369,30 @@ impl TexturedQuadRenderer {
             let positions = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
 
             let mut match_found = false;
-            if let Some(last) = self.batches.last_mut() {
-                if last.key == key {
-                    let base = last.vertices.len() as u32;
-                    for (i, pos) in positions.iter().enumerate() {
-                        last.vertices.push(TexturedVertex {
-                            position: *pos,
-                            uv0: q.uvs[i][0],
-                            uv1: q.uvs[i][1],
-                            uv2: q.uvs[i][2],
-                            tint: q.tint,
-                        });
-                    }
-
-                    last.indices.extend_from_slice(&[
-                        base,
-                        base + 1,
-                        base + 2,
-                        base + 1,
-                        base + 3,
-                        base + 2,
-                    ]);
-                    last.pane_indices.push(q.pane_idx);
-                    match_found = true;
+            if let Some(last) = self.batches.last_mut()
+                && last.key == key
+            {
+                let base = last.vertices.len() as u32;
+                for (i, pos) in positions.iter().enumerate() {
+                    last.vertices.push(TexturedVertex {
+                        position: *pos,
+                        uv0: q.uvs[i][0],
+                        uv1: q.uvs[i][1],
+                        uv2: q.uvs[i][2],
+                        tint: q.tint,
+                    });
                 }
+
+                last.indices.extend_from_slice(&[
+                    base,
+                    base + 1,
+                    base + 2,
+                    base + 1,
+                    base + 3,
+                    base + 2,
+                ]);
+                last.pane_indices.push(q.pane_idx);
+                match_found = true;
             }
 
             if !match_found {

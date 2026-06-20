@@ -10,8 +10,11 @@ use nnbfl::{
     core::ReadWriteable,
 };
 
-use crate::renderer::textured_quad::{DetailedCombinerMaterial, StandardMaterial, TexturedQuad};
-use crate::{renderer::quad::Quad, unpack_sarc_recursive};
+use crate::{decompress_if_needed, renderer::quad::Quad, unpack_sarc_recursive};
+use crate::{
+    renderer::textured_quad::{DetailedCombinerMaterial, StandardMaterial, TexturedQuad},
+    ui::SUPPORTED_SARC_EXTENSIONS,
+};
 
 #[derive(Debug, Clone)]
 pub struct PaneInfo {
@@ -23,7 +26,6 @@ pub struct PaneInfo {
     pub width: f32,
     pub height: f32,
     pub depth: usize,
-    /// Which top-level PartsPane spawned this (None = root layout pane)
     pub parts_source: Option<String>,
     pub visible: bool,
 }
@@ -169,23 +171,26 @@ pub struct ResolvedBlarc {
 }
 
 pub fn load_bflyt_from_blarc_dir(blarc_dir: &Path, layout_name: &str) -> Option<ResolvedBlarc> {
-    let entry = std::fs::read_dir(blarc_dir).ok()?.find_map(|e| {
+    let entry_path = std::fs::read_dir(blarc_dir).ok()?.find_map(|e| {
         let e = e.ok()?;
-        let fname = e.file_name();
-        let fname = fname.to_string_lossy();
+        let path = e.path();
+        let fname = path.file_name()?.to_string_lossy().to_lowercase();
 
-        if fname.starts_with(layout_name)
-            && (fname.ends_with(".blarc")
-                || fname.ends_with(".sarc")
-                || fname.ends_with(".Nin_NX_NVN"))
-        {
-            Some(e.path())
-        } else {
-            None
+        if !fname.starts_with(&layout_name.to_lowercase()) {
+            return None;
         }
+
+        let is_valid_sarc = SUPPORTED_SARC_EXTENSIONS
+            .iter()
+            .any(|ext| fname.ends_with(&format!(".{}", ext.to_lowercase())));
+
+        if is_valid_sarc { Some(path) } else { None }
     })?;
 
-    let bytes = std::fs::read(&entry).ok()?;
+    let mut bytes = std::fs::read(&entry_path).ok()?;
+    let filename = entry_path.file_name()?.to_string_lossy();
+
+    bytes = decompress_if_needed(bytes, &filename);
 
     let mut bflyt_name = "unnamed.bflyt".to_string();
     let mut resolved = ResolvedBlarc {
@@ -290,13 +295,12 @@ impl<'a> Walker<'a> {
 
                 let mut has_textured = false;
                 if let BflytSection::PicturePane(pic) = section {
-                    if let Some(mat_list) = self.material_list {
-                        if let Some(tq) =
+                    if let Some(mat_list) = self.material_list
+                        && let Some(tq) =
                             self.make_textured_quad(mat_list, pic, x, y, w, h, pane_idx, is_visible)
-                        {
-                            self.textured_quads.push(tq);
-                            has_textured = true;
-                        }
+                    {
+                        self.textured_quads.push(tq);
+                        has_textured = true;
                     }
                 }
 
@@ -548,16 +552,18 @@ impl<'a> Walker<'a> {
             ([0.0f32; 4], [0.0f32; 4])
         };
 
-        let mut standard_material = StandardMaterial::default();
-        standard_material.interpolate_width = interpolate_width;
-        standard_material.interpolate_offset = interpolate_offset;
-        standard_material.combine_mode = combine_mode;
-        standard_material.combine_mode2 = combine_mode2;
-        standard_material.texture_count = texture_count;
-        standard_material.alpha_select = alpha_select;
-        standard_material.tex_gen_mode = tex_gen_mode_packed;
-        standard_material.indirect_mtx0 = indirect_mtx0;
-        standard_material.indirect_mtx1 = indirect_mtx1;
+        let standard_material = StandardMaterial {
+            interpolate_width: interpolate_width,
+            interpolate_offset: interpolate_offset,
+            combine_mode: combine_mode,
+            combine_mode2: combine_mode2,
+            texture_count: texture_count,
+            alpha_select: alpha_select,
+            tex_gen_mode: tex_gen_mode_packed,
+            indirect_mtx0: indirect_mtx0,
+            indirect_mtx1: indirect_mtx1,
+            ..Default::default()
+        };
 
         Some(TexturedQuad {
             x,
@@ -603,17 +609,16 @@ impl<'a> Walker<'a> {
             return;
         }
 
-        if !self.blarc_cache.contains_key(layout_name) {
-            if let Some(assets) = load_bflyt_from_blarc_dir(blarc_dir, layout_name) {
-                if let Ok(sub_bflyt) = Bflyt::parse(&assets.bflyt_bytes) {
-                    if let Some(bntx_data) = assets.bntx_bytes {
-                        self.discovered_bntx_buffers.push(bntx_data);
-                    }
-
-                    self.blarc_cache
-                        .insert(layout_name.to_string(), Some(sub_bflyt));
-                }
+        if !self.blarc_cache.contains_key(layout_name)
+            && let Some(assets) = load_bflyt_from_blarc_dir(blarc_dir, layout_name)
+            && let Ok(sub_bflyt) = Bflyt::parse(&assets.bflyt_bytes)
+        {
+            if let Some(bntx_data) = assets.bntx_bytes {
+                self.discovered_bntx_buffers.push(bntx_data);
             }
+
+            self.blarc_cache
+                .insert(layout_name.to_string(), Some(sub_bflyt));
         }
 
         let Some(Some(sub_bflyt)) = self.blarc_cache.get(layout_name) else {
@@ -664,7 +669,6 @@ impl<'a> Walker<'a> {
             scale_y,
             depth + 1,
             &overrides,
-            &override_use_root,
             sub_mat_list.as_ref(),
             root_mat_list,
             &parts_source_label,
@@ -686,7 +690,6 @@ impl<'a> Walker<'a> {
         parts_scale_y: f32,
         depth: usize,
         overrides: &HashMap<String, &BflytSection>,
-        override_use_root: &HashMap<String, bool>,
         sub_mat_list: Option<&nnbfl::bflyt::list::BflytMaterialList>,
         root_mat_list: Option<&nnbfl::bflyt::list::BflytMaterialList>,
         parts_source: &str,
@@ -740,7 +743,6 @@ impl<'a> Walker<'a> {
                         parts_scale_y,
                         depth + 1,
                         overrides,
-                        override_use_root,
                         sub_mat_list,
                         root_mat_list,
                         parts_source,
@@ -809,13 +811,12 @@ impl<'a> Walker<'a> {
                         sub_mat_list
                     };
 
-                    if let Some(mat_list) = chosen_mat_list {
-                        if let Some(tq) =
+                    if let Some(mat_list) = chosen_mat_list
+                        && let Some(tq) =
                             self.make_textured_quad(mat_list, pic, x, y, w, h, pane_idx, is_visible)
-                        {
-                            self.textured_quads.push(tq);
-                            has_textured = true;
-                        }
+                    {
+                        self.textured_quads.push(tq);
+                        has_textured = true;
                     }
                 }
 

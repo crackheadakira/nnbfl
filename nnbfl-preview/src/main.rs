@@ -24,7 +24,10 @@ use winit::{
 use bflyt_view::{BflytView, build_view};
 use ui::{UiState, draw_ui};
 
-use crate::{bflyt_view::ResolvedBlarc, ui::UiAction};
+use crate::{
+    bflyt_view::ResolvedBlarc,
+    ui::{SUPPORTED_SARC_EXTENSIONS, UiAction},
+};
 
 struct GpuState {
     surface: wgpu::Surface<'static>,
@@ -139,34 +142,34 @@ impl GpuState {
         }
 
         let mut scissor_rect = None;
-        if let Some(view) = bflyt_view {
-            if ui_state.clip_to_root {
-                let screen_w = self.config.width as f32;
-                let screen_h = self.config.height as f32;
+        if let Some(view) = bflyt_view
+            && ui_state.clip_to_root
+        {
+            let screen_w = self.config.width as f32;
+            let screen_h = self.config.height as f32;
 
-                let scale_x = matrix[0][0];
-                let scale_y = matrix[1][1];
-                let trans_x = matrix[3][0];
-                let trans_y = matrix[3][1];
+            let scale_x = matrix[0][0];
+            let scale_y = matrix[1][1];
+            let trans_x = matrix[3][0];
+            let trans_y = matrix[3][1];
 
-                let ndc_x0 = trans_x;
-                let ndc_y0 = trans_y;
-                let ndc_x1 = view.layout_width * scale_x + trans_x;
-                let ndc_y1 = view.layout_height * scale_y + trans_y;
+            let ndc_x0 = trans_x;
+            let ndc_y0 = trans_y;
+            let ndc_x1 = view.layout_width * scale_x + trans_x;
+            let ndc_y1 = view.layout_height * scale_y + trans_y;
 
-                let x0 = ((ndc_x0 + 1.0) * 0.5 * screen_w).clamp(0.0, screen_w);
-                let y0 = ((1.0 - ndc_y0) * 0.5 * screen_h).clamp(0.0, screen_h);
-                let x1 = ((ndc_x1 + 1.0) * 0.5 * screen_w).clamp(0.0, screen_w);
-                let y1 = ((1.0 - ndc_y1) * 0.5 * screen_h).clamp(0.0, screen_h);
+            let x0 = ((ndc_x0 + 1.0) * 0.5 * screen_w).clamp(0.0, screen_w);
+            let y0 = ((1.0 - ndc_y0) * 0.5 * screen_h).clamp(0.0, screen_h);
+            let x1 = ((ndc_x1 + 1.0) * 0.5 * screen_w).clamp(0.0, screen_w);
+            let y1 = ((1.0 - ndc_y1) * 0.5 * screen_h).clamp(0.0, screen_h);
 
-                let sx = x0.min(x1) as u32;
-                let sy = y0.min(y1) as u32;
-                let sw = (x0 - x1).abs() as u32;
-                let sh = (y0 - y1).abs() as u32;
+            let sx = x0.min(x1) as u32;
+            let sy = y0.min(y1) as u32;
+            let sw = (x0 - x1).abs() as u32;
+            let sh = (y0 - y1).abs() as u32;
 
-                if sw > 0 && sh > 0 {
-                    scissor_rect = Some((sx, sy, sw, sh));
-                }
+            if sw > 0 && sh > 0 {
+                scissor_rect = Some((sx, sy, sw, sh));
             }
         }
 
@@ -383,7 +386,10 @@ impl App {
     }
 
     fn extract_buffer_from_sarc(&self, path: &PathBuf) -> Option<(String, ResolvedBlarc)> {
-        let file_bytes = std::fs::read(path).ok()?;
+        let mut file_bytes = std::fs::read(path).ok()?;
+        let filename = path.file_name()?.to_string_lossy();
+
+        file_bytes = decompress_if_needed(file_bytes, &filename);
 
         let mut bflyt_name = "unnamed.bflyt".to_string();
         let mut resolved = ResolvedBlarc {
@@ -411,23 +417,49 @@ pub fn unpack_sarc_recursive(data: &[u8], bflyt_name: &mut String, resolved: &mu
             continue;
         };
 
-        if name.ends_with(".bflyt") {
+        let file_data = decompress_if_needed(file.data.clone(), name);
+        let name_lower = name.to_lowercase();
+
+        let clean_name = if name_lower.ends_with(".zs") {
+            &name_lower[..name_lower.len() - 3]
+        } else {
+            &name_lower
+        };
+
+        if clean_name.ends_with(".bflyt") {
             if resolved.bflyt_bytes.is_empty() {
                 *bflyt_name = name.clone();
-                resolved.bflyt_bytes = file.data.clone();
+                resolved.bflyt_bytes = file_data;
             }
-        } else if name.ends_with(".bntx") || name.contains("__Combined") {
+        } else if clean_name.ends_with(".bntx") || clean_name.contains("__combined") {
             if resolved.bntx_bytes.is_none() {
-                resolved.bntx_bytes = Some(file.data.clone());
+                resolved.bntx_bytes = Some(file_data);
             }
-        } else if name.ends_with(".sarc")
-            || name.ends_with(".blarc")
-            || name.ends_with(".arc")
-            || name.contains("Nin_NX_NVN")
-        {
-            unpack_sarc_recursive(&file.data, bflyt_name, resolved);
+        } else {
+            let is_nested_sarc = clean_name.ends_with(".arc")
+                || SUPPORTED_SARC_EXTENSIONS
+                    .iter()
+                    .any(|ext| clean_name.ends_with(&format!(".{}", ext.to_lowercase())));
+
+            if is_nested_sarc {
+                unpack_sarc_recursive(&file_data, bflyt_name, resolved);
+            }
         }
     }
+}
+
+fn decompress_if_needed(data: Vec<u8>, filename: &str) -> Vec<u8> {
+    if filename.to_lowercase().ends_with(".zs") {
+        let mut decompressed = Vec::new();
+
+        if tomolib::formats::zs::decompress(&data[..], &mut decompressed).is_ok() {
+            return decompressed;
+        } else {
+            log::error!("Failed to decompress Zstd file: {filename}");
+        }
+    }
+
+    data
 }
 
 impl ApplicationHandler for App {
@@ -492,6 +524,18 @@ impl ApplicationHandler for App {
             let _ = state.on_window_event(window, &event);
         }
 
+        match &event {
+            WindowEvent::CursorMoved { .. }
+            | WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::KeyboardInput { .. } => {
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            _ => {}
+        }
+
         let egui_wants_pointer = self.egui_ctx.egui_wants_pointer_input();
         let egui_wants_scroll = self.egui_ctx.egui_wants_pointer_input();
 
@@ -519,10 +563,13 @@ impl ApplicationHandler for App {
                 }
 
                 UiAction::LoadFile(path) => {
-                    if path
-                        .extension()
-                        .is_some_and(|ext| ext == "blarc" || ext == "sarc" || ext == "Nin_NX_NVN")
-                    {
+                    let path_str = path.to_string_lossy().to_lowercase();
+
+                    let is_sarc = SUPPORTED_SARC_EXTENSIONS
+                        .iter()
+                        .any(|ext| path_str.ends_with(&format!(".{}", ext.to_lowercase())));
+
+                    if is_sarc {
                         if let Some((name, data)) = self.extract_buffer_from_sarc(&path) {
                             self.load_file_from_buffer(data, name);
                         }
@@ -530,6 +577,7 @@ impl ApplicationHandler for App {
                         self.bflyt_path = Some(path);
                         self.load_file();
                     }
+
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -546,23 +594,25 @@ impl ApplicationHandler for App {
 
                 if self.camera.is_panning && !egui_wants_pointer {
                     self.camera.pan(pos);
+                }
 
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
+                if let Some(w) = &self.window {
+                    w.request_redraw();
                 }
             }
 
-            WindowEvent::MouseInput { state, button, .. } if button == MouseButton::Middle => {
-                match state {
-                    winit::event::ElementState::Pressed => {
-                        if !egui_wants_pointer {
-                            self.camera.start_pan(self.camera.cursor_screen);
-                        }
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Middle,
+                ..
+            } => match state {
+                winit::event::ElementState::Pressed => {
+                    if !egui_wants_pointer {
+                        self.camera.start_pan(self.camera.cursor_screen);
                     }
-                    winit::event::ElementState::Released => self.camera.end_pan(),
                 }
-            }
+                winit::event::ElementState::Released => self.camera.end_pan(),
+            },
 
             WindowEvent::MouseWheel { delta, .. } if !egui_wants_scroll => {
                 let lines = match delta {
@@ -577,8 +627,11 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::Resized(size) => {
-                if let (Some(gpu), Some(view)) = (&mut self.gpu, &self.bflyt_view) {
+                if let Some(gpu) = &mut self.gpu {
                     gpu.resize(size);
+                }
+
+                if let Some(view) = &self.bflyt_view {
                     self.camera.fit(
                         view.layout_width,
                         view.layout_height,
@@ -610,12 +663,18 @@ impl ApplicationHandler for App {
                         &mut self.ui_state,
                         &self.camera,
                     );
-
-                    window.request_redraw();
                 }
             }
 
             _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if self.egui_ctx.has_requested_repaint() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
         }
     }
 }
