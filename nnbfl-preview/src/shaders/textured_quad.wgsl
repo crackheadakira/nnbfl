@@ -506,10 +506,6 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var tex_color: vec4<f32>;
 
-    if mat.combine_mode == TEV_MODE_INDIRECT {
-        tex_
-    }
-
     if mat.texture_count == 0u {
         tex_color = vec4<f32>(1.0);
     } else if mat.texture_count == 1u {

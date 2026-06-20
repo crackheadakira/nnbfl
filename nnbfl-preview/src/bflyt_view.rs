@@ -38,54 +38,6 @@ pub struct BflytView {
     pub discovered_bntx_buffers: Vec<Vec<u8>>,
 }
 
-impl BflytView {
-    fn translate_pane_primitive(&mut self, pane_idx: usize, delta_x: f32, delta_y: f32) {
-        if let Some(pane) = self.panes.get_mut(pane_idx) {
-            pane.x += delta_x;
-            pane.y += delta_y;
-        }
-
-        if let Some(quad) = self.quads.get_mut(pane_idx) {
-            quad.x += delta_x;
-            quad.y += delta_y;
-        }
-
-        if let Some(tq) = self
-            .textured_quads
-            .iter_mut()
-            .find(|t| t.pane_idx == pane_idx)
-        {
-            tq.x += delta_x;
-            tq.y += delta_y;
-        }
-    }
-
-    pub fn translate_pane_primitive_hierarchical(
-        &mut self,
-        pane_idx: usize,
-        delta_x: f32,
-        delta_y: f32,
-    ) {
-        let parent_label = self.panes.get(pane_idx).map(|p| p.label.clone());
-
-        self.translate_pane_primitive(pane_idx, delta_x, delta_y);
-
-        if let Some(parent_name) = parent_label {
-            let child_indices: Vec<usize> = self
-                .panes
-                .iter()
-                .enumerate()
-                .filter(|(_, p)| p.parts_source.as_deref() == Some(&parent_name))
-                .map(|(idx, _)| idx)
-                .collect();
-
-            for child_idx in child_indices {
-                self.translate_pane_primitive(child_idx, delta_x, delta_y);
-            }
-        }
-    }
-}
-
 fn section_color(section: &BflytSection) -> [f32; 4] {
     match section {
         BflytSection::Pane(_) => [0.55, 0.76, 0.98, 0.55],
@@ -758,7 +710,6 @@ impl<'a> Walker<'a> {
                         parts_scale_y,
                         depth,
                         overrides,
-                        override_use_root,
                         sub_mat_list,
                         root_mat_list,
                         parts_source,
@@ -815,7 +766,6 @@ impl<'a> Walker<'a> {
         parts_scale_y: f32,
         depth: usize,
         overrides: &HashMap<String, &BflytSection>,
-        override_use_root: &HashMap<String, bool>,
         sub_mat_list: Option<&nnbfl::bflyt::list::BflytMaterialList>,
         root_mat_list: Option<&nnbfl::bflyt::list::BflytMaterialList>,
         parts_source: &str,

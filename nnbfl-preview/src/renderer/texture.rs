@@ -83,7 +83,33 @@ impl TextureCache {
 
         for tex in &bntx.textures {
             match decode_texture_rgba(tex, 0) {
-                Ok(rgba) => {
+                Ok(mut rgba) => {
+                    let needs_swizzle = tex.info.channel_r != 2
+                        || tex.info.channel_g != 3
+                        || tex.info.channel_b != 4
+                        || tex.info.channel_a != 5;
+
+                    if needs_swizzle {
+                        for pixel in &mut rgba.data.chunks_exact_mut(4) {
+                            let src = [pixel[0], pixel[1], pixel[2], pixel[3]];
+
+                            let resolve = |ch: u8| match ch {
+                                0 => 0x00,
+                                1 => 0xFF,
+                                2 => src[0], // red
+                                3 => src[1], // green
+                                4 => src[2], // blue
+                                5 => src[3], // alpha
+                                _ => 0x00,
+                            };
+
+                            pixel[0] = resolve(tex.info.channel_r);
+                            pixel[1] = resolve(tex.info.channel_g);
+                            pixel[2] = resolve(tex.info.channel_b);
+                            pixel[3] = resolve(tex.info.channel_a);
+                        }
+                    };
+
                     let gpu_tex = upload_rgba(
                         device,
                         queue,
@@ -92,12 +118,14 @@ impl TextureCache {
                         rgba.height,
                         &tex.name,
                     );
+
                     log::debug!(
                         "TextureCache: uploaded '{}' ({}x{})",
                         tex.name,
                         rgba.width,
                         rgba.height
                     );
+
                     self.textures.insert(tex.name.clone(), gpu_tex);
                 }
                 Err(e) => {

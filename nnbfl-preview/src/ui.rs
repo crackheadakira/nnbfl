@@ -94,10 +94,6 @@ pub fn draw_ui(
                                     egui::RichText::new(format!("[{}] {}", pane.kind, pane.label));
                                 let is_hidden = state.hidden_panes.contains(&i);
 
-                                if is_hidden {
-                                    ui.label("Hidden");
-                                }
-
                                 let response = ui.selectable_label(selected, label);
                                 response.context_menu(|ui| {
                                     if !is_hidden && ui.button("Hide").clicked() {
@@ -123,6 +119,10 @@ pub fn draw_ui(
 
                                 if response.clicked() {
                                     state.selected_pane = Some(i);
+                                }
+
+                                if is_hidden {
+                                    ui.label("Hidden");
                                 }
                             });
                         }
@@ -168,8 +168,7 @@ pub fn draw_ui(
             ui.menu_button("File", |ui| {
                 if ui.button("Load File...").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter(".sarc", &["blarc", "sarc"])
-                        .add_filter(".bflyt", &["bflyt"])
+                        .add_filter("Supported files", &["blarc", "sarc", "Nin_NX_NVN", "bflyt"])
                         .pick_file()
                     {
                         state.pending_action = Some(UiAction::LoadFile(path));
