@@ -104,7 +104,7 @@ jobs:
 
             - name: Build Workspace (Optimized Release)
               run: cargo build --release --workspace --target ${{ matrix.job.target }}
--
+
             - name: Package CLI (Windows)
               if: matrix.job.os == 'windows-latest' && needs.check-and-tag.outputs.cli_changed == 'true'
               run: |
