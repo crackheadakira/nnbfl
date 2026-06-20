@@ -705,12 +705,141 @@ impl PartsPaneBasicInfo {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct TextBoxUsageFlags {
+    pub use_text: bool,
+    pub use_position: bool,
+    pub use_shadow: bool,
+}
+
+impl TextBoxUsageFlags {
+    pub fn parse(flags: u8) -> Self {
+        Self {
+            use_text: (flags & 0x01) != 0,
+            use_position: (flags & 0x02) != 0,
+            use_shadow: (flags & 0x04) != 0,
+        }
+    }
+
+    pub fn pack_flags(&self) -> u8 {
+        let mut flags = 0u8;
+        if self.use_text {
+            flags |= 0x01;
+        }
+        if self.use_position {
+            flags |= 0x02;
+        }
+        if self.use_shadow {
+            flags |= 0x04;
+        }
+        flags
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct BasePaneUsageFlags {
+    pub is_visible_set: bool,
+    pub is_visible_true: bool,
+    pub has_user_data: bool,
+    pub has_translate: bool,
+    pub has_size: bool,
+    pub has_scale: bool,
+    pub has_rotate: bool,
+    pub has_alpha: bool,
+}
+
+impl BasePaneUsageFlags {
+    pub fn parse(flags: u8) -> Self {
+        Self {
+            is_visible_set: (flags & 0x01) != 0,
+            is_visible_true: (flags & 0x02) != 0,
+            has_user_data: (flags & 0x04) != 0,
+            has_translate: (flags & 0x08) != 0,
+            has_size: (flags & 0x10) != 0,
+            has_scale: (flags & 0x20) != 0,
+            has_rotate: (flags & 0x40) != 0,
+            has_alpha: (flags & 0x80) != 0,
+        }
+    }
+
+    pub fn pack_flags(&self) -> u8 {
+        let mut flags = 0u8;
+        if self.is_visible_set {
+            flags |= 0x01;
+        }
+
+        if self.is_visible_true {
+            flags |= 0x02;
+        }
+
+        if self.has_user_data {
+            flags |= 0x04;
+        }
+
+        if self.has_translate {
+            flags |= 0x08;
+        }
+
+        if self.has_size {
+            flags |= 0x10;
+        }
+
+        if self.has_scale {
+            flags |= 0x20;
+        }
+
+        if self.has_rotate {
+            flags |= 0x40;
+        }
+
+        if self.has_alpha {
+            flags |= 0x80;
+        }
+
+        flags
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MaterialUsageFlags {
+    pub use_color_blend: bool,
+    pub use_texture: bool,
+    pub use_picture_procedural_shape: bool,
+}
+
+impl MaterialUsageFlags {
+    pub fn parse(flags: u8) -> Self {
+        Self {
+            use_color_blend: (flags & 0x01) != 0,
+            use_texture: (flags & 0x02) != 0,
+            use_picture_procedural_shape: (flags & 0x08) != 0,
+        }
+    }
+
+    pub fn pack_flags(&self) -> u8 {
+        let mut flags = 0u8;
+        if self.use_color_blend {
+            flags |= 0x01;
+        }
+
+        if self.use_texture {
+            flags |= 0x02;
+        }
+
+        if self.use_picture_procedural_shape {
+            flags |= 0x08;
+        }
+
+        flags
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartsProperty {
     pub property_name: String,
-    pub usage_flag: u8,
-    pub basic_usage_flag: u8,
-    pub material_usage_flag: u8,
+    pub usage_flag: TextBoxUsageFlags,
+    pub basic_usage_flag: BasePaneUsageFlags,
+    pub material_usage_flag: MaterialUsageFlags,
     pub user_data_type: u8,
 
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -731,9 +860,9 @@ impl PartsProperty {
     ) -> Result<Self, FormatError> {
         let mut property = Self {
             property_name: cursor.read_fixed_string(PANE_NAME_LEN)?,
-            usage_flag: cursor.read_u8()?,
-            basic_usage_flag: cursor.read_u8()?,
-            material_usage_flag: cursor.read_u8()?,
+            usage_flag: TextBoxUsageFlags::parse(cursor.read_u8()?),
+            basic_usage_flag: BasePaneUsageFlags::parse(cursor.read_u8()?),
+            material_usage_flag: MaterialUsageFlags::parse(cursor.read_u8()?),
             user_data_type: cursor.read_u8()?,
             o_section: None,
             o_user_data: None,
@@ -775,9 +904,9 @@ impl PartsProperty {
 
     pub fn serialize_header(&self, writer: &mut Writer) -> (usize, usize, usize) {
         writer.write_fixed_string(&self.property_name, PANE_NAME_LEN);
-        writer.write_u8(self.usage_flag);
-        writer.write_u8(self.basic_usage_flag);
-        writer.write_u8(self.material_usage_flag);
+        writer.write_u8(self.usage_flag.pack_flags());
+        writer.write_u8(self.basic_usage_flag.pack_flags());
+        writer.write_u8(self.material_usage_flag.pack_flags());
         writer.write_u8(self.user_data_type);
 
         let pane_pos = writer.write_placeholder_u32();

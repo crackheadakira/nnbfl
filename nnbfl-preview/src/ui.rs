@@ -14,6 +14,8 @@ pub struct UiState {
     pub hidden_panes: HashSet<usize>,
     pub error_message: Option<String>,
     pub pending_action: Option<UiAction>,
+    pub clip_to_root: bool,
+    pub only_textured: bool,
 }
 
 pub enum UiAction {
@@ -38,6 +40,7 @@ pub fn draw_ui(
                 && let Some(text) = &text_box.text
                 && let Some(quad) = view.quads.get(i)
                 && !state.hidden_panes.contains(&i)
+                && pane.visible
             {
                 let center_x = quad.x + (quad.width * 0.5);
                 let center_y = quad.y + (quad.height * 0.5);
@@ -73,6 +76,8 @@ pub fn draw_ui(
         .default_size(220.0)
         .show_inside(ui, |ui| {
             ui.heading("Pane Tree");
+            ui.checkbox(&mut state.clip_to_root, "Clip to root pane");
+            ui.checkbox(&mut state.only_textured, "Draw only textured quads");
             ui.separator();
 
             egui::ScrollArea::vertical()
@@ -181,7 +186,7 @@ pub fn draw_ui(
                     }
                     ui.close();
                 }
-            })
+            });
         })
     });
 }
@@ -244,6 +249,10 @@ fn draw_pane_properties(ui: &mut egui::Ui, pane: &PaneInfo) {
 
             ui.label("Depth");
             ui.label(format!("{}", pane.depth));
+            ui.end_row();
+
+            ui.label("Visible");
+            ui.label(format!("{}", pane.visible));
             ui.end_row();
         });
 }

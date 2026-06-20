@@ -97,7 +97,6 @@ impl GpuState {
 
         let texture_cache = TextureCache::new(&device);
 
-        // let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, None, 1, false);
         let egui_renderer =
             egui_wgpu::Renderer::new(&device, surface_format, RendererOptions::default());
         let textured_quad_renderer = None; // created after textures load
@@ -139,6 +138,38 @@ impl GpuState {
             tqr.update_projection(&self.queue, matrix);
         }
 
+        let mut scissor_rect = None;
+        if let Some(view) = bflyt_view {
+            if ui_state.clip_to_root {
+                let screen_w = self.config.width as f32;
+                let screen_h = self.config.height as f32;
+
+                let scale_x = matrix[0][0];
+                let scale_y = matrix[1][1];
+                let trans_x = matrix[3][0];
+                let trans_y = matrix[3][1];
+
+                let ndc_x0 = trans_x;
+                let ndc_y0 = trans_y;
+                let ndc_x1 = view.layout_width * scale_x + trans_x;
+                let ndc_y1 = view.layout_height * scale_y + trans_y;
+
+                let x0 = ((ndc_x0 + 1.0) * 0.5 * screen_w).clamp(0.0, screen_w);
+                let y0 = ((1.0 - ndc_y0) * 0.5 * screen_h).clamp(0.0, screen_h);
+                let x1 = ((ndc_x1 + 1.0) * 0.5 * screen_w).clamp(0.0, screen_w);
+                let y1 = ((1.0 - ndc_y1) * 0.5 * screen_h).clamp(0.0, screen_h);
+
+                let sx = x0.min(x1) as u32;
+                let sy = y0.min(y1) as u32;
+                let sw = (x0 - x1).abs() as u32;
+                let sh = (y0 - y1).abs() as u32;
+
+                if sw > 0 && sh > 0 {
+                    scissor_rect = Some((sx, sy, sw, sh));
+                }
+            }
+        }
+
         let output = match self.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(o) => o,
             CurrentSurfaceTexture::Lost | CurrentSurfaceTexture::Outdated => {
@@ -176,6 +207,15 @@ impl GpuState {
                 ui_state.selected_pane,
                 &ui_state.hidden_panes,
             );
+
+            if let Some(tqr) = &mut self.textured_quad_renderer {
+                tqr.update_selection(
+                    &self.queue,
+                    &bflyt_view.textured_quads,
+                    ui_state.selected_pane,
+                    &ui_state.hidden_panes,
+                );
+            }
         }
 
         let paint_jobs = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
@@ -224,9 +264,22 @@ impl GpuState {
                 multiview_mask: None,
             });
 
-            self.quad_renderer.render(&mut rpass);
+            self.quad_renderer.render_grid(&mut rpass);
+
+            if let Some((sx, sy, sw, sh)) = scissor_rect {
+                rpass.set_scissor_rect(sx, sy, sw, sh);
+            }
+
+            if !ui_state.only_textured {
+                self.quad_renderer.render(&mut rpass);
+            }
+
             if let Some(tqr) = &self.textured_quad_renderer {
                 tqr.render(&mut rpass);
+            }
+
+            if scissor_rect.is_some() {
+                rpass.set_scissor_rect(0, 0, self.config.width, self.config.height);
             }
 
             let mut rpass = rpass.forget_lifetime();
@@ -305,8 +358,7 @@ impl App {
                     .load_from_bntx_bytes(&gpu.device, &gpu.queue, bntx_bytes);
             }
 
-            let mut tgr =
-                TexturedQuadRenderer::new(&gpu.device, gpu.config.format, &gpu.texture_cache);
+            let mut tgr = TexturedQuadRenderer::new(&gpu.device, gpu.config.format);
 
             tgr.upload_quads(&gpu.device, &view.textured_quads, &gpu.texture_cache);
             gpu.textured_quad_renderer = Some(tgr);
@@ -332,30 +384,49 @@ impl App {
 
     fn extract_buffer_from_sarc(&self, path: &PathBuf) -> Option<(String, ResolvedBlarc)> {
         let file_bytes = std::fs::read(path).ok()?;
-        let sarc = Sarc::parse(&file_bytes).ok()?;
 
         let mut bflyt_name = "unnamed.bflyt".to_string();
-        let mut bflyt_bytes = None;
-        let mut bntx_bytes = None;
+        let mut resolved = ResolvedBlarc {
+            bflyt_bytes: Vec::new(),
+            bntx_bytes: None,
+        };
 
-        for file in sarc.files {
-            if let Some(name) = &file.name {
-                if name.ends_with(".bflyt") {
-                    bflyt_name = name.clone();
-                    bflyt_bytes = Some(file.data);
-                } else if name.ends_with(".bntx") || name.contains("__Combined") {
-                    bntx_bytes = Some(file.data);
-                }
-            }
+        unpack_sarc_recursive(&file_bytes, &mut bflyt_name, &mut resolved);
+
+        if resolved.bflyt_bytes.is_empty() {
+            return None;
         }
 
-        Some((
-            bflyt_name,
-            ResolvedBlarc {
-                bflyt_bytes: bflyt_bytes?,
-                bntx_bytes,
-            },
-        ))
+        Some((bflyt_name, resolved))
+    }
+}
+
+pub fn unpack_sarc_recursive(data: &[u8], bflyt_name: &mut String, resolved: &mut ResolvedBlarc) {
+    let Ok(sarc) = Sarc::parse(data) else {
+        return;
+    };
+
+    for file in sarc.files {
+        let Some(name) = &file.name else {
+            continue;
+        };
+
+        if name.ends_with(".bflyt") {
+            if resolved.bflyt_bytes.is_empty() {
+                *bflyt_name = name.clone();
+                resolved.bflyt_bytes = file.data.clone();
+            }
+        } else if name.ends_with(".bntx") || name.contains("__Combined") {
+            if resolved.bntx_bytes.is_none() {
+                resolved.bntx_bytes = Some(file.data.clone());
+            }
+        } else if name.ends_with(".sarc")
+            || name.ends_with(".blarc")
+            || name.ends_with(".arc")
+            || name.contains("Nin_NX_NVN")
+        {
+            unpack_sarc_recursive(&file.data, bflyt_name, resolved);
+        }
     }
 }
 
@@ -450,7 +521,7 @@ impl ApplicationHandler for App {
                 UiAction::LoadFile(path) => {
                     if path
                         .extension()
-                        .is_some_and(|ext| ext == "blarc" || ext == "sarc")
+                        .is_some_and(|ext| ext == "blarc" || ext == "sarc" || ext == "Nin_NX_NVN")
                     {
                         if let Some((name, data)) = self.extract_buffer_from_sarc(&path) {
                             self.load_file_from_buffer(data, name);

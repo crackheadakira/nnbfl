@@ -4,15 +4,14 @@ use nnbfl::{
     bflyt::{
         file::{Bflyt, BflytNode, BflytSection},
         flags::{BflytOrigin, BflytParentOrigin, TexFilter, TexWrapMode},
-        list::TevSource,
-        pane::BflytPane,
+        list::{MaterialColorEntry, TexGenSrc},
+        pane::{BflytPane, Color4u8},
     },
     core::ReadWriteable,
-    sarc::file::Sarc,
 };
 
-use crate::renderer::textured_quad::TexturedQuad;
-use crate::renderer::{quad::Quad, textured_quad::MaterialUniforms};
+use crate::renderer::textured_quad::{DetailedCombinerMaterial, StandardMaterial, TexturedQuad};
+use crate::{renderer::quad::Quad, unpack_sarc_recursive};
 
 #[derive(Debug, Clone)]
 pub struct PaneInfo {
@@ -26,6 +25,7 @@ pub struct PaneInfo {
     pub depth: usize,
     /// Which top-level PartsPane spawned this (None = root layout pane)
     pub parts_source: Option<String>,
+    pub visible: bool,
 }
 
 pub struct BflytView {
@@ -36,6 +36,54 @@ pub struct BflytView {
     pub layout_height: f32,
 
     pub discovered_bntx_buffers: Vec<Vec<u8>>,
+}
+
+impl BflytView {
+    fn translate_pane_primitive(&mut self, pane_idx: usize, delta_x: f32, delta_y: f32) {
+        if let Some(pane) = self.panes.get_mut(pane_idx) {
+            pane.x += delta_x;
+            pane.y += delta_y;
+        }
+
+        if let Some(quad) = self.quads.get_mut(pane_idx) {
+            quad.x += delta_x;
+            quad.y += delta_y;
+        }
+
+        if let Some(tq) = self
+            .textured_quads
+            .iter_mut()
+            .find(|t| t.pane_idx == pane_idx)
+        {
+            tq.x += delta_x;
+            tq.y += delta_y;
+        }
+    }
+
+    pub fn translate_pane_primitive_hierarchical(
+        &mut self,
+        pane_idx: usize,
+        delta_x: f32,
+        delta_y: f32,
+    ) {
+        let parent_label = self.panes.get(pane_idx).map(|p| p.label.clone());
+
+        self.translate_pane_primitive(pane_idx, delta_x, delta_y);
+
+        if let Some(parent_name) = parent_label {
+            let child_indices: Vec<usize> = self
+                .panes
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.parts_source.as_deref() == Some(&parent_name))
+                .map(|(idx, _)| idx)
+                .collect();
+
+            for child_idx in child_indices {
+                self.translate_pane_primitive(child_idx, delta_x, delta_y);
+            }
+        }
+    }
 }
 
 fn section_color(section: &BflytSection) -> [f32; 4] {
@@ -125,7 +173,7 @@ fn resolve_rect(
     };
 
     let cx = anchor_x + pane.translation.x;
-    let cy = anchor_y + pane.translation.y;
+    let cy = anchor_y - pane.translation.y;
 
     let w = pane.size.x * pane.scale.x;
     let h = pane.size.y * pane.scale.y;
@@ -173,7 +221,11 @@ pub fn load_bflyt_from_blarc_dir(blarc_dir: &Path, layout_name: &str) -> Option<
         let e = e.ok()?;
         let fname = e.file_name();
         let fname = fname.to_string_lossy();
-        if fname.starts_with(layout_name) && (fname.ends_with(".blarc") || fname.ends_with(".sarc"))
+
+        if fname.starts_with(layout_name)
+            && (fname.ends_with(".blarc")
+                || fname.ends_with(".sarc")
+                || fname.ends_with(".Nin_NX_NVN"))
         {
             Some(e.path())
         } else {
@@ -182,25 +234,20 @@ pub fn load_bflyt_from_blarc_dir(blarc_dir: &Path, layout_name: &str) -> Option<
     })?;
 
     let bytes = std::fs::read(&entry).ok()?;
-    let sarc = Sarc::parse(&bytes).ok()?;
 
-    let mut bflyt_bytes = None;
-    let mut bntx_bytes = None;
+    let mut bflyt_name = "unnamed.bflyt".to_string();
+    let mut resolved = ResolvedBlarc {
+        bflyt_bytes: Vec::new(),
+        bntx_bytes: None,
+    };
 
-    for file in sarc.files {
-        if let Some(name) = &file.name {
-            if name.ends_with(".bflyt") {
-                bflyt_bytes = Some(file.data);
-            } else if name.ends_with(".bntx") || name.contains("__Combined") {
-                bntx_bytes = Some(file.data);
-            }
-        }
+    unpack_sarc_recursive(&bytes, &mut bflyt_name, &mut resolved);
+
+    if resolved.bflyt_bytes.is_empty() {
+        return None;
     }
 
-    Some(ResolvedBlarc {
-        bflyt_bytes: bflyt_bytes?,
-        bntx_bytes,
-    })
+    Some(resolved)
 }
 
 struct Walker<'a> {
@@ -230,9 +277,37 @@ impl<'a> Walker<'a> {
         parent_w: f32,
         parent_h: f32,
         depth: usize,
+        parent_visible: bool,
     ) {
+        let mut last_rect = (parent_x, parent_y, parent_w, parent_h);
+        let mut last_visible = parent_visible;
+
         for node in nodes {
-            self.walk_node(node, parent_x, parent_y, parent_w, parent_h, depth);
+            match node {
+                BflytNode::Section(section) => {
+                    self.walk_node(
+                        node,
+                        parent_x,
+                        parent_y,
+                        parent_w,
+                        parent_h,
+                        depth,
+                        parent_visible,
+                    );
+                    if let Some(p) = self.panes.last() {
+                        last_rect = (p.x, p.y, p.width, p.height);
+
+                        if let Some(base) = base_pane(section) {
+                            last_visible = parent_visible && base.pane_flags.is_visible;
+                        }
+                    }
+                }
+                BflytNode::Panes(children) => {
+                    let (px, py, pw, ph) = last_rect;
+                    self.walk_nodes(children, px, py, pw, ph, depth + 1, last_visible);
+                }
+                BflytNode::Groups(_) => {}
+            }
         }
     }
 
@@ -244,6 +319,7 @@ impl<'a> Walker<'a> {
         parent_w: f32,
         parent_h: f32,
         depth: usize,
+        parent_visible: bool,
     ) {
         match node {
             BflytNode::Section(section) => {
@@ -251,24 +327,39 @@ impl<'a> Walker<'a> {
                     return;
                 };
 
+                let is_visible = parent_visible && base.pane_flags.is_visible;
+
                 let (x, y, w, h) = resolve_rect(base, parent_x, parent_y, parent_w, parent_h);
 
                 let label = pane_name(section);
                 let kind = section_kind_name(section).to_string();
+
+                let pane_idx = self.panes.len();
+
+                let mut has_textured = false;
+                if let BflytSection::PicturePane(pic) = section {
+                    if let Some(mat_list) = self.material_list {
+                        if let Some(tq) =
+                            self.make_textured_quad(mat_list, pic, x, y, w, h, pane_idx, is_visible)
+                        {
+                            self.textured_quads.push(tq);
+                            has_textured = true;
+                        }
+                    }
+                }
 
                 self.quads.push(Quad {
                     x,
                     y,
                     width: w,
                     height: h,
-                    color: section_color(section),
+                    color: if is_visible {
+                        section_color(section)
+                    } else {
+                        [0.0; 4]
+                    },
+                    has_textured,
                 });
-
-                if let BflytSection::PicturePane(pic) = section {
-                    if let Some(tq) = self.make_textured_quad(pic, x, y, w, h) {
-                        self.textured_quads.push(tq);
-                    }
-                }
 
                 self.panes.push(PaneInfo {
                     label: label.clone(),
@@ -280,30 +371,29 @@ impl<'a> Walker<'a> {
                     height: h,
                     depth,
                     parts_source: self.parts_source.clone(),
+                    visible: is_visible,
                 });
 
                 if let BflytSection::PartsPane(parts) = section {
-                    self.maybe_resolve_parts(parts, x, y, w, h, depth);
+                    self.maybe_resolve_parts(parts, x, y, w, h, depth, is_visible);
                 }
             }
 
-            BflytNode::Panes(children) => {
-                self.walk_nodes(children, parent_x, parent_y, parent_w, parent_h, depth + 1);
-            }
-
-            BflytNode::Groups(_) => {}
+            BflytNode::Panes(_) | BflytNode::Groups(_) => {}
         }
     }
 
     fn make_textured_quad(
         &self,
+        mat_list: &nnbfl::bflyt::list::BflytMaterialList,
         pic: &nnbfl::bflyt::pane::BflytPicturePane,
         x: f32,
         y: f32,
         w: f32,
         h: f32,
+        pane_idx: usize,
+        parent_visible: bool,
     ) -> Option<TexturedQuad> {
-        let mat_list = self.material_list?;
         let mat = mat_list.materials.get(pic.material_index as usize)?;
         let tex_map = mat.tex_maps.first()?;
         let tex_name = tex_map.texture_name.trim_end();
@@ -312,126 +402,210 @@ impl<'a> Walker<'a> {
             return None;
         }
 
-        let mut tint = [1.0, 1.0, 1.0, 1.0];
-
-        if let Some(color_entry) = mat.colors.first() {
-            if let Some(c8) = &color_entry.color_u8 {
-                tint = [
-                    c8.r as f32 / 255.0,
-                    c8.g as f32 / 255.0,
-                    c8.b as f32 / 255.0,
-                    c8.a as f32 / 255.0,
-                ];
-            } else if let Some(cf) = &color_entry.color_f32 {
-                tint = [cf.r, cf.g, cf.b, cf.a];
-            }
-
-            if tint[3] == 0.0 {
-                tint = [1.0, 1.0, 1.0, 1.0];
-            }
-        }
-
-        let mut uvs = if let Some(uv_set) = pic.texture_uvs.first() {
+        let vertex_color_to_f32 = |c: &nnbfl::bflyt::pane::Color4u8| -> [f32; 4] {
             [
-                [uv_set.top_left.x, uv_set.top_left.y],
-                [uv_set.top_right.x, uv_set.top_right.y],
-                [uv_set.bottom_left.x, uv_set.bottom_left.y],
-                [uv_set.bottom_right.x, uv_set.bottom_right.y],
+                c.r as f32 / 255.0,
+                c.g as f32 / 255.0,
+                c.b as f32 / 255.0,
+                c.a as f32 / 255.0,
             ]
-        } else {
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
         };
 
-        if let Some(srt) = mat.tex_srts.first() {
-            for uv in uvs.iter_mut() {
-                uv[0] = uv[0] * srt.scale_x + srt.translation_x;
-                uv[1] = uv[1] * srt.scale_z + srt.translation_y;
+        let tl = vertex_color_to_f32(&pic.top_left_vertex_color);
+        let tint = if parent_visible {
+            if tl[3] > 0.0 { tl } else { [1.0; 4] }
+        } else {
+            [0.0; 4]
+        };
+
+        let get_uv_set = |layer: usize| -> [[f32; 2]; 4] {
+            if let Some(uv_set) = pic.texture_uvs.get(layer) {
+                [
+                    [uv_set.top_left.x, uv_set.top_left.y],
+                    [uv_set.top_right.x, uv_set.top_right.y],
+                    [uv_set.bottom_left.x, uv_set.bottom_left.y],
+                    [uv_set.bottom_right.x, uv_set.bottom_right.y],
+                ]
+            } else {
+                [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
             }
-        }
+        };
+
+        let apply_srt = |uvs: &mut [[f32; 2]; 4], layer: usize| {
+            if let Some(srt) = mat.tex_srts.get(layer) {
+                for uv in uvs.iter_mut() {
+                    uv[0] = uv[0] * srt.scale_x + srt.translation_x;
+                    uv[1] = uv[1] * srt.scale_z + srt.translation_y;
+                }
+            }
+        };
+
+        let mut uvs0 = get_uv_set(0);
+        apply_srt(&mut uvs0, 0);
+        let mut uvs1 = get_uv_set(1);
+        apply_srt(&mut uvs1, 1);
+        let mut uvs2 = get_uv_set(2);
+        apply_srt(&mut uvs2, 2);
+
+        let uvs: [[[f32; 2]; 3]; 4] = std::array::from_fn(|i| [uvs0[i], uvs1[i], uvs2[i]]);
 
         let address_mode_u = match tex_map.u_options.wrap_mode {
             TexWrapMode::Repeat => wgpu::AddressMode::Repeat,
             TexWrapMode::Mirror => wgpu::AddressMode::MirrorRepeat,
             TexWrapMode::Clamp => wgpu::AddressMode::ClampToEdge,
         };
-
         let address_mode_v = match tex_map.v_options.wrap_mode {
             TexWrapMode::Repeat => wgpu::AddressMode::Repeat,
             TexWrapMode::Mirror => wgpu::AddressMode::MirrorRepeat,
             TexWrapMode::Clamp => wgpu::AddressMode::ClampToEdge,
         };
-
         let min_filter = match tex_map.u_options.filter {
             TexFilter::Linear => wgpu::FilterMode::Linear,
             TexFilter::Near => wgpu::FilterMode::Nearest,
         };
-
         let mag_filter = match tex_map.v_options.filter {
             TexFilter::Linear => wgpu::FilterMode::Linear,
             TexFilter::Near => wgpu::FilterMode::Nearest,
         };
 
-        let (tev_mode, source_a, source_b, source_c, color_op, alpha_op) =
-            if let Some(detailed) = &mat.detailed_combiner {
-                if let Some(stage) = detailed.entries.first() {
-                    (
-                        stage.color_config.mode as u32,
-                        stage.color_config.sources[0] as u32,
-                        stage.color_config.sources[1] as u32,
-                        stage.color_config.sources[2] as u32,
-                        stage.color_config.operands[0] as u32,
-                        stage.alpha_config.operands[0] as u32,
-                    )
-                } else {
-                    (0, 3, 0, 14, 0, 0)
+        let texture_name1 = mat
+            .tex_maps
+            .get(1)
+            .map(|m| m.texture_name.trim_end().to_string())
+            .filter(|s| !s.is_empty());
+        let texture_name2 = mat
+            .tex_maps
+            .get(2)
+            .map(|m| m.texture_name.trim_end().to_string())
+            .filter(|s| !s.is_empty());
+
+        let texture_count = mat.tex_maps.len().min(3) as u32;
+
+        let mut tex_gen_flags = [0u32; 3];
+        for i in 0..(texture_count as usize) {
+            if let Some(coord_gen) = mat.tex_coord_gens.get(i) {
+                match coord_gen.tex_gen_source {
+                    TexGenSrc::PaneBasedProjection
+                    | TexGenSrc::OrthogonalProjection
+                    | TexGenSrc::PerspectiveProjection
+                    | TexGenSrc::PaneBasedPerspectiveProjection => {
+                        tex_gen_flags[i] |= 1;
+                    }
+                    TexGenSrc::BrickRepeat => {
+                        tex_gen_flags[i] |= 2;
+                    }
+                    _ => {}
                 }
-            } else if let Some(tev) = mat.tev_combiners.first() {
-                (
-                    tev.rgb_mode as u32,
-                    TevSource::Texture0 as u32,
-                    TevSource::Primary as u32,
-                    TevSource::Constant as u32,
-                    0,
-                    0,
-                )
-            } else {
-                (0, 3, 0, 14, 0, 0)
-            };
+            }
+        }
 
-        let (has_indirect, indirect_scale_x, indirect_scale_y) =
-            if let Some(matrix) = &mat.indirect_matrix {
-                (1, matrix.scale.x, matrix.scale.y)
-            } else {
-                (0, 0.0, 0.0)
-            };
+        let tex_gen_mode_packed =
+            tex_gen_flags[0] | (tex_gen_flags[1] << 4) | (tex_gen_flags[2] << 8);
 
-        let constant_color0 = mat
-            .colors
-            .get(0)
-            .and_then(|c| c.color_u8.as_ref())
-            .map(|c| {
+        let color_f32 = |entry: &MaterialColorEntry| -> [f32; 4] {
+            if let Some(c) = &entry.color_u8 {
                 [
                     c.r as f32 / 255.0,
                     c.g as f32 / 255.0,
                     c.b as f32 / 255.0,
                     c.a as f32 / 255.0,
                 ]
-            })
-            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+            } else if let Some(c) = &entry.color_f32 {
+                [c.r, c.g, c.b, c.a]
+            } else {
+                [0.0; 4]
+            }
+        };
 
-        let constant_color1 = mat
+        let black_color = mat
+            .colors
+            .first()
+            .map(color_f32)
+            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+        let white_color = mat
             .colors
             .get(1)
-            .and_then(|c| c.color_u8.as_ref())
-            .map(|c| {
+            .map(color_f32)
+            .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+
+        let interpolate_offset = black_color;
+        let interpolate_width = [
+            white_color[0] - black_color[0],
+            white_color[1] - black_color[1],
+            white_color[2] - black_color[2],
+            white_color[3] - black_color[3],
+        ];
+
+        let is_detailed = mat.detailed_combiner.is_some();
+        let mut detailed_combiner_material = DetailedCombinerMaterial::default();
+
+        if let Some(dc) = &mat.detailed_combiner {
+            detailed_combiner_material.stage_count = dc.entries.len().min(6) as u32;
+            detailed_combiner_material.texture_count = texture_count;
+
+            let color_f32 = |c: &Color4u8| {
                 [
                     c.r as f32 / 255.0,
                     c.g as f32 / 255.0,
                     c.b as f32 / 255.0,
                     c.a as f32 / 255.0,
                 ]
-            })
-            .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            };
+
+            detailed_combiner_material.constant_colors[0] = color_f32(&dc.color1);
+            detailed_combiner_material.constant_colors[1] = color_f32(&dc.color2);
+            detailed_combiner_material.constant_colors[2] = color_f32(&dc.color3);
+            detailed_combiner_material.constant_colors[3] = color_f32(&dc.color4);
+            detailed_combiner_material.constant_colors[4] = color_f32(&dc.color5);
+            detailed_combiner_material.constant_colors[5] = [0.0, 0.0, 0.0, 0.0];
+            detailed_combiner_material.constant_colors[6] = [0.0, 0.0, 0.0, 0.0];
+
+            for (idx, entry) in dc.entries.iter().enumerate().take(6) {
+                let (color_flags, alpha_flags, constant_selectors) = entry.pack_flags();
+
+                let stage_active = 1i32;
+
+                detailed_combiner_material.stage_bits[idx] = [
+                    color_flags as i32,
+                    alpha_flags as i32,
+                    constant_selectors as i32,
+                    stage_active,
+                ];
+            }
+        }
+
+        let (combine_mode, combine_mode2) = if let Some(tev0) = mat.tev_combiners.first() {
+            let m0 = tev0.rgb_mode as u32;
+            let m1 = mat
+                .tev_combiners
+                .get(1)
+                .map(|t| t.rgb_mode as u32)
+                .unwrap_or(0);
+            (m0, m1)
+        } else {
+            (0, 0)
+        };
+
+        // currently using default, but how can i make it not use default because i have no idea what
+        // this corresponds to
+        let alpha_select: u32 = 0;
+
+        let (indirect_mtx0, indirect_mtx1) = if let Some(im) = &mat.indirect_matrix {
+            ([im.scale.x, 0.0, 0.0, 0.0], [0.0, im.scale.y, 0.0, 0.0])
+        } else {
+            ([0.0f32; 4], [0.0f32; 4])
+        };
+
+        let mut standard_material = StandardMaterial::default();
+        standard_material.interpolate_width = interpolate_width;
+        standard_material.interpolate_offset = interpolate_offset;
+        standard_material.combine_mode = combine_mode;
+        standard_material.combine_mode2 = combine_mode2;
+        standard_material.texture_count = texture_count;
+        standard_material.alpha_select = alpha_select;
+        standard_material.tex_gen_mode = tex_gen_mode_packed;
+        standard_material.indirect_mtx0 = indirect_mtx0;
+        standard_material.indirect_mtx1 = indirect_mtx1;
 
         Some(TexturedQuad {
             x,
@@ -441,29 +615,16 @@ impl<'a> Walker<'a> {
             uvs,
             tint,
             texture_name: tex_name.to_string(),
-            secondary_texture_name: mat
-                .tex_maps
-                .get(1)
-                .map(|m| m.texture_name.trim_end().to_string()),
+            texture_name1,
+            texture_name2,
             address_mode_u,
             address_mode_v,
             min_filter,
             mag_filter,
-            material_uniforms: MaterialUniforms {
-                tev_mode,
-                source_a,
-                source_b,
-                source_c,
-                color_op,
-                alpha_op,
-                has_indirect,
-                _padding: 0,
-                indirect_scale_x,
-                indirect_scale_y,
-                _padding2: [0.0; 2],
-                constant_color0,
-                constant_color1,
-            },
+            standard_material,
+            detailed_combiner_material,
+            is_detailed,
+            pane_idx,
         })
     }
 
@@ -475,13 +636,16 @@ impl<'a> Walker<'a> {
         parts_w: f32,
         parts_h: f32,
         depth: usize,
+        parent_visible: bool,
     ) {
         if self.parts_depth >= MAX_PARTS_DEPTH {
             return;
         }
+
         let Some(blarc_dir) = self.blarc_dir else {
             return;
         };
+
         let layout_name = parts.o_layout_name.trim_end_matches('\0');
         if layout_name.is_empty() {
             return;
@@ -500,22 +664,23 @@ impl<'a> Walker<'a> {
             }
         }
 
-        let Some(sub_bflyt) = self.blarc_cache[layout_name].as_ref() else {
+        let Some(Some(sub_bflyt)) = self.blarc_cache.get(layout_name) else {
             log::warn!("PartsPane: could not load '{layout_name}'");
             return;
         };
 
-        let overrides: HashMap<String, &BflytSection> = parts
-            .properties
-            .iter()
-            .filter_map(|prop| {
-                let name = prop.property_name.trim_end_matches('\0');
-                if name.is_empty() {
-                    return None;
-                }
-                prop.o_section.as_ref().map(|s| (name.to_string(), s))
-            })
-            .collect();
+        let mut overrides: HashMap<String, &BflytSection> = HashMap::new();
+        let mut override_use_root: HashMap<String, bool> = HashMap::new();
+        for prop in &parts.properties {
+            let name = prop.property_name.trim_end_matches('\0');
+            if name.is_empty() {
+                continue;
+            }
+            if let Some(sec) = &prop.o_section {
+                overrides.insert(name.to_string(), sec);
+                override_use_root.insert(name.to_string(), prop.material_usage_flag.use_texture);
+            }
+        }
 
         let scale_x = parts.base.scale.x * parts.magnify_x;
         let scale_y = parts.base.scale.y * parts.magnify_y;
@@ -529,10 +694,14 @@ impl<'a> Walker<'a> {
         let sub_parent_x = -sub_w * 0.5;
         let sub_parent_y = -sub_h * 0.5;
 
+        let sub_nodes = sub_bflyt.nodes.clone();
+        let sub_mat_list = sub_bflyt.material_list.clone();
+        let root_mat_list = self.material_list;
+
         let parts_source_label = parts.base.pane_name.trim_end_matches('\0').to_string();
 
         self.walk_nodes_in_parts(
-            &sub_bflyt.nodes.clone(),
+            &sub_nodes,
             sub_parent_x,
             sub_parent_y,
             sub_w,
@@ -543,7 +712,11 @@ impl<'a> Walker<'a> {
             scale_y,
             depth + 1,
             &overrides,
+            &override_use_root,
+            sub_mat_list.as_ref(),
+            root_mat_list,
             &parts_source_label,
+            parent_visible,
         );
     }
 
@@ -561,23 +734,70 @@ impl<'a> Walker<'a> {
         parts_scale_y: f32,
         depth: usize,
         overrides: &HashMap<String, &BflytSection>,
+        override_use_root: &HashMap<String, bool>,
+        sub_mat_list: Option<&nnbfl::bflyt::list::BflytMaterialList>,
+        root_mat_list: Option<&nnbfl::bflyt::list::BflytMaterialList>,
         parts_source: &str,
+        parent_visible: bool,
     ) {
+        let mut last_rect = (parent_x, parent_y, parent_w, parent_h);
+        let mut last_visible = parent_visible;
+
         for node in nodes {
-            self.walk_node_in_parts(
-                node,
-                parent_x,
-                parent_y,
-                parent_w,
-                parent_h,
-                parts_origin_x,
-                parts_origin_y,
-                parts_scale_x,
-                parts_scale_y,
-                depth,
-                overrides,
-                parts_source,
-            );
+            match node {
+                BflytNode::Section(section) => {
+                    self.walk_node_in_parts(
+                        node,
+                        parent_x,
+                        parent_y,
+                        parent_w,
+                        parent_h,
+                        parts_origin_x,
+                        parts_origin_y,
+                        parts_scale_x,
+                        parts_scale_y,
+                        depth,
+                        overrides,
+                        override_use_root,
+                        sub_mat_list,
+                        root_mat_list,
+                        parts_source,
+                        parent_visible,
+                    );
+
+                    if let Some(base) = base_pane(section) {
+                        let pname = pane_name(section);
+                        let effective_section = overrides.get(&pname).copied().unwrap_or(section);
+                        let effective_base = base_pane(effective_section).unwrap_or(base);
+
+                        last_rect =
+                            resolve_rect(effective_base, parent_x, parent_y, parent_w, parent_h);
+                        last_visible = parent_visible && effective_base.pane_flags.is_visible;
+                    }
+                }
+                BflytNode::Panes(children) => {
+                    let (px, py, pw, ph) = last_rect;
+                    self.walk_nodes_in_parts(
+                        children,
+                        px,
+                        py,
+                        pw,
+                        ph,
+                        parts_origin_x,
+                        parts_origin_y,
+                        parts_scale_x,
+                        parts_scale_y,
+                        depth + 1,
+                        overrides,
+                        override_use_root,
+                        sub_mat_list,
+                        root_mat_list,
+                        parts_source,
+                        last_visible,
+                    );
+                }
+                BflytNode::Groups(_) => {}
+            }
         }
     }
 
@@ -595,13 +815,19 @@ impl<'a> Walker<'a> {
         parts_scale_y: f32,
         depth: usize,
         overrides: &HashMap<String, &BflytSection>,
+        override_use_root: &HashMap<String, bool>,
+        sub_mat_list: Option<&nnbfl::bflyt::list::BflytMaterialList>,
+        root_mat_list: Option<&nnbfl::bflyt::list::BflytMaterialList>,
         parts_source: &str,
+        parent_visible: bool,
     ) {
         match node {
             BflytNode::Section(section) => {
                 let Some(base) = base_pane(section) else {
                     return;
                 };
+
+                let is_visible = parent_visible && base.pane_flags.is_visible;
 
                 let pname = pane_name(section);
 
@@ -621,19 +847,40 @@ impl<'a> Walker<'a> {
                     parts_scale_y,
                 );
 
+                let pane_idx = self.panes.len();
+
+                let mut has_textured = false;
+                if let BflytSection::PicturePane(pic) = effective_section {
+                    let was_overridden = overrides.contains_key(&pname);
+
+                    let chosen_mat_list = if was_overridden {
+                        root_mat_list
+                    } else {
+                        sub_mat_list
+                    };
+
+                    if let Some(mat_list) = chosen_mat_list {
+                        if let Some(tq) =
+                            self.make_textured_quad(mat_list, pic, x, y, w, h, pane_idx, is_visible)
+                        {
+                            self.textured_quads.push(tq);
+                            has_textured = true;
+                        }
+                    }
+                }
+
                 self.quads.push(Quad {
                     x,
                     y,
                     width: w,
                     height: h,
-                    color: section_color(effective_section),
+                    color: if is_visible {
+                        section_color(section)
+                    } else {
+                        [0.0; 4]
+                    },
+                    has_textured,
                 });
-
-                if let BflytSection::PicturePane(pic) = effective_section {
-                    if let Some(tq) = self.make_textured_quad(pic, x, y, w, h) {
-                        self.textured_quads.push(tq);
-                    }
-                }
 
                 self.panes.push(PaneInfo {
                     label: pname,
@@ -645,33 +892,17 @@ impl<'a> Walker<'a> {
                     section: effective_section.clone(),
                     depth,
                     parts_source: Some(parts_source.to_string()),
+                    visible: is_visible,
                 });
 
                 if let BflytSection::PartsPane(nested_parts) = effective_section {
                     self.parts_depth += 1;
-                    self.maybe_resolve_parts(nested_parts, x, y, w, h, depth);
+                    self.maybe_resolve_parts(nested_parts, x, y, w, h, depth, is_visible);
                     self.parts_depth -= 1;
                 }
             }
 
-            BflytNode::Panes(children) => {
-                self.walk_nodes_in_parts(
-                    children,
-                    parent_x,
-                    parent_y,
-                    parent_w,
-                    parent_h,
-                    parts_origin_x,
-                    parts_origin_y,
-                    parts_scale_x,
-                    parts_scale_y,
-                    depth + 1,
-                    overrides,
-                    parts_source,
-                );
-            }
-
-            BflytNode::Groups(_) => {}
+            BflytNode::Panes(_) | BflytNode::Groups(_) => {}
         }
     }
 }
@@ -700,7 +931,7 @@ pub fn build_view(file: &Bflyt, blarc_dir: Option<&Path>) -> BflytView {
         discovered_bntx_buffers: Vec::new(),
     };
 
-    walker.walk_nodes(&file.nodes, 0.0, 0.0, layout_w, layout_h, 0);
+    walker.walk_nodes(&file.nodes, 0.0, 0.0, layout_w, layout_h, 0, true);
     let discovered_bntx_buffers = walker.discovered_bntx_buffers;
 
     BflytView {

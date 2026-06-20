@@ -705,7 +705,7 @@ impl MaterialDetailedCombinerEntry {
             mode: (((alpha_flags >> 24) & 0xF) as u8).into(),
             scale: (((alpha_flags >> 28) & 0x3) as u8).into(),
             copy_reg: ((alpha_flags >> 30) & 0x1) as u8 != 0,
-            konst_sel: ((constant_selectors & 0xF) as u8).into(),
+            konst_sel: (((constant_selectors >> 4) & 0xF) as u8).into(),
         };
 
         Ok(Self {
@@ -716,6 +716,15 @@ impl MaterialDetailedCombinerEntry {
     }
 
     pub fn serialize(&self, w: &mut Writer) {
+        let (color_flags, alpha_flags, constant_selectors) = self.pack_flags();
+
+        w.write_u32(color_flags);
+        w.write_u32(alpha_flags);
+        w.write_u32(constant_selectors);
+        w.write_u32(self.reserve0);
+    }
+
+    pub fn pack_flags(&self) -> (u32, u32, u32) {
         let mut color_flags = 0u32;
         color_flags |= self.color_config.sources[0] as u32 & 0xF;
         color_flags |= (self.color_config.sources[1] as u32 & 0xF) << 4;
@@ -742,10 +751,7 @@ impl MaterialDetailedCombinerEntry {
         constant_selectors |= self.color_config.konst_sel as u32 & 0xF;
         constant_selectors |= (self.alpha_config.konst_sel as u32 & 0xF) << 4;
 
-        w.write_u32(color_flags);
-        w.write_u32(alpha_flags);
-        w.write_u32(constant_selectors);
-        w.write_u32(self.reserve0);
+        (color_flags, alpha_flags, constant_selectors)
     }
 }
 

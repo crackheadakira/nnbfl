@@ -34,6 +34,7 @@ pub struct Quad {
     pub height: f32,
 
     pub color: [f32; 4],
+    pub has_textured: bool,
 }
 
 #[repr(C)]
@@ -58,12 +59,12 @@ pub struct GridUniforms {
 }
 
 pub struct QuadRenderer {
-    quad_pipeline: RenderPipelineContainer,
-    grid_pipeline: RenderPipelineContainer,
+    pub quad_pipeline: RenderPipelineContainer,
+    pub grid_pipeline: RenderPipelineContainer,
 
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
+    pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
+    pub num_indices: u32,
 
     cached_vertices: Vec<Vertex>,
 }
@@ -132,6 +133,10 @@ impl QuadRenderer {
         let mut indices: Vec<u32> = Vec::with_capacity(quads.len() * 6);
 
         for (i, q) in quads.iter().enumerate() {
+            if q.has_textured {
+                continue;
+            }
+
             let base = (i * 4) as u32;
             let x0 = q.x;
             let y0 = q.y;
@@ -242,10 +247,6 @@ impl QuadRenderer {
     }
 
     pub fn render<'rpass>(&'rpass self, rpass: &mut wgpu::RenderPass<'rpass>) {
-        rpass.set_pipeline(&self.grid_pipeline.pipeline);
-        rpass.set_bind_group(0, &self.grid_pipeline.bind_group, &[]);
-        rpass.draw(0..6, 0..1);
-
         if self.num_indices > 0 {
             rpass.set_pipeline(&self.quad_pipeline.pipeline);
             rpass.set_bind_group(0, &self.quad_pipeline.bind_group, &[]);
@@ -253,6 +254,12 @@ impl QuadRenderer {
             rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             rpass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
+    }
+
+    pub fn render_grid<'rpass>(&'rpass self, rpass: &mut wgpu::RenderPass<'rpass>) {
+        rpass.set_pipeline(&self.grid_pipeline.pipeline);
+        rpass.set_bind_group(0, &self.grid_pipeline.bind_group, &[]);
+        rpass.draw(0..6, 0..1);
     }
 }
 
