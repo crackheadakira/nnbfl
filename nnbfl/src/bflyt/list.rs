@@ -208,29 +208,29 @@ impl MaterialTextureMap {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialTextureSrt {
-    pub translation_x: f32,
-    pub translation_y: f32,
-    pub rotation: f32,
-    pub scale_x: f32,
-    pub scale_z: f32,
+    pub translate_u: f32,
+    pub translate_v: f32,
+    pub rotate: f32,
+    pub scale_u: f32,
+    pub scale_v: f32,
 }
 
 impl MaterialTextureSrt {
     fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
         Ok(Self {
-            translation_x: c.read_f32()?,
-            translation_y: c.read_f32()?,
-            rotation: c.read_f32()?,
-            scale_x: c.read_f32()?,
-            scale_z: c.read_f32()?,
+            translate_u: c.read_f32()?,
+            translate_v: c.read_f32()?,
+            rotate: c.read_f32()?,
+            scale_u: c.read_f32()?,
+            scale_v: c.read_f32()?,
         })
     }
     fn serialize(&self, w: &mut Writer) {
-        w.write_f32(self.translation_x);
-        w.write_f32(self.translation_y);
-        w.write_f32(self.rotation);
-        w.write_f32(self.scale_x);
-        w.write_f32(self.scale_z);
+        w.write_f32(self.translate_u);
+        w.write_f32(self.translate_v);
+        w.write_f32(self.rotate);
+        w.write_f32(self.scale_u);
+        w.write_f32(self.scale_v);
     }
 }
 

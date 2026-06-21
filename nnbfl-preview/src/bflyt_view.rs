@@ -38,6 +38,26 @@ pub struct BflytView {
     pub layout_height: f32,
 
     pub discovered_bntx_buffers: Vec<Vec<u8>>,
+    pub base_panes: Vec<PaneInfo>,
+    pub base_textured_quads: Vec<TexturedQuad>,
+}
+
+impl BflytView {
+    pub fn reset_to_base(&mut self) {
+        self.panes = self.base_panes.clone();
+        self.textured_quads = self.base_textured_quads.clone();
+        for (q, p) in self.quads.iter_mut().zip(self.panes.iter()) {
+            q.x = p.x;
+            q.y = p.y;
+        }
+    }
+}
+
+pub fn section_color_for_pane(pane_idx: usize, view: &BflytView) -> [f32; 4] {
+    view.panes
+        .get(pane_idx)
+        .map(|p| section_color(&p.section))
+        .unwrap_or([0.0; 4])
 }
 
 fn section_color(section: &BflytSection) -> [f32; 4] {
@@ -168,6 +188,7 @@ fn resolve_rect_in_parts(
 pub struct ResolvedBlarc {
     pub bflyt_bytes: Vec<u8>,
     pub bntx_bytes: Option<Vec<u8>>,
+    pub bflan_bytes: Vec<(String, Vec<u8>)>,
 }
 
 pub fn load_bflyt_from_blarc_dir(blarc_dir: &Path, layout_name: &str) -> Option<ResolvedBlarc> {
@@ -196,6 +217,7 @@ pub fn load_bflyt_from_blarc_dir(blarc_dir: &Path, layout_name: &str) -> Option<
     let mut resolved = ResolvedBlarc {
         bflyt_bytes: Vec::new(),
         bntx_bytes: None,
+        bflan_bytes: Vec::new(),
     };
 
     unpack_sarc_recursive(&bytes, &mut bflyt_name, &mut resolved);
@@ -387,23 +409,24 @@ impl<'a> Walker<'a> {
             }
         };
 
-        let apply_srt = |uvs: &mut [[f32; 2]; 4], layer: usize| {
+        let uvs0_base = get_uv_set(0);
+        let uvs1_base = get_uv_set(1);
+        let uvs2_base = get_uv_set(2);
+        let base_uvs: [[[f32; 2]; 3]; 4] =
+            std::array::from_fn(|i| [uvs0_base[i], uvs1_base[i], uvs2_base[i]]);
+
+        let mut uvs = base_uvs.clone();
+
+        for layer in 0..3 {
             if let Some(srt) = mat.tex_srts.get(layer) {
-                for uv in uvs.iter_mut() {
-                    uv[0] = uv[0] * srt.scale_x + srt.translation_x;
-                    uv[1] = uv[1] * srt.scale_z + srt.translation_y;
+                for v_idx in 0..4 {
+                    uvs[v_idx][layer][0] =
+                        base_uvs[v_idx][layer][0] * srt.scale_u + srt.translate_u;
+                    uvs[v_idx][layer][1] =
+                        base_uvs[v_idx][layer][1] * srt.scale_v + srt.translate_v;
                 }
             }
-        };
-
-        let mut uvs0 = get_uv_set(0);
-        apply_srt(&mut uvs0, 0);
-        let mut uvs1 = get_uv_set(1);
-        apply_srt(&mut uvs1, 1);
-        let mut uvs2 = get_uv_set(2);
-        apply_srt(&mut uvs2, 2);
-
-        let uvs: [[[f32; 2]; 3]; 4] = std::array::from_fn(|i| [uvs0[i], uvs1[i], uvs2[i]]);
+        }
 
         let address_mode_u = match tex_map.u_options.wrap_mode {
             TexWrapMode::Repeat => wgpu::AddressMode::Repeat,
@@ -571,6 +594,7 @@ impl<'a> Walker<'a> {
             width: w,
             height: h,
             uvs,
+            base_uvs,
             tint,
             texture_name: tex_name.to_string(),
             texture_name1,
@@ -583,6 +607,7 @@ impl<'a> Walker<'a> {
             detailed_combiner_material,
             is_detailed,
             pane_idx,
+            tex_srts: mat.tex_srts.clone(),
         })
     }
 
@@ -887,6 +912,8 @@ pub fn build_view(file: &Bflyt, blarc_dir: Option<&Path>) -> BflytView {
 
     BflytView {
         quads,
+        base_panes: panes.clone(),
+        base_textured_quads: textured_quads.clone(),
         textured_quads,
         panes,
         layout_width: layout_w,

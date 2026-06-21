@@ -118,7 +118,7 @@ impl AnimInfo {
                     targets.push(AnimTarget::parse(
                         cursor,
                         base_offset + offset as usize,
-                        magic_val,
+                        &magic,
                     )?);
                 }
 

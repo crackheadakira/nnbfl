@@ -1,14 +1,15 @@
+mod anim_state;
 mod bflyt_view;
 mod camera;
 mod renderer;
 mod ui;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Instant};
 
 use camera::Camera;
 use egui_chinese_font::{FontError, setup_chinese_fonts};
 use egui_wgpu::{RendererOptions, ScreenDescriptor};
-use nnbfl::{bflyt::file::Bflyt, core::ReadWriteable, sarc::file::Sarc};
+use nnbfl::{bflan::file::Bflan, bflyt::file::Bflyt, core::ReadWriteable, sarc::file::Sarc};
 use pollster::FutureExt;
 use renderer::quad::QuadRenderer;
 use renderer::texture::TextureCache;
@@ -25,6 +26,7 @@ use bflyt_view::{BflytView, build_view};
 use ui::{UiState, draw_ui};
 
 use crate::{
+    anim_state::AnimPlayer,
     bflyt_view::ResolvedBlarc,
     ui::{SUPPORTED_SARC_EXTENSIONS, UiAction},
 };
@@ -133,6 +135,7 @@ impl GpuState {
         bflyt_view: &Option<BflytView>,
         ui_state: &mut UiState,
         camera: &Camera,
+        anim_player: &mut AnimPlayer,
     ) {
         self.quad_renderer
             .update_projection(&self.queue, camera, &self.config);
@@ -196,6 +199,7 @@ impl GpuState {
                 bflyt_view,
                 ui_state,
                 camera,
+                anim_player,
                 self.config.width as f32,
                 self.config.height as f32,
             );
@@ -204,6 +208,9 @@ impl GpuState {
         egui_state.handle_platform_output(window, full_output.platform_output.clone());
 
         if let Some(bflyt_view) = bflyt_view {
+            self.quad_renderer
+                .update_anim(&self.queue, &bflyt_view.quads, &ui_state.hidden_panes);
+
             self.quad_renderer.update_selection(
                 &self.queue,
                 &bflyt_view.quads,
@@ -212,6 +219,12 @@ impl GpuState {
             );
 
             if let Some(tqr) = &mut self.textured_quad_renderer {
+                tqr.update_anim(
+                    &self.queue,
+                    &bflyt_view.textured_quads,
+                    &ui_state.hidden_panes,
+                );
+
                 tqr.update_selection(
                     &self.queue,
                     &bflyt_view.textured_quads,
@@ -306,6 +319,8 @@ struct App {
     egui_state: Option<egui_winit::State>,
     gpu: Option<GpuState>,
     window: Option<Arc<Window>>,
+    anim_player: AnimPlayer,
+    last_tick: Instant,
 }
 
 impl App {
@@ -321,6 +336,8 @@ impl App {
             egui_state: None,
             gpu: None,
             window: None,
+            anim_player: AnimPlayer::new(),
+            last_tick: Instant::now(),
         }
     }
 
@@ -335,6 +352,7 @@ impl App {
         let res = ResolvedBlarc {
             bflyt_bytes: bytes,
             bntx_bytes: None,
+            bflan_bytes: Vec::new(),
         };
 
         self.load_file_from_buffer(res, title_path.to_string());
@@ -347,6 +365,21 @@ impl App {
         if let Some(root_bntx) = res.bntx_bytes {
             view.discovered_bntx_buffers.push(root_bntx);
         }
+
+        self.anim_player = AnimPlayer::new();
+
+        for (name, bytes) in res.bflan_bytes {
+            if let Ok(bflan) = Bflan::parse(&bytes) {
+                self.anim_player.load(name, bflan);
+            }
+        }
+
+        self.ui_state.anim_names = self
+            .anim_player
+            .anims
+            .iter()
+            .map(|a| a.name.clone())
+            .collect();
 
         self.camera.zoom = 1.0;
         self.camera.offset = [0.0, 0.0];
@@ -395,6 +428,7 @@ impl App {
         let mut resolved = ResolvedBlarc {
             bflyt_bytes: Vec::new(),
             bntx_bytes: None,
+            bflan_bytes: Vec::new(),
         };
 
         unpack_sarc_recursive(&file_bytes, &mut bflyt_name, &mut resolved);
@@ -435,6 +469,13 @@ pub fn unpack_sarc_recursive(data: &[u8], bflyt_name: &mut String, resolved: &mu
             if resolved.bntx_bytes.is_none() {
                 resolved.bntx_bytes = Some(file_data);
             }
+        } else if name.ends_with(".bflan") {
+            let anim_name = std::path::Path::new(name)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| name.clone());
+
+            resolved.bflan_bytes.push((anim_name, file.data));
         } else {
             let is_nested_sarc = clean_name.ends_with(".arc")
                 || SUPPORTED_SARC_EXTENSIONS
@@ -552,6 +593,7 @@ impl ApplicationHandler for App {
                             let res = ResolvedBlarc {
                                 bflyt_bytes: bytes,
                                 bntx_bytes: None,
+                                bflan_bytes: Vec::new(),
                             };
 
                             self.load_file_from_buffer(res, name);
@@ -655,6 +697,22 @@ impl ApplicationHandler for App {
                 if let (Some(gpu), Some(window), Some(egui_state)) =
                     (&mut self.gpu, &self.window, &mut self.egui_state)
                 {
+                    let dt = self.last_tick.elapsed().as_secs_f32();
+                    self.last_tick = Instant::now();
+
+                    if let Some(next) = self.anim_player.tick(dt, 60.0) {
+                        self.anim_player.play(&next.clone());
+                    }
+
+                    if let Some(name) = self.ui_state.pending_play_anim.take() {
+                        self.anim_player.play(&name);
+                    }
+
+                    if let Some(view) = &mut self.bflyt_view {
+                        view.reset_to_base();
+                        self.anim_player.apply(view);
+                    }
+
                     gpu.render(
                         window,
                         &self.egui_ctx,
@@ -662,7 +720,12 @@ impl ApplicationHandler for App {
                         &self.bflyt_view,
                         &mut self.ui_state,
                         &self.camera,
+                        &mut self.anim_player,
                     );
+
+                    if self.anim_player.is_playing() {
+                        window.request_redraw();
+                    }
                 }
             }
 

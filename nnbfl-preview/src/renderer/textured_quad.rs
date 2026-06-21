@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use bytemuck::{Pod, Zeroable};
+use nnbfl::bflyt::list::MaterialTextureSrt;
 use wgpu::util::DeviceExt;
 
 use super::texture::TextureCache;
@@ -103,6 +104,8 @@ pub struct TexturedQuad {
     pub height: f32,
 
     pub uvs: [[[f32; 2]; 3]; 4],
+    pub base_uvs: [[[f32; 2]; 3]; 4],
+    pub tex_srts: Vec<MaterialTextureSrt>,
     pub tint: [f32; 4],
     pub texture_name: String,
 
@@ -138,6 +141,7 @@ struct TextureBatch {
     vertex_buffer: Option<wgpu::Buffer>,
     index_buffer: Option<wgpu::Buffer>,
     bind_group: Option<wgpu::BindGroup>,
+    mat_buffer: Option<wgpu::Buffer>,
     num_indices: u32,
 
     key: BatchKey,
@@ -402,6 +406,7 @@ impl TexturedQuadRenderer {
                     vertex_buffer: None,
                     index_buffer: None,
                     bind_group: None,
+                    mat_buffer: None,
                     num_indices: 0,
                     key,
                     pane_indices: vec![q.pane_idx],
@@ -437,8 +442,10 @@ impl TexturedQuadRenderer {
             let mat_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("tq_standard_mat_buf"),
                 contents: bytemuck::bytes_of(&rep_quad.standard_material),
-                usage: wgpu::BufferUsages::UNIFORM,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
+
+            batch.mat_buffer = Some(mat_buf);
 
             let detailed_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("tq_detailed_mat_buf"),
@@ -513,6 +520,8 @@ impl TexturedQuadRenderer {
                 wgpu::FilterMode::Linear,
             );
 
+            let mat_buf_ref = batch.mat_buffer.as_ref().unwrap();
+
             batch.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("tq_bg"),
                 layout: &self.texture_bgl,
@@ -543,7 +552,7 @@ impl TexturedQuadRenderer {
                     },
                     wgpu::BindGroupEntry {
                         binding: 6,
-                        resource: mat_buf.as_entire_binding(),
+                        resource: mat_buf_ref.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 7,
@@ -594,6 +603,49 @@ impl TexturedQuadRenderer {
 
             if let Some(ref vb) = batch.vertex_buffer {
                 queue.write_buffer(vb, 0, bytemuck::cast_slice(&batch.vertices));
+            }
+        }
+    }
+
+    pub fn update_anim(
+        &mut self,
+        queue: &wgpu::Queue,
+        quads: &[TexturedQuad],
+        hidden_panes: &HashSet<usize>,
+    ) {
+        for batch in &mut self.batches {
+            let mut dirty = false;
+            for (batch_quad_idx, &pane_idx) in batch.pane_indices.iter().enumerate() {
+                let base = batch_quad_idx * 4;
+                if base + 3 >= batch.vertices.len() {
+                    break;
+                }
+                let Some(tq) = quads.iter().find(|q| q.pane_idx == pane_idx) else {
+                    continue;
+                };
+                if hidden_panes.contains(&pane_idx) {
+                    continue;
+                }
+
+                for v_offset in 0..4 {
+                    let v = &mut batch.vertices[base + v_offset];
+                    v.uv0 = tq.uvs[v_offset][0];
+                    v.uv1 = tq.uvs[v_offset][1];
+                    v.uv2 = tq.uvs[v_offset][2];
+                    v.tint = tq.tint;
+                }
+
+                if let Some(mb) = &batch.mat_buffer {
+                    queue.write_buffer(mb, 0, bytemuck::bytes_of(&tq.standard_material));
+                }
+
+                dirty = true;
+            }
+
+            if dirty {
+                if let Some(vb) = &batch.vertex_buffer {
+                    queue.write_buffer(vb, 0, bytemuck::cast_slice(&batch.vertices));
+                }
             }
         }
     }

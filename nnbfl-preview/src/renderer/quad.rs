@@ -201,6 +201,49 @@ impl QuadRenderer {
         );
     }
 
+    pub fn update_anim(
+        &mut self,
+        queue: &wgpu::Queue,
+        quads: &[Quad],
+        hidden_panes: &HashSet<usize>,
+    ) {
+        if self.cached_vertices.is_empty() {
+            return;
+        }
+
+        for (i, q) in quads.iter().enumerate() {
+            if q.has_textured {
+                continue;
+            }
+            let base = i * 4;
+            if base + 3 >= self.cached_vertices.len() {
+                continue;
+            }
+
+            let color = if hidden_panes.contains(&i) {
+                [0.0; 4]
+            } else {
+                q.color
+            };
+            let x0 = q.x;
+            let y0 = q.y;
+            let x1 = q.x + q.width;
+            let y1 = q.y + q.height;
+
+            let positions = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
+            for v_offset in 0..4 {
+                self.cached_vertices[base + v_offset].position = positions[v_offset];
+                self.cached_vertices[base + v_offset].color = color;
+            }
+        }
+
+        queue.write_buffer(
+            &self.vertex_buffer,
+            0,
+            bytemuck::cast_slice(&self.cached_vertices),
+        );
+    }
+
     pub fn update_selection(
         &mut self,
         queue: &wgpu::Queue,

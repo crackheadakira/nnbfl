@@ -1,13 +1,14 @@
+use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    bflan::curves::Curve,
-    core::{Cursor, FormatError, Writer, tchar_code32},
+    bflan::{anim_info::AnimInfoType, curves::Curve},
+    core::{Cursor, FormatError, Writer},
 };
 
 #[derive(Debug, Serialize, Clone, Deserialize)]
 pub struct AnimTarget {
-    pub reserve0: u8,
+    pub layer: u8,
     pub target: TargetIndex,
     pub curve: Curve,
 }
@@ -16,11 +17,11 @@ impl AnimTarget {
     pub fn parse(
         cursor: &mut Cursor,
         base_offset: usize,
-        parent_magic: u32,
+        parent_magic: &AnimInfoType,
     ) -> Result<Self, FormatError> {
         cursor.seek(base_offset)?;
 
-        let reserve0 = cursor.read_u8()?;
+        let layer = cursor.read_u8()?;
         let target_raw = cursor.read_u8()?;
         let curve_type = cursor.read_u8()?;
         let _reserve1 = cursor.read_u8()?;
@@ -35,7 +36,7 @@ impl AnimTarget {
         let curve = Curve::parse(cursor, curve_type, frame_count as usize)?;
 
         Ok(Self {
-            reserve0,
+            layer,
             target,
             curve,
         })
@@ -43,7 +44,7 @@ impl AnimTarget {
 
     pub fn serialize(&self, writer: &mut Writer, base_offset: usize) {
         writer.mark("AnimTarget");
-        writer.write_u8(self.reserve0);
+        writer.write_u8(self.layer);
         writer.write_u8(self.target.to_raw());
 
         let (curve_type, frame_count) = match &self.curve {
@@ -72,56 +73,55 @@ pub enum TargetIndex {
     PerCharacterTransform(PerCharacterTransformTarget),
     PaneSrt(PaneSrtTarget),
     VertexColor(VertexColorTarget),
-    Visibility,
+    Visibility(VisibilityTarget),
     MaterialColor(MaterialColorTarget),
     TextureSrt(TextureSrtTarget),
     TexturePattern(TexturePatternTarget),
-    AlphaCompare,
-    FontShadow,
+    AlphaCompare(AlphaCompareTarget),
+    FontShadow(FontShadowTarget),
     Raw(u8),
 }
 
 impl TargetIndex {
     pub fn to_raw(&self) -> u8 {
         match self {
-            TargetIndex::PaneSrt(PaneSrtTarget::TranslateX) => 0,
-            TargetIndex::PaneSrt(PaneSrtTarget::TranslateY) => 1,
-            TargetIndex::PaneSrt(PaneSrtTarget::TranslateZ) => 2,
-            TargetIndex::PaneSrt(PaneSrtTarget::RotateX) => 3,
-            TargetIndex::PaneSrt(PaneSrtTarget::RotateY) => 4,
-            TargetIndex::PaneSrt(PaneSrtTarget::RotateZ) => 5,
-            TargetIndex::PaneSrt(PaneSrtTarget::ScaleX) => 6,
-            TargetIndex::PaneSrt(PaneSrtTarget::ScaleY) => 7,
-            TargetIndex::PaneSrt(PaneSrtTarget::SizeX) => 8,
-            TargetIndex::PaneSrt(PaneSrtTarget::SizeY) => 9,
+            TargetIndex::PerCharacterTransformCurve(t) => t.clone() as u8,
+            TargetIndex::PerCharacterTransform(t) => t.clone() as u8,
+            TargetIndex::PaneSrt(t) => t.clone() as u8,
+            TargetIndex::VertexColor(t) => t.clone() as u8,
+            TargetIndex::Visibility(t) => t.clone() as u8,
+            TargetIndex::MaterialColor(t) => t.clone() as u8,
+            TargetIndex::TextureSrt(t) => t.clone() as u8,
+            TargetIndex::TexturePattern(t) => t.clone() as u8,
+            TargetIndex::AlphaCompare(t) => t.clone() as u8,
+            TargetIndex::FontShadow(t) => t.clone() as u8,
             TargetIndex::Raw(r) => *r,
-            _ => 0,
         }
     }
 
-    pub fn resolve(magic: u32, raw: u8) -> Self {
+    pub fn resolve(magic: &AnimInfoType, raw: u8) -> Self {
         match magic {
-            m if m == tchar_code32(b"FLPA") => match raw {
-                0 => Self::PaneSrt(PaneSrtTarget::TranslateX),
-                1 => Self::PaneSrt(PaneSrtTarget::TranslateY),
-                2 => Self::PaneSrt(PaneSrtTarget::TranslateZ),
-                3 => Self::PaneSrt(PaneSrtTarget::RotateX),
-                4 => Self::PaneSrt(PaneSrtTarget::RotateY),
-                5 => Self::PaneSrt(PaneSrtTarget::RotateZ),
-                6 => Self::PaneSrt(PaneSrtTarget::ScaleX),
-                7 => Self::PaneSrt(PaneSrtTarget::ScaleY),
-                8 => Self::PaneSrt(PaneSrtTarget::SizeX),
-                9 => Self::PaneSrt(PaneSrtTarget::SizeY),
-                _ => Self::Raw(raw),
-            },
-
+            AnimInfoType::PaneSrtAnim => Self::PaneSrt(raw.into()),
+            AnimInfoType::TextureSrtAnim => Self::TextureSrt(raw.into()),
+            AnimInfoType::VertexColorAnim => Self::VertexColor(raw.into()),
+            AnimInfoType::MaterialColorAnim => Self::MaterialColor(raw.into()),
+            AnimInfoType::TexturePatternAnim => Self::TexturePattern(raw.into()),
+            AnimInfoType::PerCharacterTransformCurveAnim => {
+                Self::PerCharacterTransformCurve(raw.into())
+            }
+            AnimInfoType::PerCharacterTransformAnim => Self::PerCharacterTransform(raw.into()),
+            AnimInfoType::VisibilityAnim => Self::Visibility(raw.into()),
+            AnimInfoType::AlphaCompareAnim => Self::AlphaCompare(raw.into()),
+            AnimInfoType::FontShadowAnim => Self::FontShadow(raw.into()),
             _ => Self::Raw(raw),
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
 pub enum PaneSrtTarget {
+    #[default]
     TranslateX = 0,
     TranslateY = 1,
     TranslateZ = 2,
@@ -134,8 +134,23 @@ pub enum PaneSrtTarget {
     SizeY = 9,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum FontShadowTarget {
+    #[default]
+    BlackRed = 0,
+    BlackGreen = 1,
+    BlackBlue = 2,
+    WhiteRed = 3,
+    WhiteGreen = 4,
+    WhiteBlue = 5,
+    WhiteAlpha = 6,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
 pub enum PerCharacterTransformCurveTarget {
+    #[default]
     TranslateX = 0,
     TranslateY = 1,
     TranslateZ = 2,
@@ -152,18 +167,39 @@ pub enum PerCharacterTransformCurveTarget {
     LeftBottomAlpha = 13,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
 pub enum PerCharacterTransformTarget {
-    EvalTypeOffset,
+    #[default]
+    EvalTimeOffset,
+    EvalTimeWidth,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
 pub enum TexturePatternTarget {
+    #[default]
     Image = 0,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum AlphaCompareTarget {
+    #[default]
+    CompareReference = 0,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum VisibilityTarget {
+    #[default]
+    Visibility = 0,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
 pub enum VertexColorTarget {
+    #[default]
     LeftTopRed = 0,
     LeftTopGreen = 1,
     LeftTopBlue = 2,
@@ -183,8 +219,10 @@ pub enum VertexColorTarget {
     PaneAlpha = 16,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
 pub enum MaterialColorTarget {
+    #[default]
     BufferRed = 0,
     BufferGreen = 1,
     BufferBlue = 2,
@@ -215,8 +253,10 @@ pub enum MaterialColorTarget {
     Color4Alpha = 27,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
 pub enum TextureSrtTarget {
+    #[default]
     TranslateU = 0,
     TranslateV = 1,
     Rotate = 2,

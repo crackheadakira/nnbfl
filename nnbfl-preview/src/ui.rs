@@ -4,6 +4,7 @@ use egui::Ui;
 use nnbfl::bflyt::file::BflytSection;
 
 use crate::{
+    anim_state::AnimPlayer,
     bflyt_view::{BflytView, PaneInfo},
     camera::Camera,
 };
@@ -25,6 +26,8 @@ pub struct UiState {
     pub pending_action: Option<UiAction>,
     pub clip_to_root: bool,
     pub only_textured: bool,
+    pub anim_names: Vec<String>,
+    pub pending_play_anim: Option<String>,
 }
 
 pub enum UiAction {
@@ -37,6 +40,7 @@ pub fn draw_ui(
     view: &Option<BflytView>,
     state: &mut UiState,
     camera: &Camera,
+    anim_player: &mut AnimPlayer,
     screen_w: f32,
     screen_h: f32,
 ) {
@@ -140,21 +144,146 @@ pub fn draw_ui(
                     }
                 });
         });
-
-    if let Some(view) = view {
-        egui::Panel::bottom("properties")
+    if !state.anim_names.is_empty() || view.is_some() {
+        egui::Panel::bottom("master_bottom_shelf")
             .default_size(150.0)
+            .resizable(true)
             .show_inside(ui, |ui| {
-                ui.heading("Properties");
-                ui.separator();
+                ui.columns(2, |layout_cols| {
+                    let ui = &mut layout_cols[0];
+                    if !state.anim_names.is_empty() {
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.heading("Animation Sequences");
+                                ui.add_space(8.0);
 
-                if let Some(idx) = state.selected_pane {
-                    if let Some(pane) = view.panes.get(idx) {
-                        draw_pane_properties(ui, pane);
+                                if anim_player.is_playing() {
+                                    ui.label(
+                                        egui::RichText::new("Playing")
+                                            .color(egui::Color32::GREEN)
+                                            .strong(),
+                                    );
+                                } else if anim_player.active.is_some() {
+                                    ui.label(
+                                        egui::RichText::new("Paused").color(egui::Color32::GOLD),
+                                    );
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new("Idle").color(egui::Color32::GRAY),
+                                    );
+                                }
+                            });
+                            ui.separator();
+
+                            ui.columns(2, |anim_sub_cols| {
+                                anim_sub_cols[0].vertical(|ui| {
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("anim_selection_grid")
+                                        .max_height(90.0)
+                                        .show(ui, |ui| {
+                                            ui.horizontal_wrapped(|ui| {
+                                                for (idx, name) in
+                                                    state.anim_names.iter().enumerate()
+                                                {
+                                                    let is_active = anim_player.active == Some(idx);
+                                                    let btn_text = if is_active
+                                                        && anim_player.anims[idx].playing
+                                                    {
+                                                        name.clone()
+                                                    } else {
+                                                        name.clone()
+                                                    };
+
+                                                    if ui
+                                                        .selectable_label(is_active, btn_text)
+                                                        .clicked()
+                                                    {
+                                                        state.pending_play_anim =
+                                                            Some(name.clone());
+                                                    }
+                                                }
+                                            });
+                                        });
+                                });
+
+                                anim_sub_cols[1].vertical(|ui| {
+                                    if let Some(idx) = anim_player.active
+                                        && let Some(anim) = anim_player.anims.get_mut(idx)
+                                    {
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(&anim.name).strong());
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    ui.small(format!(
+                                                        "F: {:.1} / {:.0}",
+                                                        anim.frame,
+                                                        anim.frame_count()
+                                                    ));
+                                                },
+                                            );
+                                        });
+
+                                        ui.horizontal(|ui| {
+                                            let play_toggle =
+                                                if anim.playing { "Pause" } else { "Play" };
+                                            if ui.button(play_toggle).clicked() {
+                                                anim.playing = !anim.playing;
+                                            }
+                                            if ui.button("Stop").clicked() {
+                                                anim.frame = 0.0;
+                                                anim.playing = false;
+                                            }
+                                            ui.small(format!("Looping: {}", anim.is_looping()));
+                                        });
+
+                                        ui.add_space(4.0);
+
+                                        let max_frame = anim.frame_count() - 1.0;
+                                        let mut temporary_frame = anim.frame;
+
+                                        let slider_res = ui.add(
+                                            egui::Slider::new(
+                                                &mut temporary_frame,
+                                                0.0..=max_frame,
+                                            )
+                                            .show_value(false)
+                                            .trailing_fill(true),
+                                        );
+
+                                        if slider_res.changed() {
+                                            anim.frame = temporary_frame;
+                                            if slider_res.dragged() {
+                                                anim.playing = false;
+                                            }
+                                        }
+                                        if slider_res.drag_stopped() {
+                                            anim.playing = true;
+                                        }
+                                    }
+                                });
+                            });
+                        });
                     }
-                } else {
-                    ui.label("Select a pane in the tree to inspect it.");
-                }
+
+                    let ui = &mut layout_cols[1];
+                    if let Some(view) = view {
+                        ui.vertical(|ui| {
+                            ui.heading("Properties");
+                            ui.separator();
+
+                            if let Some(idx) = state.selected_pane {
+                                if let Some(pane) = view.panes.get(idx) {
+                                    draw_pane_properties(ui, pane);
+                                }
+                            } else {
+                                ui.centered_and_justified(|ui| {
+                                    ui.label("Select a pane in the tree to inspect it.");
+                                });
+                            }
+                        });
+                    }
+                });
             });
     }
 
