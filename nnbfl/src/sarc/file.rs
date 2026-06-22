@@ -132,7 +132,7 @@ impl ReadWriteable for Sarc {
         let mut writer = Writer::new();
 
         let mut sorted_files = self.files.clone();
-        sorted_files.sort_by_key(|file| file.hash as u32);
+        sorted_files.sort_by_key(|file| file.hash);
 
         let num_files = sorted_files.len() as u16;
 

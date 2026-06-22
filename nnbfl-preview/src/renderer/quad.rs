@@ -10,12 +10,16 @@ use crate::camera::Camera;
 pub struct Vertex {
     pub position: [f32; 2],
     pub color: [f32; 4],
+    pub quad_size: [f32; 2],
+    pub uv: [f32; 2],
 }
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![
+    const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
         0 => Float32x2,
         1 => Float32x4,
+        2 => Float32x2,
+        3 => Float32x2,
     ];
 
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
@@ -131,6 +135,7 @@ impl QuadRenderer {
     pub fn upload_quads(&mut self, device: &wgpu::Device, quads: &[Quad]) {
         let mut vertices: Vec<Vertex> = Vec::with_capacity(quads.len() * 4);
         let mut indices: Vec<u32> = Vec::with_capacity(quads.len() * 6);
+        let uvs = [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
 
         for (i, q) in quads.iter().enumerate() {
             if q.has_textured {
@@ -143,11 +148,14 @@ impl QuadRenderer {
             let x1 = q.x + q.width;
             let y1 = q.y + q.height;
             let c = q.color;
+            let size = [q.width, q.height];
 
-            for pos in &[[x0, y0], [x1, y0], [x0, y1], [x1, y1]] {
+            for (v_idx, pos) in [[x0, y0], [x1, y0], [x0, y1], [x1, y1]].iter().enumerate() {
                 vertices.push(Vertex {
                     position: *pos,
                     color: c,
+                    quad_size: size,
+                    uv: uvs[v_idx],
                 });
             }
 
@@ -211,6 +219,8 @@ impl QuadRenderer {
             return;
         }
 
+        let uvs = [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
+
         for (i, q) in quads.iter().enumerate() {
             if q.has_textured {
                 continue;
@@ -229,11 +239,14 @@ impl QuadRenderer {
             let y0 = q.y;
             let x1 = q.x + q.width;
             let y1 = q.y + q.height;
+            let size = [q.width, q.height];
 
             let positions = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
             for v_offset in 0..4 {
                 self.cached_vertices[base + v_offset].position = positions[v_offset];
                 self.cached_vertices[base + v_offset].color = color;
+                self.cached_vertices[base + v_offset].quad_size = size;
+                self.cached_vertices[base + v_offset].uv = uvs[v_offset];
             }
         }
 
@@ -255,30 +268,37 @@ impl QuadRenderer {
             return;
         }
 
+        let uvs = [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
+
         for (i, q) in quads.iter().enumerate() {
+            if q.has_textured {
+                continue;
+            }
             let base_vertex_idx = i * 4;
             if base_vertex_idx + 3 >= self.cached_vertices.len() {
                 continue;
             }
 
-            if hidden_panes.contains(&i) {
-                for v_offset in 0..4 {
-                    self.cached_vertices[base_vertex_idx + v_offset].color = [0.0, 0.0, 0.0, 0.0];
-                }
+            let size = [q.width, q.height];
+
+            let final_color = if hidden_panes.contains(&i) {
+                [0.0, 0.0, 0.0, 0.0]
             } else if Some(i) == selected_idx {
-                for v_offset in 0..4 {
-                    let base_color = q.color;
-                    self.cached_vertices[base_vertex_idx + v_offset].color = [
-                        (base_color[0] + 0.4).min(1.0),
-                        (base_color[1] + 0.4).min(1.0),
-                        (base_color[2] + 0.4).min(1.0),
-                        0.95,
-                    ];
-                }
+                [
+                    (q.color[0] + 0.4).min(1.0),
+                    (q.color[1] + 0.4).min(1.0),
+                    (q.color[2] + 0.4).min(1.0),
+                    0.95,
+                ]
             } else {
-                for v_offset in 0..4 {
-                    self.cached_vertices[base_vertex_idx + v_offset].color = q.color;
-                }
+                q.color
+            };
+
+            for (v_offset, uv) in uvs.iter().enumerate() {
+                let vertex = &mut self.cached_vertices[base_vertex_idx + v_offset];
+                vertex.color = final_color;
+                vertex.quad_size = size;
+                vertex.uv = *uv;
             }
         }
 

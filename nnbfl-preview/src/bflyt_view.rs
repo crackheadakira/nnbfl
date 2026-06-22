@@ -4,7 +4,7 @@ use nnbfl::{
     bflyt::{
         file::{Bflyt, BflytNode, BflytSection},
         flags::{BflytOrigin, BflytParentOrigin, TexFilter, TexWrapMode},
-        list::{MaterialColorEntry, TexGenSrc},
+        list::{BflytMaterialList, MaterialColorEntry, TexGenSrc},
         pane::{BflytPane, Color4u8},
     },
     core::ReadWriteable,
@@ -26,6 +26,10 @@ pub struct PaneInfo {
     pub width: f32,
     pub height: f32,
     pub depth: usize,
+    pub parent_idx: Option<usize>,
+
+    pub parent_anchor_x: f32,
+    pub parent_anchor_y: f32,
     pub parts_source: Option<String>,
     pub visible: bool,
 }
@@ -33,9 +37,11 @@ pub struct PaneInfo {
 pub struct BflytView {
     pub quads: Vec<Quad>,
     pub textured_quads: Vec<TexturedQuad>,
+    pub material_list: Option<BflytMaterialList>,
     pub panes: Vec<PaneInfo>,
     pub layout_width: f32,
     pub layout_height: f32,
+    pub children: Vec<Vec<usize>>,
 
     pub discovered_bntx_buffers: Vec<Vec<u8>>,
     pub base_panes: Vec<PaneInfo>,
@@ -46,10 +52,31 @@ impl BflytView {
     pub fn reset_to_base(&mut self) {
         self.panes = self.base_panes.clone();
         self.textured_quads = self.base_textured_quads.clone();
-        for (q, p) in self.quads.iter_mut().zip(self.panes.iter()) {
-            q.x = p.x;
-            q.y = p.y;
+        for (i, p) in self.base_panes.iter().enumerate() {
+            if let Some(q) = self.quads.get_mut(i) {
+                q.x = p.x;
+                q.y = p.y;
+                q.color = if p.visible {
+                    section_color(&p.section)
+                } else {
+                    [0.0; 4]
+                };
+            }
         }
+    }
+
+    pub fn descendants(&self, pane_idx: usize) -> Vec<usize> {
+        let mut result = Vec::new();
+        let mut stack = vec![pane_idx];
+        while let Some(idx) = stack.pop() {
+            if let Some(kids) = self.children.get(idx) {
+                for &child in kids {
+                    result.push(child);
+                    stack.push(child);
+                }
+            }
+        }
+        result
     }
 }
 
@@ -134,7 +161,7 @@ fn resolve_rect(
     parent_y: f32,
     parent_w: f32,
     parent_h: f32,
-) -> (f32, f32, f32, f32) {
+) -> (f32, f32, f32, f32, f32, f32) {
     let anchor_x = match pane.origin.parent_origin_x {
         BflytParentOrigin::None => parent_x + parent_w * 0.5,
         BflytParentOrigin::LeftTop => parent_x,
@@ -163,7 +190,14 @@ fn resolve_rect(
         BflytOrigin::RightBottom => cy - h,
     };
 
-    (tl_x, tl_y, w.abs().max(1.0), h.abs().max(1.0))
+    (
+        tl_x,
+        tl_y,
+        w.abs().max(1.0),
+        h.abs().max(1.0),
+        anchor_x,
+        anchor_y,
+    )
 }
 
 fn resolve_rect_in_parts(
@@ -177,7 +211,8 @@ fn resolve_rect_in_parts(
     parts_scale_x: f32,
     parts_scale_y: f32,
 ) -> (f32, f32, f32, f32) {
-    let (lx, ly, lw, lh) = resolve_rect(pane, parent_x, parent_y, parent_w, parent_h);
+    let (lx, ly, lw, lh, _, _) = resolve_rect(pane, parent_x, parent_y, parent_w, parent_h);
+
     let x = parts_center_x + lx * parts_scale_x;
     let y = parts_center_y + ly * parts_scale_y;
     let w = (lw * parts_scale_x).abs().max(1.0);
@@ -230,13 +265,11 @@ pub fn load_bflyt_from_blarc_dir(blarc_dir: &Path, layout_name: &str) -> Option<
 }
 
 struct Walker<'a> {
-    layout_w: f32,
-    layout_h: f32,
     quads: &'a mut Vec<Quad>,
     textured_quads: &'a mut Vec<TexturedQuad>,
     panes: &'a mut Vec<PaneInfo>,
-    material_list: Option<&'a nnbfl::bflyt::list::BflytMaterialList>,
-    texture_list: Option<&'a nnbfl::bflyt::list::BflytTextureList>,
+    children: &'a mut Vec<Vec<usize>>,
+    material_list: Option<&'a BflytMaterialList>,
     blarc_dir: Option<&'a Path>,
     blarc_cache: &'a mut HashMap<String, Option<Bflyt>>,
     parts_depth: usize,
@@ -257,9 +290,11 @@ impl<'a> Walker<'a> {
         parent_h: f32,
         depth: usize,
         parent_visible: bool,
+        parent_idx: Option<usize>,
     ) {
         let mut last_rect = (parent_x, parent_y, parent_w, parent_h);
         let mut last_visible = parent_visible;
+        let mut last_pane_idx = parent_idx;
 
         for node in nodes {
             match node {
@@ -272,10 +307,11 @@ impl<'a> Walker<'a> {
                         parent_h,
                         depth,
                         parent_visible,
+                        parent_idx,
                     );
                     if let Some(p) = self.panes.last() {
                         last_rect = (p.x, p.y, p.width, p.height);
-
+                        last_pane_idx = Some(self.panes.len() - 1);
                         if let Some(base) = base_pane(section) {
                             last_visible = parent_visible && base.pane_flags.is_visible;
                         }
@@ -283,7 +319,16 @@ impl<'a> Walker<'a> {
                 }
                 BflytNode::Panes(children) => {
                     let (px, py, pw, ph) = last_rect;
-                    self.walk_nodes(children, px, py, pw, ph, depth + 1, last_visible);
+                    self.walk_nodes(
+                        children,
+                        px,
+                        py,
+                        pw,
+                        ph,
+                        depth + 1,
+                        last_visible,
+                        last_pane_idx,
+                    );
                 }
                 BflytNode::Groups(_) => {}
             }
@@ -299,6 +344,7 @@ impl<'a> Walker<'a> {
         parent_h: f32,
         depth: usize,
         parent_visible: bool,
+        parent_idx: Option<usize>,
     ) {
         match node {
             BflytNode::Section(section) => {
@@ -307,23 +353,30 @@ impl<'a> Walker<'a> {
                 };
 
                 let is_visible = parent_visible && base.pane_flags.is_visible;
-
-                let (x, y, w, h) = resolve_rect(base, parent_x, parent_y, parent_w, parent_h);
-
+                let (x, y, w, h, anchor_x, anchor_y) =
+                    resolve_rect(base, parent_x, parent_y, parent_w, parent_h);
                 let label = pane_name(section);
                 let kind = section_kind_name(section).to_string();
-
                 let pane_idx = self.panes.len();
 
-                let mut has_textured = false;
-                if let BflytSection::PicturePane(pic) = section {
-                    if let Some(mat_list) = self.material_list
-                        && let Some(tq) =
-                            self.make_textured_quad(mat_list, pic, x, y, w, h, pane_idx, is_visible)
-                    {
-                        self.textured_quads.push(tq);
-                        has_textured = true;
+                while self.children.len() <= pane_idx {
+                    self.children.push(Vec::new());
+                }
+                if let Some(pidx) = parent_idx {
+                    while self.children.len() <= pidx {
+                        self.children.push(Vec::new());
                     }
+                    self.children[pidx].push(pane_idx);
+                }
+
+                let mut has_textured = false;
+                if let BflytSection::PicturePane(pic) = section
+                    && let Some(mat_list) = self.material_list
+                    && let Some(tq) =
+                        self.make_textured_quad(mat_list, pic, x, y, w, h, pane_idx, is_visible)
+                {
+                    self.textured_quads.push(tq);
+                    has_textured = true;
                 }
 
                 self.quads.push(Quad {
@@ -348,15 +401,17 @@ impl<'a> Walker<'a> {
                     width: w,
                     height: h,
                     depth,
+                    parent_idx,
+                    parent_anchor_x: anchor_x,
+                    parent_anchor_y: anchor_y,
                     parts_source: self.parts_source.clone(),
                     visible: is_visible,
                 });
 
                 if let BflytSection::PartsPane(parts) = section {
-                    self.maybe_resolve_parts(parts, x, y, w, h, depth, is_visible);
+                    self.maybe_resolve_parts(parts, x, y, w, h, depth, is_visible, pane_idx);
                 }
             }
-
             BflytNode::Panes(_) | BflytNode::Groups(_) => {}
         }
     }
@@ -415,7 +470,7 @@ impl<'a> Walker<'a> {
         let base_uvs: [[[f32; 2]; 3]; 4] =
             std::array::from_fn(|i| [uvs0_base[i], uvs1_base[i], uvs2_base[i]]);
 
-        let mut uvs = base_uvs.clone();
+        let mut uvs = base_uvs;
 
         for layer in 0..3 {
             if let Some(srt) = mat.tex_srts.get(layer) {
@@ -447,6 +502,45 @@ impl<'a> Walker<'a> {
             TexFilter::Near => wgpu::FilterMode::Nearest,
         };
 
+        let wrap_to_address = |w: &TexWrapMode| match w {
+            TexWrapMode::Repeat => wgpu::AddressMode::Repeat,
+            TexWrapMode::Mirror => wgpu::AddressMode::MirrorRepeat,
+            TexWrapMode::Clamp => wgpu::AddressMode::ClampToEdge,
+        };
+        let filter_to_mode = |f: &TexFilter| match f {
+            TexFilter::Linear => wgpu::FilterMode::Linear,
+            TexFilter::Near => wgpu::FilterMode::Nearest,
+        };
+
+        let tex_map1 = mat.tex_maps.get(1);
+        let tex_map2 = mat.tex_maps.get(2);
+
+        let address_mode_u1 = tex_map1
+            .map(|m| wrap_to_address(&m.u_options.wrap_mode))
+            .unwrap_or(wgpu::AddressMode::ClampToEdge);
+        let address_mode_v1 = tex_map1
+            .map(|m| wrap_to_address(&m.v_options.wrap_mode))
+            .unwrap_or(wgpu::AddressMode::ClampToEdge);
+        let min_filter1 = tex_map1
+            .map(|m| filter_to_mode(&m.u_options.filter))
+            .unwrap_or(wgpu::FilterMode::Linear);
+        let mag_filter1 = tex_map1
+            .map(|m| filter_to_mode(&m.v_options.filter))
+            .unwrap_or(wgpu::FilterMode::Linear);
+
+        let address_mode_u2 = tex_map2
+            .map(|m| wrap_to_address(&m.u_options.wrap_mode))
+            .unwrap_or(wgpu::AddressMode::ClampToEdge);
+        let address_mode_v2 = tex_map2
+            .map(|m| wrap_to_address(&m.v_options.wrap_mode))
+            .unwrap_or(wgpu::AddressMode::ClampToEdge);
+        let min_filter2 = tex_map2
+            .map(|m| filter_to_mode(&m.u_options.filter))
+            .unwrap_or(wgpu::FilterMode::Linear);
+        let mag_filter2 = tex_map2
+            .map(|m| filter_to_mode(&m.v_options.filter))
+            .unwrap_or(wgpu::FilterMode::Linear);
+
         let texture_name1 = mat
             .tex_maps
             .get(1)
@@ -461,21 +555,19 @@ impl<'a> Walker<'a> {
         let texture_count = mat.tex_maps.len().min(3) as u32;
 
         let mut tex_gen_flags = [0u32; 3];
-        for i in 0..(texture_count as usize) {
-            if let Some(coord_gen) = mat.tex_coord_gens.get(i) {
-                match coord_gen.tex_gen_source {
-                    TexGenSrc::PaneBasedProjection
-                    | TexGenSrc::OrthogonalProjection
-                    | TexGenSrc::PerspectiveProjection
-                    | TexGenSrc::PaneBasedPerspectiveProjection => {
-                        tex_gen_flags[i] |= 1;
-                    }
-                    TexGenSrc::BrickRepeat => {
-                        tex_gen_flags[i] |= 2;
-                    }
-                    _ => {}
-                }
-            }
+
+        for (flag, coord_gen) in tex_gen_flags
+            .iter_mut()
+            .zip(mat.tex_coord_gens.iter().take(texture_count as usize))
+        {
+            *flag = match coord_gen.tex_gen_source {
+                TexGenSrc::PaneBasedProjection
+                | TexGenSrc::OrthogonalProjection
+                | TexGenSrc::PerspectiveProjection
+                | TexGenSrc::PaneBasedPerspectiveProjection => 1,
+                TexGenSrc::BrickRepeat => 2,
+                _ => 0,
+            };
         }
 
         let tex_gen_mode_packed =
@@ -567,7 +659,7 @@ impl<'a> Walker<'a> {
 
         // currently using default, but how can i make it not use default because i have no idea what
         // this corresponds to
-        let alpha_select: u32 = 0;
+        let alpha_select = 0;
 
         let (indirect_mtx0, indirect_mtx1) = if let Some(im) = &mat.indirect_matrix {
             ([im.scale.x, 0.0, 0.0, 0.0], [0.0, im.scale.y, 0.0, 0.0])
@@ -576,15 +668,16 @@ impl<'a> Walker<'a> {
         };
 
         let standard_material = StandardMaterial {
-            interpolate_width: interpolate_width,
-            interpolate_offset: interpolate_offset,
-            combine_mode: combine_mode,
-            combine_mode2: combine_mode2,
-            texture_count: texture_count,
-            alpha_select: alpha_select,
+            interpolate_width,
+            interpolate_offset,
+            combine_mode,
+            combine_mode2,
+            texture_count,
+            alpha_select,
             tex_gen_mode: tex_gen_mode_packed,
-            indirect_mtx0: indirect_mtx0,
-            indirect_mtx1: indirect_mtx1,
+            visible: parent_visible as u32,
+            indirect_mtx0,
+            indirect_mtx1,
             ..Default::default()
         };
 
@@ -596,6 +689,7 @@ impl<'a> Walker<'a> {
             uvs,
             base_uvs,
             tint,
+            corner_tints: [tint; 4],
             texture_name: tex_name.to_string(),
             texture_name1,
             texture_name2,
@@ -603,6 +697,14 @@ impl<'a> Walker<'a> {
             address_mode_v,
             min_filter,
             mag_filter,
+            address_mode_u1,
+            address_mode_v1,
+            min_filter1,
+            mag_filter1,
+            address_mode_u2,
+            address_mode_v2,
+            min_filter2,
+            mag_filter2,
             standard_material,
             detailed_combiner_material,
             is_detailed,
@@ -620,6 +722,7 @@ impl<'a> Walker<'a> {
         parts_h: f32,
         depth: usize,
         parent_visible: bool,
+        parent_idx: usize,
     ) {
         if self.parts_depth >= MAX_PARTS_DEPTH {
             return;
@@ -698,6 +801,7 @@ impl<'a> Walker<'a> {
             root_mat_list,
             &parts_source_label,
             parent_visible,
+            Some(parent_idx),
         );
     }
 
@@ -719,9 +823,11 @@ impl<'a> Walker<'a> {
         root_mat_list: Option<&nnbfl::bflyt::list::BflytMaterialList>,
         parts_source: &str,
         parent_visible: bool,
+        parent_idx: Option<usize>,
     ) {
         let mut last_rect = (parent_x, parent_y, parent_w, parent_h);
         let mut last_visible = parent_visible;
+        let mut last_pane_idx = parent_idx;
 
         for node in nodes {
             match node {
@@ -742,6 +848,7 @@ impl<'a> Walker<'a> {
                         root_mat_list,
                         parts_source,
                         parent_visible,
+                        parent_idx,
                     );
 
                     if let Some(base) = base_pane(section) {
@@ -749,9 +856,11 @@ impl<'a> Walker<'a> {
                         let effective_section = overrides.get(&pname).copied().unwrap_or(section);
                         let effective_base = base_pane(effective_section).unwrap_or(base);
 
-                        last_rect =
+                        let (rx, ry, rw, rh, _, _) =
                             resolve_rect(effective_base, parent_x, parent_y, parent_w, parent_h);
+                        last_rect = (rx, ry, rw, rh);
                         last_visible = parent_visible && effective_base.pane_flags.is_visible;
+                        last_pane_idx = Some(self.panes.len() - 1);
                     }
                 }
                 BflytNode::Panes(children) => {
@@ -772,6 +881,7 @@ impl<'a> Walker<'a> {
                         root_mat_list,
                         parts_source,
                         last_visible,
+                        last_pane_idx,
                     );
                 }
                 BflytNode::Groups(_) => {}
@@ -797,6 +907,7 @@ impl<'a> Walker<'a> {
         root_mat_list: Option<&nnbfl::bflyt::list::BflytMaterialList>,
         parts_source: &str,
         parent_visible: bool,
+        parent_idx: Option<usize>,
     ) {
         match node {
             BflytNode::Section(section) => {
@@ -805,7 +916,6 @@ impl<'a> Walker<'a> {
                 };
 
                 let is_visible = parent_visible && base.pane_flags.is_visible;
-
                 let pname = pane_name(section);
 
                 let effective_section: &BflytSection =
@@ -824,12 +934,28 @@ impl<'a> Walker<'a> {
                     parts_scale_y,
                 );
 
+                let (_, _, _, _, raw_anchor_x, raw_anchor_y) =
+                    resolve_rect(effective_base, parent_x, parent_y, parent_w, parent_h);
+
+                let anchor_x = parts_origin_x + raw_anchor_x * parts_scale_x;
+                let anchor_y = parts_origin_y + raw_anchor_y * parts_scale_y;
+
                 let pane_idx = self.panes.len();
+
+                while self.children.len() <= pane_idx {
+                    self.children.push(Vec::new());
+                }
+
+                if let Some(pidx) = parent_idx {
+                    while self.children.len() <= pidx {
+                        self.children.push(Vec::new());
+                    }
+                    self.children[pidx].push(pane_idx);
+                }
 
                 let mut has_textured = false;
                 if let BflytSection::PicturePane(pic) = effective_section {
                     let was_overridden = overrides.contains_key(&pname);
-
                     let chosen_mat_list = if was_overridden {
                         root_mat_list
                     } else {
@@ -867,53 +993,58 @@ impl<'a> Walker<'a> {
                     height: h,
                     section: effective_section.clone(),
                     depth,
+                    parent_idx,
+                    parent_anchor_x: anchor_x,
+                    parent_anchor_y: anchor_y,
                     parts_source: Some(parts_source.to_string()),
                     visible: is_visible,
                 });
 
                 if let BflytSection::PartsPane(nested_parts) = effective_section {
                     self.parts_depth += 1;
-                    self.maybe_resolve_parts(nested_parts, x, y, w, h, depth, is_visible);
+                    self.maybe_resolve_parts(nested_parts, x, y, w, h, depth, is_visible, pane_idx);
                     self.parts_depth -= 1;
                 }
             }
-
             BflytNode::Panes(_) | BflytNode::Groups(_) => {}
         }
     }
 }
 
-pub fn build_view(file: &Bflyt, blarc_dir: Option<&Path>) -> BflytView {
+pub fn build_view(file: Bflyt, blarc_dir: Option<&Path>) -> BflytView {
     let layout_w = file.layout.width;
     let layout_h = file.layout.height;
 
     let mut quads = Vec::new();
     let mut textured_quads = Vec::new();
     let mut panes = Vec::new();
+    let mut children: Vec<Vec<usize>> = Vec::new();
     let mut blarc_cache: HashMap<String, Option<Bflyt>> = HashMap::new();
 
     let mut walker = Walker {
-        layout_w,
-        layout_h,
         quads: &mut quads,
         textured_quads: &mut textured_quads,
         panes: &mut panes,
+        children: &mut children,
         blarc_dir,
         blarc_cache: &mut blarc_cache,
         parts_depth: 0,
         parts_source: None,
         material_list: file.material_list.as_ref(),
-        texture_list: file.texture_list.as_ref(),
         discovered_bntx_buffers: Vec::new(),
     };
 
-    walker.walk_nodes(&file.nodes, 0.0, 0.0, layout_w, layout_h, 0, true);
+    walker.walk_nodes(&file.nodes, 0.0, 0.0, layout_w, layout_h, 0, true, None);
     let discovered_bntx_buffers = walker.discovered_bntx_buffers;
+
+    children.resize(panes.len(), Vec::new());
 
     BflytView {
         quads,
+        children,
         base_panes: panes.clone(),
         base_textured_quads: textured_quads.clone(),
+        material_list: file.material_list,
         textured_quads,
         panes,
         layout_width: layout_w,

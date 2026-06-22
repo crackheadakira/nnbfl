@@ -296,10 +296,10 @@ impl ReadWriteable for Bflyt {
 
                 BflytSection::PaneEnd => {
                     has_entered_hierarchy = true;
-                    if let Some(children) = tree_stack.pop() {
-                        if let Some(current_layer) = tree_stack.last_mut() {
-                            current_layer.push(BflytNode::Panes(children));
-                        }
+                    if let Some(children) = tree_stack.pop()
+                        && let Some(current_layer) = tree_stack.last_mut()
+                    {
+                        current_layer.push(BflytNode::Panes(children));
                     }
                 }
                 BflytSection::GroupStart => {
@@ -308,10 +308,10 @@ impl ReadWriteable for Bflyt {
                 }
                 BflytSection::GroupEnd => {
                     has_entered_hierarchy = true;
-                    if let Some(children) = tree_stack.pop() {
-                        if let Some(current_layer) = tree_stack.last_mut() {
-                            current_layer.push(BflytNode::Groups(children));
-                        }
+                    if let Some(children) = tree_stack.pop()
+                        && let Some(current_layer) = tree_stack.last_mut()
+                    {
+                        current_layer.push(BflytNode::Groups(children));
                     }
                 }
                 s => {

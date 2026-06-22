@@ -144,7 +144,7 @@ impl ResUi2dPaneData {
                 return Err(FormatError::UnknownTag {
                     enum_name: "Ui2dPaneSystemDataType",
                     tag: data_type.into(),
-                    offset: offset,
+                    offset,
                 });
             }
         };

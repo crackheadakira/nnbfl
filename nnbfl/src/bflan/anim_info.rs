@@ -74,11 +74,11 @@ pub enum AnimType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AnimInfo {
     Standard {
-        magic: AnimInfoType,
+        anim_type: AnimInfoType,
         targets: Vec<AnimTarget>,
     },
     ExtendedUserData {
-        magic: AnimInfoType,
+        anim_type: AnimInfoType,
         data: Vec<ExtendedUserDataAnim>,
     },
 }
@@ -103,7 +103,7 @@ impl AnimInfo {
                 }
 
                 Self::ExtendedUserData {
-                    magic,
+                    anim_type: magic,
                     data: data_array,
                 }
             }
@@ -122,7 +122,10 @@ impl AnimInfo {
                     )?);
                 }
 
-                Self::Standard { magic, targets }
+                Self::Standard {
+                    anim_type: magic,
+                    targets,
+                }
             }
         };
 
@@ -133,8 +136,8 @@ impl AnimInfo {
         writer.mark("AnimInfo");
 
         match self {
-            AnimInfo::Standard { magic, targets } => {
-                let magic_val = unsafe { std::mem::transmute_copy::<AnimInfoType, u32>(magic) };
+            AnimInfo::Standard { anim_type, targets } => {
+                let magic_val = unsafe { std::mem::transmute_copy::<AnimInfoType, u32>(anim_type) };
                 writer.write_u32(magic_val);
 
                 writer.write_u8(targets.len() as u8);
@@ -155,8 +158,8 @@ impl AnimInfo {
                     target.serialize(writer, target_base);
                 }
             }
-            AnimInfo::ExtendedUserData { magic, data } => {
-                let magic_val = unsafe { std::mem::transmute_copy::<AnimInfoType, u32>(magic) };
+            AnimInfo::ExtendedUserData { anim_type, data } => {
+                let magic_val = unsafe { std::mem::transmute_copy::<AnimInfoType, u32>(anim_type) };
                 writer.write_u32(magic_val);
 
                 writer.write_u8(data.len() as u8);

@@ -1,7 +1,14 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use egui::Ui;
-use nnbfl::bflyt::file::BflytSection;
+use nnbfl::{
+    bflyt::{
+        file::BflytSection,
+        list::{BflytLayout, BflytMaterialList, MaterialBlendMode},
+        pane::BflytPane,
+    },
+    ui2d::types::{Vector2f, Vector3f},
+};
 
 use crate::{
     anim_state::AnimPlayer,
@@ -28,6 +35,15 @@ pub struct UiState {
     pub only_textured: bool,
     pub anim_names: Vec<String>,
     pub pending_play_anim: Option<String>,
+    pub sidebar_tab: SidebarTab,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarTab {
+    #[default]
+    Panes,
+    Materials,
+    Properties,
 }
 
 pub enum UiAction {
@@ -88,62 +104,113 @@ pub fn draw_ui(
     egui::Panel::left("pane_tree")
         .default_size(220.0)
         .show_inside(ui, |ui| {
-            ui.heading("Pane Tree");
-            ui.checkbox(&mut state.clip_to_root, "Clip to root pane");
-            ui.checkbox(&mut state.only_textured, "Draw only textured quads");
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut state.sidebar_tab, SidebarTab::Panes, "Pane Tree");
+                ui.selectable_value(&mut state.sidebar_tab, SidebarTab::Materials, "Materials");
+                ui.selectable_value(&mut state.sidebar_tab, SidebarTab::Properties, "Properties");
+            });
             ui.separator();
 
-            egui::ScrollArea::vertical()
-                .auto_shrink(false)
-                .show(ui, |ui| {
+            match state.sidebar_tab {
+                SidebarTab::Panes => {
+                    ui.heading("Pane Tree");
+                    ui.checkbox(&mut state.clip_to_root, "Clip to root pane");
+                    ui.checkbox(&mut state.only_textured, "Draw only textured quads");
+                    ui.separator();
+
+                    egui::ScrollArea::vertical()
+                        .auto_shrink(false)
+                        .show(ui, |ui| {
+                            if let Some(view) = view {
+                                for (i, pane) in view.panes.iter().enumerate() {
+                                    let indent = pane.depth as f32 * 12.0;
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(indent);
+
+                                        let selected = state.selected_pane == Some(i);
+                                        let label = egui::RichText::new(format!(
+                                            "[{}] {}",
+                                            pane.kind, pane.label
+                                        ));
+
+                                        let is_hidden = state.hidden_panes.contains(&i);
+
+                                        let response = ui.selectable_label(selected, label);
+                                        response.context_menu(|ui| {
+                                            if !is_hidden && ui.button("Hide").clicked() {
+                                                state.hidden_panes.insert(i);
+                                                ui.close();
+                                            }
+                                            if !is_hidden && ui.button("Hide All").clicked() {
+                                                hide_pane_recursive(
+                                                    i,
+                                                    view,
+                                                    &mut state.hidden_panes,
+                                                );
+                                                ui.close();
+                                            }
+                                            if is_hidden && ui.button("Show").clicked() {
+                                                state.hidden_panes.remove(&i);
+                                                ui.close();
+                                            }
+                                            if is_hidden && ui.button("Show All").clicked() {
+                                                show_pane_recursive(
+                                                    i,
+                                                    view,
+                                                    &mut state.hidden_panes,
+                                                );
+                                                ui.close();
+                                            }
+                                        });
+
+                                        if response.clicked() {
+                                            state.selected_pane = Some(i);
+                                        }
+
+                                        if is_hidden {
+                                            ui.label("Hidden");
+                                        }
+                                    });
+                                }
+                            } else {
+                                ui.label("No .bflyt file loaded");
+                            }
+                        });
+                }
+                SidebarTab::Materials => {
+                    ui.heading("Material List");
+                    ui.separator();
+
                     if let Some(view) = view {
-                        for (i, pane) in view.panes.iter().enumerate() {
-                            let indent = pane.depth as f32 * 12.0;
-                            ui.horizontal(|ui| {
-                                ui.add_space(indent);
-
-                                let selected = state.selected_pane == Some(i);
-                                let label =
-                                    egui::RichText::new(format!("[{}] {}", pane.kind, pane.label));
-                                let is_hidden = state.hidden_panes.contains(&i);
-
-                                let response = ui.selectable_label(selected, label);
-                                response.context_menu(|ui| {
-                                    if !is_hidden && ui.button("Hide").clicked() {
-                                        state.hidden_panes.insert(i);
-                                        ui.close();
-                                    }
-
-                                    if !is_hidden && ui.button("Hide All").clicked() {
-                                        hide_pane_recursive(i, view, &mut state.hidden_panes);
-                                        ui.close();
-                                    }
-
-                                    if is_hidden && ui.button("Show").clicked() {
-                                        state.hidden_panes.remove(&i);
-                                        ui.close();
-                                    }
-
-                                    if is_hidden && ui.button("Show All").clicked() {
-                                        show_pane_recursive(i, view, &mut state.hidden_panes);
-                                        ui.close();
-                                    }
-                                });
-
-                                if response.clicked() {
-                                    state.selected_pane = Some(i);
-                                }
-
-                                if is_hidden {
-                                    ui.label("Hidden");
-                                }
-                            });
+                        if let Some(material_list) = &view.material_list {
+                            draw_material_list(ui, material_list);
+                        } else {
+                            ui.label("Bflyt file has no material list");
                         }
                     } else {
                         ui.label("No .bflyt file loaded");
                     }
-                });
+                }
+                SidebarTab::Properties => {
+                    if let Some(view) = view {
+                        ui.vertical(|ui| {
+                            if let Some(idx) = state.selected_pane {
+                                if let Some(pane) = view.panes.get(idx) {
+                                    draw_pane_properties(ui, pane);
+                                }
+                            } else {
+                                ui.centered_and_justified(|ui| {
+                                    ui.label("Select a pane in the tree to inspect it.");
+                                });
+                            }
+                        });
+                    } else {
+                        ui.label("No .bflyt file loaded");
+                    }
+                }
+            }
         });
+
     if !state.anim_names.is_empty() || view.is_some() {
         egui::Panel::bottom("master_bottom_shelf")
             .default_size(150.0)
@@ -186,16 +253,9 @@ pub fn draw_ui(
                                                     state.anim_names.iter().enumerate()
                                                 {
                                                     let is_active = anim_player.active == Some(idx);
-                                                    let btn_text = if is_active
-                                                        && anim_player.anims[idx].playing
-                                                    {
-                                                        name.clone()
-                                                    } else {
-                                                        name.clone()
-                                                    };
 
                                                     if ui
-                                                        .selectable_label(is_active, btn_text)
+                                                        .selectable_label(is_active, name)
                                                         .clicked()
                                                     {
                                                         state.pending_play_anim =
@@ -239,7 +299,7 @@ pub fn draw_ui(
 
                                         ui.add_space(4.0);
 
-                                        let max_frame = anim.frame_count() - 1.0;
+                                        let max_frame = anim.frame_count();
                                         let mut temporary_frame = anim.frame;
 
                                         let slider_res = ui.add(
@@ -263,24 +323,6 @@ pub fn draw_ui(
                                     }
                                 });
                             });
-                        });
-                    }
-
-                    let ui = &mut layout_cols[1];
-                    if let Some(view) = view {
-                        ui.vertical(|ui| {
-                            ui.heading("Properties");
-                            ui.separator();
-
-                            if let Some(idx) = state.selected_pane {
-                                if let Some(pane) = view.panes.get(idx) {
-                                    draw_pane_properties(ui, pane);
-                                }
-                            } else {
-                                ui.centered_and_justified(|ui| {
-                                    ui.label("Select a pane in the tree to inspect it.");
-                                });
-                            }
                         });
                     }
                 });
@@ -333,72 +375,402 @@ pub fn draw_ui(
 
 fn hide_pane_recursive(idx: usize, view: &BflytView, hidden_set: &mut HashSet<usize>) {
     hidden_set.insert(idx);
-
-    let base_depth = view.panes[idx].depth;
-    for next_idx in (idx + 1)..view.panes.len() {
-        if view.panes[next_idx].depth > base_depth {
-            hidden_set.insert(next_idx);
-        } else {
-            break;
-        }
+    for child in view.descendants(idx) {
+        hidden_set.insert(child);
     }
 }
 
 fn show_pane_recursive(idx: usize, view: &BflytView, hidden_set: &mut HashSet<usize>) {
     hidden_set.remove(&idx);
+    for child in view.descendants(idx) {
+        hidden_set.remove(&child);
+    }
+}
+fn draw_pane_properties(ui: &mut Ui, pane: &PaneInfo) {
+    egui::ScrollArea::vertical()
+        .id_salt("pane_properties_scroll")
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            ui.heading("Core Properties");
+            ui.add_space(4.0);
 
-    let base_depth = view.panes[idx].depth;
-    for next_idx in (idx + 1)..view.panes.len() {
-        if view.panes[next_idx].depth > base_depth {
-            hidden_set.remove(&next_idx);
-        } else {
-            break;
+            egui::Grid::new("pane_info_core")
+                .num_columns(2)
+                .striped(true)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    draw_string(ui, "Name", &pane.label);
+                    draw_string(ui, "Kind", &pane.kind);
+
+                    draw_prop_f32(ui, "X", pane.x);
+                    draw_prop_f32(ui, "Y", pane.y);
+                    draw_prop_f32(ui, "Width", pane.width);
+                    draw_prop_f32(ui, "Height", pane.height);
+                    draw_prop(ui, "Depth", pane.depth);
+                    draw_prop(ui, "Visible", pane.visible);
+
+                    if let Some(source) = &pane.parts_source {
+                        draw_string(ui, "Parts Source", source);
+                    }
+
+                    if let Some(parent_idx) = &pane.parent_idx {
+                        draw_prop(ui, "Parent Index", parent_idx);
+                    }
+                });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.heading("Section Details");
+            ui.add_space(4.0);
+
+            match &pane.section {
+                BflytSection::Layout(layout) => {
+                    egui::Grid::new("bflyt_layout_grid")
+                        .num_columns(2)
+                        .striped(true)
+                        .spacing([12.0, 4.0])
+                        .show(ui, |ui| {
+                            draw_layout_section(ui, layout);
+                        });
+                }
+                BflytSection::Pane(pane_detail) => {
+                    egui::Grid::new("bflyt_pane_grid")
+                        .num_columns(2)
+                        .striped(true)
+                        .spacing([12.0, 4.0])
+                        .show(ui, |ui| {
+                            draw_pane_section(ui, pane_detail);
+                        });
+                }
+                _ => {
+                    ui.weak("Unimplemented section metadata type");
+                }
+            }
+        });
+}
+
+fn draw_layout_section(ui: &mut Ui, layout: &BflytLayout) {
+    draw_string(ui, "Name", &layout.name);
+    draw_prop(ui, "Centered", layout.is_centered);
+    draw_prop_f32(ui, "Width", layout.width);
+    draw_prop_f32(ui, "Height", layout.height);
+    draw_prop_f32(ui, "Parts Width", layout.parts_width);
+    draw_prop_f32(ui, "Parts Height", layout.parts_height);
+}
+
+fn draw_pane_section(ui: &mut Ui, pane: &BflytPane) {
+    draw_string(ui, "Name", &pane.pane_name);
+    draw_prop_debug(ui, "Origin X", pane.origin.origin_x);
+    draw_prop_debug(ui, "Origin Y", pane.origin.origin_y);
+    draw_prop_debug(ui, "Parent Origin X", pane.origin.parent_origin_x);
+    draw_prop_debug(ui, "Parent Origin Y", pane.origin.parent_origin_y);
+
+    draw_vector_3f(ui, "Translation", pane.translation);
+    draw_vector_3f(ui, "Rotation", pane.rotation);
+    draw_vector_2f(ui, "Scale", pane.scale);
+    draw_vector_2f(ui, "Size", pane.size);
+
+    draw_prop(ui, "Alpha", pane.alpha);
+    draw_prop(
+        ui,
+        "Scale Child Alpha",
+        pane.pane_flags.is_scale_child_alpha,
+    );
+    draw_prop(ui, "Visible", pane.pane_flags.is_visible);
+
+    draw_prop(ui, "Extended User Data", pane.flag_ex.is_ext_user_data);
+    draw_prop(ui, "No Scale By Parts", pane.flag_ex.is_no_scale_by_parts);
+    draw_prop(
+        ui,
+        "Scale Size By Parts Root",
+        pane.flag_ex.is_scale_size_by_parts_root,
+    );
+}
+
+fn draw_material_list(ui: &mut Ui, list: &BflytMaterialList) {
+    ui.label(format!("Total Materials: {}", list.materials.len()));
+    ui.add_space(4.0);
+
+    egui::ScrollArea::vertical()
+        .auto_shrink(false)
+        .id_salt("material_sidebar_scroll")
+        .show(ui, |ui| {
+            for (idx, material) in list.materials.iter().enumerate() {
+                let header_text = format!("[{idx}] {}", material.material_name);
+
+                egui::CollapsingHeader::new(header_text)
+                    .id_salt(ui.id().with(idx))
+                    .show(ui, |ui| {
+                        egui::CollapsingHeader::new(format!("Colors ({})", material.colors.len()))
+                            .id_salt("colors")
+                            .show(ui, |ui| {
+                                draw_vec_grid(
+                                    ui,
+                                    "colors_grid",
+                                    &material.colors,
+                                    |ui, i, color| {
+                                        if let Some(color) = &color.color_f32 {
+                                            draw_prop_f32(ui, &format!("[{i}] Red"), color.r);
+                                            draw_prop_f32(ui, &format!("[{i}] Green"), color.g);
+                                            draw_prop_f32(ui, &format!("[{i}] Blue"), color.b);
+                                            draw_prop_f32(ui, &format!("[{i}] Alpha"), color.a);
+                                        } else if let Some(color) = &color.color_u8 {
+                                            draw_prop(ui, &format!("[{i}] Red"), color.r);
+                                            draw_prop(ui, &format!("[{i}] Green"), color.g);
+                                            draw_prop(ui, &format!("[{i}] Blue"), color.b);
+                                            draw_prop(ui, &format!("[{i}] Alpha"), color.a);
+                                        }
+                                    },
+                                );
+                            });
+
+                        egui::CollapsingHeader::new(format!(
+                            "Texture Maps ({})",
+                            material.tex_maps.len()
+                        ))
+                        .id_salt("tex_sub")
+                        .show(ui, |ui| {
+                            draw_vec_grid(ui, "tex_grid", &material.tex_maps, |ui, i, tex| {
+                                draw_string(ui, &format!("[{i}] Name"), &tex.texture_name);
+                                draw_prop_debug(
+                                    ui,
+                                    &format!("[{i}] U Filter"),
+                                    tex.u_options.filter,
+                                );
+                                draw_prop_debug(
+                                    ui,
+                                    &format!("[{i}] V Filter"),
+                                    tex.v_options.filter,
+                                );
+                                draw_prop_debug(
+                                    ui,
+                                    &format!("[{i}] U Wrap"),
+                                    tex.u_options.wrap_mode,
+                                );
+                                draw_prop_debug(
+                                    ui,
+                                    &format!("[{i}] V Wrap"),
+                                    tex.v_options.wrap_mode,
+                                );
+                            });
+                        });
+
+                        egui::CollapsingHeader::new(format!(
+                            "Texture Extensions ({})",
+                            material.tex_extensions.len()
+                        ))
+                        .id_salt("tex_ext")
+                        .show(ui, |ui| {
+                            draw_vec_grid(
+                                ui,
+                                "tex_ext_grid",
+                                &material.tex_extensions,
+                                |ui, i, ext| {
+                                    draw_prop(
+                                        ui,
+                                        &format!("[{i}] Capture Tex"),
+                                        ext.is_capture_texture,
+                                    );
+                                    draw_prop(
+                                        ui,
+                                        &format!("[{i}] Vector Tex"),
+                                        ext.is_vecture_texture,
+                                    );
+                                },
+                            );
+                        });
+
+                        egui::CollapsingHeader::new(format!(
+                            "Texture SRTs ({})",
+                            material.tex_srts.len()
+                        ))
+                        .id_salt("tex_srt")
+                        .show(ui, |ui| {
+                            draw_vec_grid(ui, "srt_grid", &material.tex_srts, |ui, i, srt| {
+                                draw_prop_f32(ui, &format!("[{i}] Rotate"), srt.rotate);
+                                draw_prop_f32(ui, &format!("[{i}] Scale U"), srt.scale_u);
+                                draw_prop_f32(ui, &format!("[{i}] Scale V"), srt.scale_v);
+                                draw_prop_f32(ui, &format!("[{i}] Translate U"), srt.translate_u);
+                                draw_prop_f32(ui, &format!("[{i}] Translate V"), srt.translate_v);
+                            });
+                        });
+
+                        egui::CollapsingHeader::new(format!(
+                            "Texture Coord Gens ({})",
+                            material.tex_coord_gens.len()
+                        ))
+                        .id_salt("tex_gen")
+                        .show(ui, |ui| {
+                            draw_vec_grid(
+                                ui,
+                                "coord_gen_grid",
+                                &material.tex_coord_gens,
+                                |ui, i, coord_gen| {
+                                    draw_prop_debug(
+                                        ui,
+                                        &format!("[{i}] Source"),
+                                        coord_gen.tex_gen_source,
+                                    );
+                                },
+                            );
+                        });
+
+                        egui::CollapsingHeader::new(format!(
+                            "Texture Environment Combiners ({})",
+                            material.tev_combiners.len()
+                        ))
+                        .id_salt("tev_comb")
+                        .show(ui, |ui| {
+                            draw_vec_grid(
+                                ui,
+                                "tev_grid",
+                                &material.tev_combiners,
+                                |ui, i, combiner| {
+                                    draw_prop_debug(
+                                        ui,
+                                        &format!("[{i}] RGB Mode"),
+                                        combiner.rgb_mode,
+                                    );
+                                    draw_prop_debug(
+                                        ui,
+                                        &format!("[{i}] Alpha Mode"),
+                                        combiner.alpha_mode,
+                                    );
+                                },
+                            );
+                        });
+
+                        egui::CollapsingHeader::new("Alpha Compare")
+                            .id_salt("alp_comp")
+                            .show(ui, |ui| {
+                                if let Some(compare) = &material.alpha_compare {
+                                    egui::Grid::new(ui.id().with("alpha_comp_grid"))
+                                        .striped(true)
+                                        .show(ui, |ui| {
+                                            draw_prop_debug(ui, "Compare OP", compare.compare);
+                                            draw_prop_f32(
+                                                ui,
+                                                "Reference Value",
+                                                compare.alpha_compare_ref_value,
+                                            );
+                                        });
+                                } else {
+                                    ui.weak("None");
+                                }
+                            });
+
+                        egui::CollapsingHeader::new("Blend Mode")
+                            .id_salt("blend_mode")
+                            .show(ui, |ui| {
+                                egui::Grid::new(ui.id().with("blend_grid"))
+                                    .striped(true)
+                                    .show(ui, |ui| {
+                                        draw_blend_mode(ui, &material.blend_mode);
+                                    });
+                            });
+
+                        egui::CollapsingHeader::new("Alpha Blend Mode")
+                            .id_salt("alp_blend_mode")
+                            .show(ui, |ui| {
+                                egui::Grid::new(ui.id().with("alpha_blend_grid"))
+                                    .striped(true)
+                                    .show(ui, |ui| {
+                                        draw_blend_mode(ui, &material.blend_mode_alpha);
+                                    });
+                            });
+                    });
+            }
+        });
+}
+
+fn draw_vec_grid<T>(
+    ui: &mut Ui,
+    id_source: &str,
+    items: &[T],
+    mut draw_item: impl FnMut(&mut Ui, usize, &T),
+) {
+    if items.is_empty() {
+        ui.weak("None");
+        return;
+    }
+
+    let len = items.len();
+    egui::Grid::new(ui.id().with(id_source))
+        .striped(true)
+        .show(ui, |ui| {
+            for (i, item) in items.iter().enumerate() {
+                draw_item(ui, i, item);
+
+                if i < len - 1 {
+                    ui.label("-");
+                    ui.label("-");
+                    ui.end_row();
+                }
+            }
+        });
+}
+
+fn draw_blend_mode(ui: &mut Ui, blend_mode: &Option<MaterialBlendMode>) {
+    if let Some(blend_mode) = blend_mode {
+        match blend_mode {
+            MaterialBlendMode::None => {
+                ui.weak("None");
+            }
+            MaterialBlendMode::Logic { logic_op } => {
+                draw_prop_debug(ui, "Logic OP", logic_op);
+            }
+            MaterialBlendMode::Blend {
+                blend_op,
+                function_source,
+                function_destination,
+            } => {
+                draw_prop_debug(ui, "Blend OP", blend_op);
+                draw_prop_debug(ui, "Function Source", function_source);
+                draw_prop_debug(ui, "Function Destination", function_destination);
+            }
         }
+    } else {
+        ui.weak("None");
     }
 }
 
-fn draw_pane_properties(ui: &mut egui::Ui, pane: &PaneInfo) {
-    egui::Grid::new("pane_props")
-        .num_columns(2)
-        .striped(true)
-        .spacing([12.0, 4.0])
-        .show(ui, |ui| {
-            ui.label("Name");
-            ui.label(&pane.label);
-            ui.end_row();
+fn draw_vector_2f(ui: &mut egui::Ui, label: &str, vector: Vector2f) {
+    ui.strong(label);
+    ui.label(format!("({:.2}, {:.2})", vector.x, vector.y));
+    ui.end_row();
+}
 
-            ui.label("Kind");
-            ui.label(&pane.kind);
-            ui.end_row();
+fn draw_vector_3f(ui: &mut egui::Ui, label: &str, vector: Vector3f) {
+    ui.strong(label);
+    ui.label(format!(
+        "({:.2}, {:.2}, {:.2})",
+        vector.x, vector.y, vector.z
+    ));
+    ui.end_row();
+}
 
-            ui.label("X");
-            ui.label(format!("{:.2}", pane.x));
-            ui.end_row();
+fn draw_prop(ui: &mut egui::Ui, label: &str, value: impl std::fmt::Display) {
+    ui.strong(label);
+    ui.label(value.to_string());
+    ui.end_row();
+}
 
-            if let Some(source) = &pane.parts_source {
-                ui.label("Parts Source");
-                ui.label(source);
-                ui.end_row();
-            }
+fn draw_prop_debug(ui: &mut egui::Ui, label: &str, value: impl std::fmt::Debug) {
+    ui.strong(label);
+    ui.label(format!("{:?}", value));
+    ui.end_row();
+}
 
-            ui.label("Y");
-            ui.label(format!("{:.2}", pane.y));
-            ui.end_row();
+fn draw_string(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.strong(label);
+    ui.label(value);
+    ui.end_row();
+}
 
-            ui.label("Width");
-            ui.label(format!("{:.2}", pane.width));
-            ui.end_row();
-
-            ui.label("Height");
-            ui.label(format!("{:.2}", pane.height));
-            ui.end_row();
-
-            ui.label("Depth");
-            ui.label(format!("{}", pane.depth));
-            ui.end_row();
-
-            ui.label("Visible");
-            ui.label(format!("{}", pane.visible));
-            ui.end_row();
-        });
+fn draw_prop_f32(ui: &mut egui::Ui, label: &str, value: f32) {
+    ui.strong(label);
+    ui.label(format!("{:.2}", value));
+    ui.end_row();
 }

@@ -74,46 +74,70 @@ pub enum TargetIndex {
     PaneSrt(PaneSrtTarget),
     VertexColor(VertexColorTarget),
     Visibility(VisibilityTarget),
+    DropShadow(DropShadowTarget),
+    MaskTexture(MaskTextureTarget),
+    ProceduralShape(ProceduralShapeTarget),
+    Window(WindowTarget),
+    StateMachine(StateMachineTarget),
+    AlphaCompare(AlphaCompareTarget),
+    FontShadow(FontShadowTarget),
+    IndirectSrt(IndirectSrtTarget),
     MaterialColor(MaterialColorTarget),
     TextureSrt(TextureSrtTarget),
     TexturePattern(TexturePatternTarget),
-    AlphaCompare(AlphaCompareTarget),
-    FontShadow(FontShadowTarget),
-    Raw(u8),
+    BrickRepeat(BrickRepeatTarget),
+    VectorGraphics(VectorGraphicsTarget),
+    Invalid,
 }
 
 impl TargetIndex {
     pub fn to_raw(&self) -> u8 {
         match self {
-            TargetIndex::PerCharacterTransformCurve(t) => t.clone() as u8,
-            TargetIndex::PerCharacterTransform(t) => t.clone() as u8,
-            TargetIndex::PaneSrt(t) => t.clone() as u8,
-            TargetIndex::VertexColor(t) => t.clone() as u8,
-            TargetIndex::Visibility(t) => t.clone() as u8,
-            TargetIndex::MaterialColor(t) => t.clone() as u8,
-            TargetIndex::TextureSrt(t) => t.clone() as u8,
-            TargetIndex::TexturePattern(t) => t.clone() as u8,
-            TargetIndex::AlphaCompare(t) => t.clone() as u8,
-            TargetIndex::FontShadow(t) => t.clone() as u8,
-            TargetIndex::Raw(r) => *r,
+            Self::PerCharacterTransformCurve(t) => t.clone() as u8,
+            Self::PerCharacterTransform(t) => t.clone() as u8,
+            Self::PaneSrt(t) => t.clone() as u8,
+            Self::VertexColor(t) => t.clone() as u8,
+            Self::Visibility(t) => t.clone() as u8,
+            Self::DropShadow(t) => t.clone() as u8,
+            Self::MaskTexture(t) => t.clone() as u8,
+            Self::ProceduralShape(t) => t.clone() as u8,
+            Self::Window(t) => t.clone() as u8,
+            Self::StateMachine(t) => t.clone() as u8,
+            Self::AlphaCompare(t) => t.clone() as u8,
+            Self::FontShadow(t) => t.clone() as u8,
+            Self::IndirectSrt(t) => t.clone() as u8,
+            Self::MaterialColor(t) => t.clone() as u8,
+            Self::TextureSrt(t) => t.clone() as u8,
+            Self::TexturePattern(t) => t.clone() as u8,
+            Self::BrickRepeat(t) => t.clone() as u8,
+            Self::VectorGraphics(t) => t.clone() as u8,
+            Self::Invalid => 255,
         }
     }
 
     pub fn resolve(magic: &AnimInfoType, raw: u8) -> Self {
         match magic {
-            AnimInfoType::PaneSrtAnim => Self::PaneSrt(raw.into()),
-            AnimInfoType::TextureSrtAnim => Self::TextureSrt(raw.into()),
-            AnimInfoType::VertexColorAnim => Self::VertexColor(raw.into()),
-            AnimInfoType::MaterialColorAnim => Self::MaterialColor(raw.into()),
-            AnimInfoType::TexturePatternAnim => Self::TexturePattern(raw.into()),
             AnimInfoType::PerCharacterTransformCurveAnim => {
                 Self::PerCharacterTransformCurve(raw.into())
             }
             AnimInfoType::PerCharacterTransformAnim => Self::PerCharacterTransform(raw.into()),
+            AnimInfoType::PaneSrtAnim => Self::PaneSrt(raw.into()),
+            AnimInfoType::VertexColorAnim => Self::VertexColor(raw.into()),
             AnimInfoType::VisibilityAnim => Self::Visibility(raw.into()),
+            AnimInfoType::DropShadowAnim => Self::DropShadow(raw.into()),
+            AnimInfoType::MaskTextureAnim => Self::MaskTexture(raw.into()),
+            AnimInfoType::ProceduralShapeAnim => Self::ProceduralShape(raw.into()),
+            AnimInfoType::WindowAnim => Self::Window(raw.into()),
+            AnimInfoType::StateMachineAnim => Self::StateMachine(raw.into()),
             AnimInfoType::AlphaCompareAnim => Self::AlphaCompare(raw.into()),
             AnimInfoType::FontShadowAnim => Self::FontShadow(raw.into()),
-            _ => Self::Raw(raw),
+            AnimInfoType::IndirectSrtAnim => Self::IndirectSrt(raw.into()),
+            AnimInfoType::MaterialColorAnim => Self::MaterialColor(raw.into()),
+            AnimInfoType::TextureSrtAnim => Self::TextureSrt(raw.into()),
+            AnimInfoType::TexturePatternAnim => Self::TexturePattern(raw.into()),
+            AnimInfoType::BrickRepeatAnim => Self::BrickRepeat(raw.into()),
+            AnimInfoType::VectorGraphicsAnim => Self::VectorGraphics(raw.into()),
+            _ => Self::Invalid,
         }
     }
 }
@@ -122,49 +146,49 @@ impl TargetIndex {
 #[repr(u8)]
 pub enum PaneSrtTarget {
     #[default]
-    TranslateX = 0,
-    TranslateY = 1,
-    TranslateZ = 2,
-    RotateX = 3,
-    RotateY = 4,
-    RotateZ = 5,
-    ScaleX = 6,
-    ScaleY = 7,
-    SizeX = 8,
-    SizeY = 9,
+    TranslateX,
+    TranslateY,
+    TranslateZ,
+    RotateX,
+    RotateY,
+    RotateZ,
+    ScaleX,
+    ScaleY,
+    SizeX,
+    SizeY,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum FontShadowTarget {
     #[default]
-    BlackRed = 0,
-    BlackGreen = 1,
-    BlackBlue = 2,
-    WhiteRed = 3,
-    WhiteGreen = 4,
-    WhiteBlue = 5,
-    WhiteAlpha = 6,
+    BlackRed,
+    BlackGreen,
+    BlackBlue,
+    WhiteRed,
+    WhiteGreen,
+    WhiteBlue,
+    WhiteAlpha,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum PerCharacterTransformCurveTarget {
     #[default]
-    TranslateX = 0,
-    TranslateY = 1,
-    TranslateZ = 2,
-    RotateX = 3,
-    RotateY = 4,
-    RotateZ = 5,
-    LeftTopRed = 6,
-    LeftTopGreen = 7,
-    LeftTopBlue = 8,
-    LeftTopAlpha = 9,
-    LeftBottomRed = 10,
-    LeftBottomGreen = 11,
-    LeftBottomBlue = 12,
-    LeftBottomAlpha = 13,
+    TranslateX,
+    TranslateY,
+    TranslateZ,
+    RotateX,
+    RotateY,
+    RotateZ,
+    LeftTopRed,
+    LeftTopGreen,
+    LeftTopBlue,
+    LeftTopAlpha,
+    LeftBottomRed,
+    LeftBottomGreen,
+    LeftBottomBlue,
+    LeftBottomAlpha,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
@@ -179,87 +203,240 @@ pub enum PerCharacterTransformTarget {
 #[repr(u8)]
 pub enum TexturePatternTarget {
     #[default]
-    Image = 0,
+    Image,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum AlphaCompareTarget {
     #[default]
-    CompareReference = 0,
+    CompareReference,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum VisibilityTarget {
     #[default]
-    Visibility = 0,
+    Visibility,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum VertexColorTarget {
     #[default]
-    LeftTopRed = 0,
-    LeftTopGreen = 1,
-    LeftTopBlue = 2,
-    LeftTopAlpha = 3,
-    RightTopRed = 4,
-    RightTopGreen = 5,
-    RightTopBlue = 6,
-    RightTopAlpha = 7,
-    LeftBottomRed = 8,
-    LeftBottomGreen = 9,
-    LeftBottomBlue = 10,
-    LeftBottomAlpha = 11,
-    RightBottomRed = 12,
-    RightBottomGreen = 13,
-    RightBottomBlue = 14,
-    RightBottomAlpha = 15,
-    PaneAlpha = 16,
+    LeftTopRed,
+    LeftTopGreen,
+    LeftTopBlue,
+    LeftTopAlpha,
+    RightTopRed,
+    RightTopGreen,
+    RightTopBlue,
+    RightTopAlpha,
+    LeftBottomRed,
+    LeftBottomGreen,
+    LeftBottomBlue,
+    LeftBottomAlpha,
+    RightBottomRed,
+    RightBottomGreen,
+    RightBottomBlue,
+    RightBottomAlpha,
+    PaneAlpha,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum MaterialColorTarget {
     #[default]
-    BufferRed = 0,
-    BufferGreen = 1,
-    BufferBlue = 2,
-    BufferAlpha = 3,
-    Constant0Red = 4,
-    Constant0Green = 5,
-    Constant0Blue = 6,
-    Constant0Alpha = 7,
-    Color0Red = 8,
-    Color0Green = 9,
-    Color0Blue = 10,
-    Color0Alpha = 11,
-    Color1Red = 12,
-    Color1Green = 13,
-    Color1Blue = 14,
-    Color1Alpha = 15,
-    Color2Red = 16,
-    Color2Green = 17,
-    Color2Blue = 18,
-    Color2Alpha = 19,
-    Color3Red = 20,
-    Color3Green = 21,
-    Color3Blue = 22,
-    Color3Alpha = 23,
-    Color4Red = 24,
-    Color4Green = 25,
-    Color4Blue = 26,
-    Color4Alpha = 27,
+    BufferRed,
+    BufferGreen,
+    BufferBlue,
+    BufferAlpha,
+    Constant0Red,
+    Constant0Green,
+    Constant0Blue,
+    Constant0Alpha,
+    Color0Red,
+    Color0Green,
+    Color0Blue,
+    Color0Alpha,
+    Color1Red,
+    Color1Green,
+    Color1Blue,
+    Color1Alpha,
+    Color2Red,
+    Color2Green,
+    Color2Blue,
+    Color2Alpha,
+    Color3Red,
+    Color3Green,
+    Color3Blue,
+    Color3Alpha,
+    Color4Red,
+    Color4Green,
+    Color4Blue,
+    Color4Alpha,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum TextureSrtTarget {
     #[default]
-    TranslateU = 0,
-    TranslateV = 1,
-    Rotate = 2,
-    ScaleU = 3,
-    ScaleV = 4,
+    TranslateU,
+    TranslateV,
+    Rotate,
+    ScaleU,
+    ScaleV,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum IndirectSrtTarget {
+    #[default]
+    Rotate,
+    ScaleU,
+    ScaleV,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum BrickRepeatTarget {
+    #[default]
+    CountX,
+    CountY,
+    OffsetX,
+    OffsetY,
+    LocalScaleX,
+    LocalScaleY,
+    LocalRotate,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum WindowTarget {
+    #[default]
+    FrameTop,
+    FrameBottom,
+    FrameLeft,
+    FrameRight,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum VectorGraphicsTarget {
+    #[default]
+    Time,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum ProceduralShapeTarget {
+    #[default]
+    ExpLeftTop,
+    ExpRightTop,
+    ExpLeftBottom,
+    ExpRightBottom,
+
+    RadiusLeftTop,
+    RadiusRightTop,
+    RadiusLeftBottom,
+    RadiusRightBottom,
+
+    InnerStrokeSize,
+    InnerStrokeColorRed,
+    InnerStrokeColorGreen,
+    InnerStrokeColorBlue,
+    InnerStrokeColorAlpha,
+    InnerShadowColorRed,
+
+    InnerShadowColorGreen,
+    InnerShadowColorBlue,
+    InnerShadowColorAlpha,
+    InnerShadowAngle,
+    InnerShadowDistance,
+    InnerShadowSize,
+
+    ColorOverlayColorRed,
+    ColorOverlayColorGreen,
+    ColorOverlayColorBlue,
+    ColorOverlayColorAlpha,
+
+    GradationOverlayControl0,
+    GradationOverlayControl1,
+    GradationOverlayControl2,
+    GradationOverlayControl3,
+
+    GradationOverlayColor0Red,
+    GradationOverlayColor0Green,
+    GradationOverlayColor0Blue,
+    GradationOverlayColor0Alpha,
+
+    GradationOverlayColor1Red,
+    GradationOverlayColor1Green,
+    GradationOverlayColor1Blue,
+    GradationOverlayColor1Alpha,
+
+    GradationOverlayColor2Red,
+    GradationOverlayColor2Green,
+    GradationOverlayColor2Blue,
+    GradationOverlayColor2Alpha,
+
+    GradationOverlayColor3Red,
+    GradationOverlayColor3Green,
+    GradationOverlayColor3Blue,
+    GradationOverlayColor3Alpha,
+    GradationOverlayAngle,
+
+    OuterShadowColorRed,
+    OuterShadowColorGreen,
+    OuterShadowColorBlue,
+    OuterShadowColorAlpha,
+    OuterShadowAngle,
+    OuterShadowDistance,
+    OuterShadowSize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum StateMachineTarget {
+    #[default]
+    PostToChild,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum MaskTextureTarget {
+    #[default]
+    TranslateX,
+    TranslateY,
+    Rotate,
+    ScaleX,
+    ScaleY,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]
+#[repr(u8)]
+pub enum DropShadowTarget {
+    #[default]
+    StrokeSize,
+    StrokeColorRed,
+    StrokeColorGreen,
+    StrokeColorBlue,
+    StrokeColorAlpha,
+
+    OuterGlowColorRed,
+    OuterGlowColorGreen,
+    OuterGlowColorBlue,
+    OuterGlowColorAlpha,
+    OuterGlowSpread,
+    OuterGlowSize,
+
+    DropShadowColorRed,
+    DropShadowColorGreen,
+    DropShadowColorBlue,
+    DropShadowColorAlpha,
+
+    DropShadowAngle,
+    DropShadowDistance,
+    DropShadowSpread,
+    DropShadowSize,
 }

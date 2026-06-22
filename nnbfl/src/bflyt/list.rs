@@ -311,10 +311,10 @@ impl MaterialTevCombiner {
 pub enum AlphaCompare {
     Never,
     Less,
-    LEqual,
+    LessThanEqual,
     Equal,
-    NEqual,
-    GEqual,
+    NeverEqual,
+    GreaterThanEqual,
     Greater,
     #[num_enum(default)]
     Always,

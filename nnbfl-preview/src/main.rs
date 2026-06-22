@@ -100,8 +100,6 @@ impl GpuState {
         let mut quad_renderer = QuadRenderer::new(&device, surface_format);
         quad_renderer.upload_quads(&device, &[]);
 
-        let texture_cache = TextureCache::new(&device);
-
         let egui_renderer =
             egui_wgpu::Renderer::new(&device, surface_format, RendererOptions::default());
         let textured_quad_renderer = None; // created after textures load
@@ -113,7 +111,7 @@ impl GpuState {
             config,
             quad_renderer,
             textured_quad_renderer,
-            texture_cache,
+            texture_cache: TextureCache::new(),
             egui_renderer,
         }
     }
@@ -223,6 +221,12 @@ impl GpuState {
                     &self.queue,
                     &bflyt_view.textured_quads,
                     &ui_state.hidden_panes,
+                );
+
+                tqr.update_texture_pattern(
+                    &self.device,
+                    &bflyt_view.textured_quads,
+                    &self.texture_cache,
                 );
 
                 tqr.update_selection(
@@ -360,7 +364,7 @@ impl App {
 
     fn load_file_from_buffer(&mut self, res: ResolvedBlarc, file_name: String) {
         let file = Bflyt::parse(&res.bflyt_bytes).expect("parse bflyt file");
-        let mut view = build_view(&file, self.blarc_dir.as_deref());
+        let mut view = build_view(file, self.blarc_dir.as_deref());
 
         if let Some(root_bntx) = res.bntx_bytes {
             view.discovered_bntx_buffers.push(root_bntx);
@@ -697,20 +701,22 @@ impl ApplicationHandler for App {
                 if let (Some(gpu), Some(window), Some(egui_state)) =
                     (&mut self.gpu, &self.window, &mut self.egui_state)
                 {
-                    let dt = self.last_tick.elapsed().as_secs_f32();
-                    self.last_tick = Instant::now();
+                    if window.has_focus() {
+                        let dt = self.last_tick.elapsed().as_secs_f32();
+                        self.last_tick = Instant::now();
 
-                    if let Some(next) = self.anim_player.tick(dt, 60.0) {
-                        self.anim_player.play(&next.clone());
-                    }
+                        if let Some(next) = self.anim_player.tick(dt, 30.0) {
+                            self.anim_player.play(&next.clone());
+                        }
 
-                    if let Some(name) = self.ui_state.pending_play_anim.take() {
-                        self.anim_player.play(&name);
-                    }
+                        if let Some(name) = self.ui_state.pending_play_anim.take() {
+                            self.anim_player.play(&name);
+                        }
 
-                    if let Some(view) = &mut self.bflyt_view {
-                        view.reset_to_base();
-                        self.anim_player.apply(view);
+                        if let Some(view) = &mut self.bflyt_view {
+                            view.reset_to_base();
+                            self.anim_player.apply(view);
+                        }
                     }
 
                     gpu.render(
@@ -723,7 +729,7 @@ impl ApplicationHandler for App {
                         &mut self.anim_player,
                     );
 
-                    if self.anim_player.is_playing() {
+                    if self.anim_player.is_playing() && window.has_focus() {
                         window.request_redraw();
                     }
                 }
@@ -734,10 +740,10 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if self.egui_ctx.has_requested_repaint() {
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+        if self.egui_ctx.has_requested_repaint()
+            && let Some(window) = &self.window
+        {
+            window.request_redraw();
         }
     }
 }

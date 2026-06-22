@@ -16,14 +16,15 @@ struct VertexOutput {
 }
 
 struct StandardMaterial {
-    interpolate_width:  vec4<f32>,
-    interpolate_offset: vec4<f32>,
-    combine_mode:  u32,
+    interpolate_width: vec4<f32>,
+    interpolate_offset:vec4<f32>,
+    combine_mode: u32,
     combine_mode2: u32,
 
     texture_count: u32,
-    alpha_select:  u32,
+    alpha_select: u32,
     tex_gen_mode: u32,
+    visible: u32,
     indirect_mtx0: vec4<f32>,
     indirect_mtx1: vec4<f32>,
 }
@@ -499,6 +500,10 @@ fn sample_textures(count: u32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, p
 @fragment
 fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
     let mat = u_standard;
+    if mat.visible == 0u {
+        discard;
+    }
+    
     let t   = sample_textures(mat.texture_count, in.uv0, in.uv1, in.uv2, in.pos_mesh, mat);
 
     let sel_a1 = (mat.alpha_select & 1u) != 0u;

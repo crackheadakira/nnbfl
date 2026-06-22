@@ -7,7 +7,7 @@ use tomolib::formats::bntx::{
 use wgpu::util::DeviceExt;
 
 pub struct GpuTexture {
-    pub texture: wgpu::Texture,
+    pub _texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
@@ -15,56 +15,12 @@ pub struct GpuTexture {
 
 pub struct TextureCache {
     pub textures: HashMap<String, GpuTexture>,
-    pub bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl TextureCache {
-    pub fn new(device: &wgpu::Device) -> Self {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("texture_bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
+    pub fn new() -> Self {
         Self {
             textures: HashMap::new(),
-            bind_group_layout,
         }
     }
 
@@ -125,7 +81,7 @@ fn upload_rgba(
     height: u32,
     label: &str,
 ) -> GpuTexture {
-    let texture = device.create_texture_with_data(
+    let _texture = device.create_texture_with_data(
         queue,
         &wgpu::TextureDescriptor {
             label: Some(label),
@@ -145,10 +101,10 @@ fn upload_rgba(
         data,
     );
 
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = _texture.create_view(&wgpu::TextureViewDescriptor::default());
 
     GpuTexture {
-        texture,
+        _texture,
         view,
         width,
         height,
