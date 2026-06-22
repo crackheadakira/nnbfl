@@ -189,6 +189,8 @@ pub enum PerCharacterTransformCurveTarget {
     LeftBottomGreen,
     LeftBottomBlue,
     LeftBottomAlpha,
+    ScaleX,
+    ScaleY,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, FromPrimitive, IntoPrimitive)]

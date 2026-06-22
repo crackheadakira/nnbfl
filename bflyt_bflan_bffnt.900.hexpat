@@ -345,6 +345,8 @@ enum BflanPerCharacterTransformCurveTarget : u8 {
     LeftBottomGreen = 11,
     LeftBottomBlue  = 12,
     LeftBottomAlpha = 13,
+    ScaleX          = 14,
+    ScaleY          = 15,
 };
 
 enum BflanPerCharacterTransformTarget : u8 {
@@ -456,7 +458,7 @@ struct ResBflanStepKey {
 
 u32 s_last_anim_info_magic = 0;
 struct ResBflanAnimTarget {
-    u8  reserve0;
+    u8  layer;
     
     if (s_last_anim_info_magic == BflanAnimInfoType::PerCharacterTransformCurveAnim) {
         BflanPerCharacterTransformCurveTarget target_index;
@@ -1231,9 +1233,9 @@ struct ResBflytPerCharacterTransform {
     u8    char_info[20];
     
     if (has_anim_info != 0) {
-        BflanAnimInfoType anim_info_magic;
-        s_last_anim_info_magic = anim_info_magic;
-        // ResBflanAnimTarget anim_info;
+        ResBflanAnimInfo anim_info;
+        s_last_anim_info_magic = anim_info.magic;
+        ResBflanAnimTarget anim_info;
     }
 };
 
