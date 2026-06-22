@@ -223,20 +223,17 @@ impl QuadRenderer {
         let uvs = [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
 
         for (i, q) in quads.iter().enumerate() {
-            if q.has_textured && !quad_for_tex {
-                continue;
-            }
-
             let base = i * 4;
             if base + 3 >= self.cached_vertices.len() {
                 continue;
             }
 
-            let color = if hidden_panes.contains(&i) {
+            let color = if hidden_panes.contains(&i) || (q.has_textured && !quad_for_tex) {
                 [0.0; 4]
             } else {
                 q.color
             };
+
             let x0 = q.x;
             let y0 = q.y;
             let x1 = q.x + q.width;
