@@ -138,9 +138,9 @@ impl QuadRenderer {
         let uvs = [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
 
         for (i, q) in quads.iter().enumerate() {
-            if q.has_textured {
+            /*if q.has_textured {
                 continue;
-            }
+            }*/
 
             let base = (i * 4) as u32;
             let x0 = q.x;
@@ -214,6 +214,7 @@ impl QuadRenderer {
         queue: &wgpu::Queue,
         quads: &[Quad],
         hidden_panes: &HashSet<usize>,
+        quad_for_tex: bool,
     ) {
         if self.cached_vertices.is_empty() {
             return;
@@ -222,9 +223,10 @@ impl QuadRenderer {
         let uvs = [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
 
         for (i, q) in quads.iter().enumerate() {
-            if q.has_textured {
+            if q.has_textured && !quad_for_tex {
                 continue;
             }
+
             let base = i * 4;
             if base + 3 >= self.cached_vertices.len() {
                 continue;
@@ -263,6 +265,7 @@ impl QuadRenderer {
         quads: &[Quad],
         selected_idx: Option<usize>,
         hidden_panes: &HashSet<usize>,
+        quad_for_tex: bool,
     ) {
         if self.cached_vertices.is_empty() {
             return;
@@ -271,9 +274,6 @@ impl QuadRenderer {
         let uvs = [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
 
         for (i, q) in quads.iter().enumerate() {
-            if q.has_textured {
-                continue;
-            }
             let base_vertex_idx = i * 4;
             if base_vertex_idx + 3 >= self.cached_vertices.len() {
                 continue;
@@ -281,7 +281,7 @@ impl QuadRenderer {
 
             let size = [q.width, q.height];
 
-            let final_color = if hidden_panes.contains(&i) {
+            let final_color = if hidden_panes.contains(&i) || (q.has_textured && !quad_for_tex) {
                 [0.0, 0.0, 0.0, 0.0]
             } else if Some(i) == selected_idx {
                 [

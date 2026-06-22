@@ -206,14 +206,19 @@ impl GpuState {
         egui_state.handle_platform_output(window, full_output.platform_output.clone());
 
         if let Some(bflyt_view) = bflyt_view {
-            self.quad_renderer
-                .update_anim(&self.queue, &bflyt_view.quads, &ui_state.hidden_panes);
+            self.quad_renderer.update_anim(
+                &self.queue,
+                &bflyt_view.quads,
+                &ui_state.hidden_panes,
+                ui_state.quad_for_textured,
+            );
 
             self.quad_renderer.update_selection(
                 &self.queue,
                 &bflyt_view.quads,
                 ui_state.selected_pane,
                 &ui_state.hidden_panes,
+                ui_state.quad_for_textured,
             );
 
             if let Some(tqr) = &mut self.textured_quad_renderer {
@@ -294,7 +299,9 @@ impl GpuState {
                 self.quad_renderer.render(&mut rpass);
             }
 
-            if let Some(tqr) = &self.textured_quad_renderer {
+            if let Some(tqr) = &self.textured_quad_renderer
+                && !ui_state.no_textured
+            {
                 tqr.render(&mut rpass);
             }
 

@@ -594,6 +594,7 @@ impl TexturedQuadRenderer {
             let Some(&first_pane_idx) = batch.pane_indices.first() else {
                 continue;
             };
+
             let Some(tq) = quads.iter().find(|q| q.pane_idx == first_pane_idx) else {
                 continue;
             };

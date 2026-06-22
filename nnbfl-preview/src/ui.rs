@@ -33,6 +33,8 @@ pub struct UiState {
     pub pending_action: Option<UiAction>,
     pub clip_to_root: bool,
     pub only_textured: bool,
+    pub no_textured: bool,
+    pub quad_for_textured: bool,
     pub anim_names: Vec<String>,
     pub pending_play_anim: Option<String>,
     pub sidebar_tab: SidebarTab,
@@ -115,7 +117,12 @@ pub fn draw_ui(
                 SidebarTab::Panes => {
                     ui.heading("Pane Tree");
                     ui.checkbox(&mut state.clip_to_root, "Clip to root pane");
-                    ui.checkbox(&mut state.only_textured, "Draw only textured quads");
+                    ui.checkbox(&mut state.only_textured, "Draw only textures");
+                    ui.checkbox(
+                        &mut state.quad_for_textured,
+                        "Draw pane outlines for textures",
+                    );
+                    ui.checkbox(&mut state.no_textured, "Draw only pane outlines");
                     ui.separator();
 
                     egui::ScrollArea::vertical()
