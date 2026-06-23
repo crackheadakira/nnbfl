@@ -46,7 +46,8 @@ pub struct StandardMaterial {
     pub alpha_select: u32,
     pub tex_gen_mode: u32,
     pub visible: u32,
-    pub _pad0: [u32; 2],
+    pub use_texture_only: u32,
+    pub use_thresholding_alpha_interpolation: u32,
 
     pub indirect_mtx0: [f32; 4],
     pub indirect_mtx1: [f32; 4],
@@ -67,7 +68,8 @@ impl Default for StandardMaterial {
             alpha_select: 0,
             tex_gen_mode: 0,
             visible: 1,
-            _pad0: [0; 2],
+            use_texture_only: 0,
+            use_thresholding_alpha_interpolation: 0,
             indirect_mtx0: [0.0; 4],
             indirect_mtx1: [0.0; 4],
             proj_mtx0: [[1.0, 0.0, 0.0, 0.5], [0.0, 1.0, 0.0, 0.5]],
@@ -503,23 +505,14 @@ impl TexturedQuadRenderer {
                     let tx = rep_quad.proj_translations[layer_idx][0];
                     let ty = rep_quad.proj_translations[layer_idx][1];
 
-                    // Since pos_mesh is already 0.0 to 1.0, scale_s controls the tiling directly.
                     let scale_s = 1.0 / sx;
                     let scale_t = 1.0 / sy;
 
-                    // Translation offsets also need to be normalized relative to the texture scale
                     let trans_s = -tx * scale_s;
                     let trans_t = -ty * scale_t;
 
                     let row0 = [scale_s, 0.0, 0.0, trans_s];
                     let row1 = [0.0, scale_t, 0.0, trans_t];
-
-                    println!("Row 0: {:?}", row0);
-                    println!("Row 1: {:?}", row1);
-                    println!(
-                        "pos_mesh values look like: x={}, y={}, w={}, h={}",
-                        rep_quad.x, rep_quad.y, rep_quad.width, rep_quad.height
-                    );
 
                     [row0, row1]
                 } else {

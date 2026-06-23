@@ -904,19 +904,17 @@ pub struct MaterialInfo {
     pub tev_combiner_count: u8,
     pub has_alpha_compare: bool,
     pub has_color_blend_mode: bool,
-    pub reserve0: bool,
-    pub has_alpha_blend_mode: bool,
-    pub reserve1: u8,
+    pub use_texture_only: bool,
+    pub has_separate_blend_mode: bool,
     pub has_indirect_matrix: bool,
     pub projection_tex_gen_count: u8,
-    pub font_shadow_color: u8,
-    pub reserve2: bool,
-    pub use_detailed_combiner: u8,
-    pub user_combiner_count: u8,
+    pub has_font_shadow_parameter: bool,
+    pub use_thresholding_alpha_interpolation: bool,
+    pub use_detailed_combiner: bool,
+    pub has_user_combiner: bool,
     pub has_texture_extensions: u8,
     pub vector_texture_info_count: u8,
     pub brick_repeat_shader_info_count: u8,
-    pub reserve3: u8,
 }
 
 impl MaterialInfo {
@@ -926,21 +924,19 @@ impl MaterialInfo {
             tex_srt_count: ((raw >> 2) & 0x3) as u8,
             tex_coord_gen_count: ((raw >> 4) & 0x3) as u8,
             tev_combiner_count: ((raw >> 6) & 0x7) as u8,
-            has_alpha_compare: ((raw >> 9) & 0x1) as u8 != 0,
-            has_color_blend_mode: ((raw >> 10) & 0x1) as u8 != 0,
-            reserve0: ((raw >> 11) & 0x1) as u8 != 0,
-            has_alpha_blend_mode: ((raw >> 12) & 0x1) as u8 != 0,
-            reserve1: ((raw >> 13) & 0x1) as u8,
-            has_indirect_matrix: ((raw >> 14) & 0x1) as u8 != 0,
+            has_alpha_compare: ((raw >> 9) & 0x1) != 0,
+            has_color_blend_mode: ((raw >> 10) & 0x1) != 0,
+            use_texture_only: ((raw >> 11) & 0x1) != 0,
+            has_separate_blend_mode: ((raw >> 12) & 0x1) != 0,
+            has_indirect_matrix: ((raw >> 14) & 0x1) != 0,
             projection_tex_gen_count: ((raw >> 15) & 0x3) as u8,
-            font_shadow_color: ((raw >> 17) & 0x1) as u8,
-            reserve2: ((raw >> 18) & 0x1) as u8 != 0,
-            use_detailed_combiner: ((raw >> 19) & 0x1) as u8,
-            user_combiner_count: ((raw >> 20) & 0x1) as u8,
+            has_font_shadow_parameter: ((raw >> 17) & 0x1) != 0,
+            use_thresholding_alpha_interpolation: ((raw >> 18) & 0x1) != 0,
+            use_detailed_combiner: ((raw >> 19) & 0x1) != 0,
+            has_user_combiner: ((raw >> 20) & 0x1) != 0,
             has_texture_extensions: ((raw >> 21) & 0x1) as u8,
             vector_texture_info_count: ((raw >> 22) & 0x3) as u8,
             brick_repeat_shader_info_count: ((raw >> 24) & 0x3) as u8,
-            reserve3: ((raw >> 26) & 0x3F) as u8,
         }
     }
 
@@ -949,21 +945,19 @@ impl MaterialInfo {
             | (((self.tex_srt_count & 0x3) as u32) << 2)
             | (((self.tex_coord_gen_count & 0x3) as u32) << 4)
             | (((self.tev_combiner_count & 0x7) as u32) << 6)
-            | (((self.has_alpha_compare as u8 & 0x1) as u32) << 9)
-            | (((self.has_color_blend_mode as u8 & 0x1) as u32) << 10)
-            | (((self.reserve0 as u8 & 0x1) as u32) << 11)
-            | (((self.has_alpha_blend_mode as u8 & 0x1) as u32) << 12)
-            | (((self.reserve1 & 0x1) as u32) << 13)
-            | (((self.has_indirect_matrix as u8 & 0x1) as u32) << 14)
+            | ((self.has_alpha_compare as u32) << 9)
+            | ((self.has_color_blend_mode as u32) << 10)
+            | ((self.use_texture_only as u32) << 11)
+            | ((self.has_separate_blend_mode as u32) << 12)
+            | ((self.has_indirect_matrix as u32) << 14)
             | (((self.projection_tex_gen_count & 0x3) as u32) << 15)
-            | (((self.font_shadow_color & 0x1) as u32) << 17)
-            | (((self.reserve2 as u8 & 0x1) as u32) << 18)
-            | (((self.use_detailed_combiner & 0x1) as u32) << 19)
-            | (((self.user_combiner_count & 0x1) as u32) << 20)
+            | ((self.has_font_shadow_parameter as u32) << 17)
+            | ((self.use_thresholding_alpha_interpolation as u32) << 18)
+            | ((self.use_detailed_combiner as u32) << 19)
+            | ((self.has_user_combiner as u32) << 20)
             | (((self.has_texture_extensions & 0x1) as u32) << 21)
             | (((self.vector_texture_info_count & 0x3) as u32) << 22)
             | (((self.brick_repeat_shader_info_count & 0x3) as u32) << 24)
-            | (((self.reserve3 & 0x3F) as u32) << 26)
     }
 }
 
@@ -982,10 +976,6 @@ pub struct MaterialColorEntry {
 pub struct BflytMaterial {
     pub material_name: String,
 
-    pub reserve0: bool,
-    pub reserve2: bool,
-
-    pub color_types_byte: u8,
     pub colors: Vec<MaterialColorEntry>,
 
     pub tex_maps: Vec<MaterialTextureMap>,
@@ -1001,13 +991,16 @@ pub struct BflytMaterial {
 
     pub indirect_matrix: Option<MaterialIndirectMatrix>,
     pub projection_tex_gens: Vec<MaterialProjectionTexGen>,
-    pub font_shadow_colors: Vec<MaterialFontShadowColor>,
+    pub font_shadow_color: Option<MaterialFontShadowColor>,
 
     pub detailed_combiner: Option<MaterialDetailedCombiner>,
 
-    pub user_combiners: Vec<MaterialUserCombiner>,
+    pub user_combiner: Option<MaterialUserCombiner>,
     pub vector_texture_infos: Vec<MaterialVectorTextureInfo>,
     pub brick_repeat_shader_infos: Vec<MaterialBrickRepeatShaderInfo>,
+
+    pub use_texture_only: bool,
+    pub use_thresholding_alpha_interpolation: bool,
 }
 
 impl BflytMaterial {
@@ -1061,8 +1054,7 @@ impl BflytMaterial {
 
         let after_color = mat_base + 0x20 + color_section_size;
 
-        let tex_maps_base = after_color;
-        cursor.seek(tex_maps_base)?;
+        cursor.seek(after_color)?;
 
         let mut tex_maps = Vec::new();
         for _ in 0..material_info.tex_map_count {
@@ -1103,7 +1095,7 @@ impl BflytMaterial {
             None
         };
 
-        let blend_mode_alpha = if material_info.has_alpha_blend_mode {
+        let blend_mode_alpha = if material_info.has_separate_blend_mode {
             Some(MaterialBlendMode::parse(cursor)?)
         } else {
             None
@@ -1115,7 +1107,7 @@ impl BflytMaterial {
             None
         };
 
-        let detailed_combiner = if material_info.use_detailed_combiner != 0 {
+        let detailed_combiner = if material_info.use_detailed_combiner {
             Some(MaterialDetailedCombiner::parse(
                 cursor,
                 material_info.tev_combiner_count,
@@ -1129,15 +1121,17 @@ impl BflytMaterial {
             projection_tex_gens.push(MaterialProjectionTexGen::parse(cursor)?);
         }
 
-        let mut font_shadow_colors = Vec::new();
-        for _ in 0..material_info.font_shadow_color {
-            font_shadow_colors.push(MaterialFontShadowColor::parse(cursor)?);
-        }
+        let font_shadow_color = if material_info.has_font_shadow_parameter {
+            Some(MaterialFontShadowColor::parse(cursor)?)
+        } else {
+            None
+        };
 
-        let mut user_combiners = Vec::new();
-        for _ in 0..material_info.user_combiner_count {
-            user_combiners.push(MaterialUserCombiner::parse(cursor)?);
-        }
+        let user_combiner = if material_info.has_user_combiner {
+            Some(MaterialUserCombiner::parse(cursor)?)
+        } else {
+            None
+        };
 
         let mut vector_texture_infos = Vec::new();
         for _ in 0..material_info.vector_texture_info_count {
@@ -1151,9 +1145,9 @@ impl BflytMaterial {
 
         Ok(Self {
             material_name,
-            color_types_byte,
-            reserve0: material_info.reserve0,
-            reserve2: material_info.reserve2,
+            use_texture_only: material_info.use_texture_only,
+            use_thresholding_alpha_interpolation: material_info
+                .use_thresholding_alpha_interpolation,
             colors,
             tex_maps,
             tex_extensions,
@@ -1165,9 +1159,9 @@ impl BflytMaterial {
             blend_mode_alpha,
             indirect_matrix,
             projection_tex_gens,
-            font_shadow_colors,
+            font_shadow_color,
             detailed_combiner,
-            user_combiners,
+            user_combiner,
             vector_texture_infos,
             brick_repeat_shader_infos,
         })
@@ -1183,24 +1177,29 @@ impl BflytMaterial {
             tev_combiner_count: self.tev_combiners.len() as u8,
             has_alpha_compare: self.alpha_compare.is_some(),
             has_color_blend_mode: self.blend_mode.is_some(),
-            reserve0: self.reserve0,
-            has_alpha_blend_mode: self.blend_mode_alpha.is_some(),
-            reserve1: 0,
+            has_separate_blend_mode: self.blend_mode_alpha.is_some(),
             has_indirect_matrix: self.indirect_matrix.is_some(),
             projection_tex_gen_count: self.projection_tex_gens.len() as u8,
-            font_shadow_color: self.font_shadow_colors.len() as u8,
-            reserve2: self.reserve2,
-            use_detailed_combiner: self.detailed_combiner.is_some() as u8,
-            user_combiner_count: self.user_combiners.len() as u8,
+            has_font_shadow_parameter: self.font_shadow_color.is_some(),
+            use_detailed_combiner: self.detailed_combiner.is_some(),
+            has_user_combiner: self.user_combiner.is_some(),
             has_texture_extensions: !self.tex_extensions.is_empty() as u8,
             vector_texture_info_count: self.vector_texture_infos.len() as u8,
             brick_repeat_shader_info_count: self.brick_repeat_shader_infos.len() as u8,
-            reserve3: 0,
+            use_texture_only: self.use_texture_only,
+            use_thresholding_alpha_interpolation: self.use_thresholding_alpha_interpolation,
         };
 
         writer.write_u32(material_info.encode());
 
-        writer.write_u8(self.color_types_byte);
+        let mut color_types_byte: u8 = 0;
+        for (i, entry) in self.colors.iter().enumerate() {
+            if entry.color_f32.is_some() {
+                color_types_byte |= 1 << i;
+            }
+        }
+
+        writer.write_u8(color_types_byte);
         writer.write_u8(self.colors.len() as u8);
 
         let n = self.colors.len();
@@ -1262,12 +1261,12 @@ impl BflytMaterial {
             pg.serialize(writer);
         }
 
-        for fs in &self.font_shadow_colors {
-            fs.serialize(writer);
+        if let Some(font_shadow_color) = &self.font_shadow_color {
+            font_shadow_color.serialize(writer);
         }
 
-        for uc in &self.user_combiners {
-            uc.serialize(writer);
+        if let Some(user_combiner) = &self.user_combiner {
+            user_combiner.serialize(writer);
         }
 
         for vi in &self.vector_texture_infos {

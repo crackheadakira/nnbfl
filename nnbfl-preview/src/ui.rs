@@ -393,6 +393,7 @@ fn show_pane_recursive(idx: usize, view: &BflytView, hidden_set: &mut HashSet<us
         hidden_set.remove(&child);
     }
 }
+
 fn draw_pane_properties(ui: &mut Ui, pane: &PaneInfo) {
     egui::ScrollArea::vertical()
         .id_salt("pane_properties_scroll")
@@ -510,7 +511,11 @@ fn draw_material_list(ui: &mut Ui, list: &BflytMaterialList) {
                 egui::CollapsingHeader::new(header_text)
                     .id_salt(ui.id().with(idx))
                     .show(ui, |ui| {
-                        egui::CollapsingHeader::new(format!("Colors ({})", material.colors.len()))
+                        if !material.colors.is_empty() {
+                            egui::CollapsingHeader::new(format!(
+                                "Colors ({})",
+                                material.colors.len()
+                            ))
                             .id_salt("colors")
                             .show(ui, |ui| {
                                 draw_vec_grid(
@@ -532,204 +537,277 @@ fn draw_material_list(ui: &mut Ui, list: &BflytMaterialList) {
                                     },
                                 );
                             });
+                        }
 
-                        egui::CollapsingHeader::new(format!(
-                            "Texture Maps ({})",
-                            material.tex_maps.len()
-                        ))
-                        .id_salt("tex_sub")
-                        .show(ui, |ui| {
-                            draw_vec_grid(ui, "tex_grid", &material.tex_maps, |ui, i, tex| {
-                                draw_string(ui, &format!("[{i}] Name"), &tex.texture_name);
-                                draw_prop_debug(
-                                    ui,
-                                    &format!("[{i}] U Filter"),
-                                    tex.u_options.filter,
-                                );
-                                draw_prop_debug(
-                                    ui,
-                                    &format!("[{i}] V Filter"),
-                                    tex.v_options.filter,
-                                );
-                                draw_prop_debug(
-                                    ui,
-                                    &format!("[{i}] U Wrap"),
-                                    tex.u_options.wrap_mode,
-                                );
-                                draw_prop_debug(
-                                    ui,
-                                    &format!("[{i}] V Wrap"),
-                                    tex.v_options.wrap_mode,
-                                );
-                            });
-                        });
-
-                        egui::CollapsingHeader::new(format!(
-                            "Texture Extensions ({})",
-                            material.tex_extensions.len()
-                        ))
-                        .id_salt("tex_ext")
-                        .show(ui, |ui| {
-                            draw_vec_grid(
-                                ui,
-                                "tex_ext_grid",
-                                &material.tex_extensions,
-                                |ui, i, ext| {
-                                    draw_prop(
-                                        ui,
-                                        &format!("[{i}] Capture Tex"),
-                                        ext.is_capture_texture,
-                                    );
-                                    draw_prop(
-                                        ui,
-                                        &format!("[{i}] Vector Tex"),
-                                        ext.is_vecture_texture,
-                                    );
-                                },
-                            );
-                        });
-
-                        egui::CollapsingHeader::new(format!(
-                            "Texture SRTs ({})",
-                            material.tex_srts.len()
-                        ))
-                        .id_salt("tex_srt")
-                        .show(ui, |ui| {
-                            draw_vec_grid(ui, "srt_grid", &material.tex_srts, |ui, i, srt| {
-                                draw_prop_f32(ui, &format!("[{i}] Rotate"), srt.rotate);
-                                draw_prop_f32(ui, &format!("[{i}] Scale U"), srt.scale_u);
-                                draw_prop_f32(ui, &format!("[{i}] Scale V"), srt.scale_v);
-                                draw_prop_f32(ui, &format!("[{i}] Translate U"), srt.translate_u);
-                                draw_prop_f32(ui, &format!("[{i}] Translate V"), srt.translate_v);
-                            });
-                        });
-
-                        egui::CollapsingHeader::new(format!(
-                            "Texture Coord Gens ({})",
-                            material.tex_coord_gens.len()
-                        ))
-                        .id_salt("tex_gen")
-                        .show(ui, |ui| {
-                            draw_vec_grid(
-                                ui,
-                                "coord_gen_grid",
-                                &material.tex_coord_gens,
-                                |ui, i, coord_gen| {
-                                    draw_prop_debug(
-                                        ui,
-                                        &format!("[{i}] Source"),
-                                        coord_gen.tex_gen_source,
-                                    );
-                                },
-                            );
-                        });
-
-                        egui::CollapsingHeader::new(format!(
-                            "Projection Tex Gens ({})",
-                            material.projection_tex_gens.len()
-                        ))
-                        .id_salt("proj_gen")
-                        .show(ui, |ui| {
-                            draw_vec_grid(
-                                ui,
-                                "proj_gen_grid",
-                                &material.projection_tex_gens,
-                                |ui, i, proj_gen| {
-                                    draw_prop(
-                                        ui,
-                                        &format!("[{i}] Adjust Projection Scale Rotate"),
-                                        proj_gen.flags.adjust_projection_scale_rotate,
-                                    );
-
-                                    draw_prop(
-                                        ui,
-                                        &format!("[{i}] Fitting Layout Size"),
-                                        proj_gen.flags.fitting_layout_size,
-                                    );
-
-                                    draw_prop(
-                                        ui,
-                                        &format!("[{i}] Fitting Pane Size"),
-                                        proj_gen.flags.fitting_pane_size,
-                                    );
-
-                                    draw_vector_2f(
-                                        ui,
-                                        &format!("[{i}] Translation"),
-                                        proj_gen.scale,
-                                    );
-                                    draw_vector_2f(
-                                        ui,
-                                        &format!("[{i}] Scale"),
-                                        proj_gen.translation,
-                                    );
-                                },
-                            );
-                        });
-
-                        egui::CollapsingHeader::new(format!(
-                            "Texture Environment Combiners ({})",
-                            material.tev_combiners.len()
-                        ))
-                        .id_salt("tev_comb")
-                        .show(ui, |ui| {
-                            draw_vec_grid(
-                                ui,
-                                "tev_grid",
-                                &material.tev_combiners,
-                                |ui, i, combiner| {
-                                    draw_prop_debug(
-                                        ui,
-                                        &format!("[{i}] RGB Mode"),
-                                        combiner.rgb_mode,
-                                    );
-                                    draw_prop_debug(
-                                        ui,
-                                        &format!("[{i}] Alpha Mode"),
-                                        combiner.alpha_mode,
-                                    );
-                                },
-                            );
-                        });
-
-                        egui::CollapsingHeader::new("Alpha Compare")
-                            .id_salt("alp_comp")
+                        if !material.tex_maps.is_empty() {
+                            egui::CollapsingHeader::new(format!(
+                                "Texture Maps ({})",
+                                material.tex_maps.len()
+                            ))
+                            .id_salt("tex_sub")
                             .show(ui, |ui| {
-                                if let Some(compare) = &material.alpha_compare {
-                                    egui::Grid::new(ui.id().with("alpha_comp_grid"))
+                                draw_vec_grid(ui, "tex_grid", &material.tex_maps, |ui, i, tex| {
+                                    draw_string(ui, &format!("[{i}] Name"), &tex.texture_name);
+                                    draw_prop_debug(
+                                        ui,
+                                        &format!("[{i}] U Filter"),
+                                        tex.u_options.filter,
+                                    );
+                                    draw_prop_debug(
+                                        ui,
+                                        &format!("[{i}] V Filter"),
+                                        tex.v_options.filter,
+                                    );
+                                    draw_prop_debug(
+                                        ui,
+                                        &format!("[{i}] U Wrap"),
+                                        tex.u_options.wrap_mode,
+                                    );
+                                    draw_prop_debug(
+                                        ui,
+                                        &format!("[{i}] V Wrap"),
+                                        tex.v_options.wrap_mode,
+                                    );
+                                });
+                            });
+                        }
+
+                        if !material.tex_extensions.is_empty() {
+                            egui::CollapsingHeader::new(format!(
+                                "Texture Extensions ({})",
+                                material.tex_extensions.len()
+                            ))
+                            .id_salt("tex_ext")
+                            .show(ui, |ui| {
+                                draw_vec_grid(
+                                    ui,
+                                    "tex_ext_grid",
+                                    &material.tex_extensions,
+                                    |ui, i, ext| {
+                                        draw_prop(
+                                            ui,
+                                            &format!("[{i}] Capture Tex"),
+                                            ext.is_capture_texture,
+                                        );
+                                        draw_prop(
+                                            ui,
+                                            &format!("[{i}] Vector Tex"),
+                                            ext.is_vecture_texture,
+                                        );
+                                    },
+                                );
+                            });
+                        }
+
+                        if !material.tex_srts.is_empty() {
+                            egui::CollapsingHeader::new(format!(
+                                "Texture SRTs ({})",
+                                material.tex_srts.len()
+                            ))
+                            .id_salt("tex_srt")
+                            .show(ui, |ui| {
+                                draw_vec_grid(ui, "srt_grid", &material.tex_srts, |ui, i, srt| {
+                                    draw_prop_f32(ui, &format!("[{i}] Rotate"), srt.rotate);
+                                    draw_prop_f32(ui, &format!("[{i}] Scale U"), srt.scale_u);
+                                    draw_prop_f32(ui, &format!("[{i}] Scale V"), srt.scale_v);
+                                    draw_prop_f32(
+                                        ui,
+                                        &format!("[{i}] Translate U"),
+                                        srt.translate_u,
+                                    );
+                                    draw_prop_f32(
+                                        ui,
+                                        &format!("[{i}] Translate V"),
+                                        srt.translate_v,
+                                    );
+                                });
+                            });
+                        }
+
+                        if !material.tex_coord_gens.is_empty() {
+                            egui::CollapsingHeader::new(format!(
+                                "Texture Coord Gens ({})",
+                                material.tex_coord_gens.len()
+                            ))
+                            .id_salt("tex_gen")
+                            .show(ui, |ui| {
+                                draw_vec_grid(
+                                    ui,
+                                    "coord_gen_grid",
+                                    &material.tex_coord_gens,
+                                    |ui, i, coord_gen| {
+                                        draw_prop_debug(
+                                            ui,
+                                            &format!("[{i}] Source"),
+                                            coord_gen.tex_gen_source,
+                                        );
+                                    },
+                                );
+                            });
+                        }
+
+                        if !material.projection_tex_gens.is_empty() {
+                            egui::CollapsingHeader::new(format!(
+                                "Projection Tex Gens ({})",
+                                material.projection_tex_gens.len()
+                            ))
+                            .id_salt("proj_gen")
+                            .show(ui, |ui| {
+                                draw_vec_grid(
+                                    ui,
+                                    "proj_gen_grid",
+                                    &material.projection_tex_gens,
+                                    |ui, i, proj_gen| {
+                                        draw_prop(
+                                            ui,
+                                            &format!("[{i}] Adjust Projection Scale Rotate"),
+                                            proj_gen.flags.adjust_projection_scale_rotate,
+                                        );
+
+                                        draw_prop(
+                                            ui,
+                                            &format!("[{i}] Fitting Layout Size"),
+                                            proj_gen.flags.fitting_layout_size,
+                                        );
+
+                                        draw_prop(
+                                            ui,
+                                            &format!("[{i}] Fitting Pane Size"),
+                                            proj_gen.flags.fitting_pane_size,
+                                        );
+
+                                        draw_vector_2f(
+                                            ui,
+                                            &format!("[{i}] Translation"),
+                                            proj_gen.scale,
+                                        );
+                                        draw_vector_2f(
+                                            ui,
+                                            &format!("[{i}] Scale"),
+                                            proj_gen.translation,
+                                        );
+                                    },
+                                );
+                            });
+                        }
+
+                        if !material.tev_combiners.is_empty() {
+                            egui::CollapsingHeader::new(format!(
+                                "Texture Environment Combiners ({})",
+                                material.tev_combiners.len()
+                            ))
+                            .id_salt("tev_comb")
+                            .show(ui, |ui| {
+                                draw_vec_grid(
+                                    ui,
+                                    "tev_grid",
+                                    &material.tev_combiners,
+                                    |ui, i, combiner| {
+                                        draw_prop_debug(
+                                            ui,
+                                            &format!("[{i}] RGB Mode"),
+                                            combiner.rgb_mode,
+                                        );
+                                        draw_prop_debug(
+                                            ui,
+                                            &format!("[{i}] Alpha Mode"),
+                                            combiner.alpha_mode,
+                                        );
+                                    },
+                                );
+                            });
+                        }
+
+                        if material.alpha_compare.is_some() {
+                            egui::CollapsingHeader::new("Alpha Compare")
+                                .id_salt("alp_comp")
+                                .show(ui, |ui| {
+                                    if let Some(compare) = &material.alpha_compare {
+                                        egui::Grid::new(ui.id().with("alpha_comp_grid"))
+                                            .striped(true)
+                                            .show(ui, |ui| {
+                                                draw_prop_debug(ui, "Compare OP", compare.compare);
+                                                draw_prop_f32(
+                                                    ui,
+                                                    "Reference Value",
+                                                    compare.alpha_compare_ref_value,
+                                                );
+                                            });
+                                    } else {
+                                        ui.weak("None");
+                                    }
+                                });
+                        }
+
+                        if material.blend_mode.is_some() {
+                            egui::CollapsingHeader::new("Blend Mode")
+                                .id_salt("blend_mode")
+                                .show(ui, |ui| {
+                                    egui::Grid::new(ui.id().with("blend_grid"))
                                         .striped(true)
                                         .show(ui, |ui| {
-                                            draw_prop_debug(ui, "Compare OP", compare.compare);
-                                            draw_prop_f32(
-                                                ui,
-                                                "Reference Value",
-                                                compare.alpha_compare_ref_value,
-                                            );
+                                            draw_blend_mode(ui, &material.blend_mode);
                                         });
-                                } else {
-                                    ui.weak("None");
-                                }
-                            });
+                                });
+                        }
 
-                        egui::CollapsingHeader::new("Blend Mode")
-                            .id_salt("blend_mode")
-                            .show(ui, |ui| {
-                                egui::Grid::new(ui.id().with("blend_grid"))
-                                    .striped(true)
-                                    .show(ui, |ui| {
-                                        draw_blend_mode(ui, &material.blend_mode);
-                                    });
-                            });
+                        if material.blend_mode_alpha.is_some() {
+                            egui::CollapsingHeader::new("Alpha Blend Mode")
+                                .id_salt("alp_blend_mode")
+                                .show(ui, |ui| {
+                                    egui::Grid::new(ui.id().with("alpha_blend_grid"))
+                                        .striped(true)
+                                        .show(ui, |ui| {
+                                            draw_blend_mode(ui, &material.blend_mode_alpha);
+                                        });
+                                });
+                        }
 
-                        egui::CollapsingHeader::new("Alpha Blend Mode")
-                            .id_salt("alp_blend_mode")
-                            .show(ui, |ui| {
-                                egui::Grid::new(ui.id().with("alpha_blend_grid"))
-                                    .striped(true)
-                                    .show(ui, |ui| {
-                                        draw_blend_mode(ui, &material.blend_mode_alpha);
-                                    });
-                            });
+                        if let Some(indirect_matrix) = &material.indirect_matrix {
+                            egui::CollapsingHeader::new("Indirect Matrix")
+                                .id_salt("ind_mtx")
+                                .show(ui, |ui| {
+                                    egui::Grid::new(ui.id().with("ind_mtx_grid"))
+                                        .striped(true)
+                                        .show(ui, |ui| {
+                                            draw_prop(ui, "Rotation", indirect_matrix.rotation);
+                                            draw_vector_2f(ui, "Scale", indirect_matrix.scale);
+                                        });
+                                });
+                        }
+
+                        if let Some(fcs) = &material.font_shadow_color {
+                            egui::CollapsingHeader::new("Font Shadow Color")
+                                .id_salt("f_sh_clr")
+                                .show(ui, |ui| {
+                                    egui::Grid::new(ui.id().with("f_sh_clr_grid"))
+                                        .striped(true)
+                                        .show(ui, |ui| {
+                                            draw_prop(ui, &format!("Color 1, Red"), fcs.color0.r);
+                                            draw_prop(ui, &format!("Color 1, Green"), fcs.color0.g);
+                                            draw_prop(ui, &format!("Color 1, Blue"), fcs.color0.b);
+                                            draw_prop(ui, &format!("Color 1, Alpha"), fcs.color0.a);
+                                            draw_prop(ui, &format!("Color 2, Red"), fcs.color1.r);
+                                            draw_prop(ui, &format!("Color 2, Green"), fcs.color1.g);
+                                            draw_prop(ui, &format!("Color 2, Blue"), fcs.color1.b);
+                                            draw_prop(ui, &format!("Color 2, Alpha"), fcs.color1.a);
+                                        });
+                                });
+                        }
+
+                        // TODO: add
+                        /*if let Some(dc) = &material.detailed_combiner {
+                            egui::CollapsingHeader::new("Detailed Combiner")
+                                .id_salt("dt_comb")
+                                .show(ui, |ui| {
+                                    egui::Grid::new(ui.id().with("dt_comb_grid"))
+                                        .striped(true)
+                                        .show(ui, |ui| {
+                                            draw_prop(ui, "Stage Flags", dc.stage_flags);
+                                            draw_prop(ui, "Stage Flags", dc.);
+                                        });
+                                });
+                        }*/
                     });
             }
         });

@@ -25,6 +25,8 @@ struct StandardMaterial {
     alpha_select:  u32,
     tex_gen_mode:  u32,
     visible:       u32,
+    use_texture_only: u32,
+    use_thresholding_alpha_interpolation: u32,
 
     indirect_mtx0: vec4<f32>,
     indirect_mtx1: vec4<f32>,
@@ -506,6 +508,16 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
     if mat.visible == 0u {
         discard;
     }
+
+    if mat.use_texture_only == 1u {
+        var color = textureSample(t_texture0, s_sampler0, in.uv0);
+        
+        if mat.use_thresholding_alpha_interpolation == 1u {
+            color.a = select(0.0, 1.0, color.a >= 0.5);
+        }
+        
+        return color;
+    }
     
     let t   = sample_textures(mat.texture_count, in.uv0, in.uv1, in.uv2, in.pos_mesh, mat);
 
@@ -550,6 +562,10 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
     var color = mat.interpolate_offset + mat.interpolate_width * tex_color;
     // color       *= in.tint;
     color.a     = clamp(color.a, 0.0, 1.0);
+
+    if mat.use_thresholding_alpha_interpolation == 1u {
+        color.a = select(0.0, 1.0, color.a >= 0.5);
+    }
 
     return color;
 }

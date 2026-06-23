@@ -716,6 +716,8 @@ impl<'a> Walker<'a> {
             texture_count,
             alpha_select,
             tex_gen_mode: tex_gen_mode_packed,
+            use_texture_only: mat.use_texture_only as u32,
+            use_thresholding_alpha_interpolation: mat.use_thresholding_alpha_interpolation as u32,
             visible: parent_visible as u32,
             indirect_mtx0,
             indirect_mtx1,
