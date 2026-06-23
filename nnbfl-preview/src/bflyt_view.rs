@@ -155,13 +155,53 @@ fn pane_name(section: &BflytSection) -> String {
     section_kind_name(section).to_string()
 }
 
+/// Compute the four world-space corner positions [TL, TR, BL, BR] for a pane
+/// after applying Z rotation around the pane's pivot point (cx, cy).
+/// Matches Nintendo's MakeMatrixSrt Z-only path.
+pub fn compute_corners(
+    cx: f32,
+    cy: f32,
+    w: f32,
+    h: f32,
+    origin_x: &BflytOrigin,
+    origin_y: &BflytOrigin,
+    rotate_z: f32,
+) -> [[f32; 2]; 4] {
+    let lx = match origin_x {
+        BflytOrigin::Center => -w * 0.5,
+        BflytOrigin::LeftTop => 0.0,
+        BflytOrigin::RightBottom => -w,
+    };
+    let ly = match origin_y {
+        BflytOrigin::Center => -h * 0.5,
+        BflytOrigin::LeftTop => 0.0,
+        BflytOrigin::RightBottom => -h,
+    };
+
+    // Local corners relative to pivot
+    let local = [
+        [lx, ly],         // TL
+        [lx + w, ly],     // TR
+        [lx, ly + h],     // BL
+        [lx + w, ly + h], // BR
+    ];
+
+    if rotate_z == 0.0 {
+        return local.map(|[x, y]| [cx + x, cy + y]);
+    }
+
+    let rad = rotate_z.to_radians();
+    let (sin_r, cos_r) = rad.sin_cos();
+    local.map(|[x, y]| [cx + x * cos_r - y * sin_r, cy + x * sin_r + y * cos_r])
+}
+
 fn resolve_rect(
     pane: &BflytPane,
     parent_x: f32,
     parent_y: f32,
     parent_w: f32,
     parent_h: f32,
-) -> (f32, f32, f32, f32, f32, f32) {
+) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
     let anchor_x = match pane.origin.parent_origin_x {
         BflytParentOrigin::None => parent_x + parent_w * 0.5,
         BflytParentOrigin::LeftTop => parent_x,
@@ -197,6 +237,8 @@ fn resolve_rect(
         h.abs().max(1.0),
         anchor_x,
         anchor_y,
+        cx,
+        cy,
     )
 }
 
@@ -211,7 +253,7 @@ fn resolve_rect_in_parts(
     parts_scale_x: f32,
     parts_scale_y: f32,
 ) -> (f32, f32, f32, f32) {
-    let (lx, ly, lw, lh, _, _) = resolve_rect(pane, parent_x, parent_y, parent_w, parent_h);
+    let (lx, ly, lw, lh, _, _, _, _) = resolve_rect(pane, parent_x, parent_y, parent_w, parent_h);
 
     let x = parts_center_x + lx * parts_scale_x;
     let y = parts_center_y + ly * parts_scale_y;
@@ -353,7 +395,7 @@ impl<'a> Walker<'a> {
                 };
 
                 let is_visible = parent_visible && base.pane_flags.is_visible;
-                let (x, y, w, h, anchor_x, anchor_y) =
+                let (x, y, w, h, anchor_x, anchor_y, cx, cy) =
                     resolve_rect(base, parent_x, parent_y, parent_w, parent_h);
                 let label = pane_name(section);
                 let kind = section_kind_name(section).to_string();
@@ -372,8 +414,19 @@ impl<'a> Walker<'a> {
                 let mut has_textured = false;
                 if let BflytSection::PicturePane(pic) = section
                     && let Some(mat_list) = self.material_list
-                    && let Some(tq) =
-                        self.make_textured_quad(mat_list, pic, x, y, w, h, pane_idx, is_visible)
+                    && let Some(tq) = self.make_textured_quad(
+                        mat_list,
+                        pic,
+                        x,
+                        y,
+                        w,
+                        h,
+                        cx,
+                        cy,
+                        base.rotation.z,
+                        pane_idx,
+                        is_visible,
+                    )
                 {
                     self.textured_quads.push(tq);
                     has_textured = true;
@@ -424,6 +477,9 @@ impl<'a> Walker<'a> {
         y: f32,
         w: f32,
         h: f32,
+        cx: f32,
+        cy: f32,
+        rotate_z: f32,
         pane_idx: usize,
         parent_visible: bool,
     ) -> Option<TexturedQuad> {
@@ -724,11 +780,23 @@ impl<'a> Walker<'a> {
             ..Default::default()
         };
 
+        let corners = compute_corners(
+            cx,
+            cy,
+            w,
+            h,
+            &pic.base.origin.origin_x,
+            &pic.base.origin.origin_y,
+            rotate_z,
+        );
+
         Some(TexturedQuad {
             x,
             y,
             width: w,
             height: h,
+            corners,
+            rotate_z,
             uvs,
             base_uvs,
             tint,
@@ -901,7 +969,7 @@ impl<'a> Walker<'a> {
                         let effective_section = overrides.get(&pname).copied().unwrap_or(section);
                         let effective_base = base_pane(effective_section).unwrap_or(base);
 
-                        let (rx, ry, rw, rh, _, _) =
+                        let (rx, ry, rw, rh, _, _, _, _) =
                             resolve_rect(effective_base, parent_x, parent_y, parent_w, parent_h);
                         last_rect = (rx, ry, rw, rh);
                         last_visible = parent_visible && effective_base.pane_flags.is_visible;
@@ -979,11 +1047,23 @@ impl<'a> Walker<'a> {
                     parts_scale_y,
                 );
 
-                let (_, _, _, _, raw_anchor_x, raw_anchor_y) =
+                let (_, _, _, _, raw_anchor_x, raw_anchor_y, _, _) =
                     resolve_rect(effective_base, parent_x, parent_y, parent_w, parent_h);
 
                 let anchor_x = parts_origin_x + raw_anchor_x * parts_scale_x;
                 let anchor_y = parts_origin_y + raw_anchor_y * parts_scale_y;
+
+                // Pivot for rotation: center of pane based on origin setting
+                let cx = x + match effective_base.origin.origin_x {
+                    BflytOrigin::Center => w * 0.5,
+                    BflytOrigin::LeftTop => 0.0,
+                    BflytOrigin::RightBottom => w,
+                };
+                let cy = y + match effective_base.origin.origin_y {
+                    BflytOrigin::Center => h * 0.5,
+                    BflytOrigin::LeftTop => 0.0,
+                    BflytOrigin::RightBottom => h,
+                };
 
                 let pane_idx = self.panes.len();
 
@@ -1008,8 +1088,19 @@ impl<'a> Walker<'a> {
                     };
 
                     if let Some(mat_list) = chosen_mat_list
-                        && let Some(tq) =
-                            self.make_textured_quad(mat_list, pic, x, y, w, h, pane_idx, is_visible)
+                        && let Some(tq) = self.make_textured_quad(
+                            mat_list,
+                            pic,
+                            x,
+                            y,
+                            w,
+                            h,
+                            cx,
+                            cy,
+                            effective_base.rotation.z,
+                            pane_idx,
+                            is_visible,
+                        )
                     {
                         self.textured_quads.push(tq);
                         has_textured = true;

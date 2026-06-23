@@ -170,16 +170,48 @@ impl BflytPicturePane {
     }
 }
 
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive,
+)]
+#[repr(u8)]
+pub enum VerticalPosition {
+    #[default]
+    Top,
+    Center,
+    Bottom,
+}
+
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive,
+)]
+#[repr(u8)]
+pub enum HorizontalPosition {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive,
+)]
+#[repr(u8)]
+pub enum PerCharacterTransformLoopType {
+    #[default]
+    OneTime,
+    Loop,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerCharacterTransform {
     pub eval_time_offset: f32,
     pub eval_time_width: f32,
-    pub loop_type: u8,
-    pub origin_v: u8,
+    pub loop_type: PerCharacterTransformLoopType,
+    pub origin_v: VerticalPosition,
     pub has_anim_info: u8,
-    pub reserve0: u8,
-    pub reserve1: u32,
-    pub char_list: [u8; 16],
+    pub origin_v_offset: f32,
+    pub fix_space_width: f32,
+    pub horizontal_position: HorizontalPosition,
 
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub anim_info: Option<AnimInfo>,
@@ -187,32 +219,27 @@ pub struct PerCharacterTransform {
 
 impl PerCharacterTransform {
     pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let eval_time_offset = cursor.read_f32()?;
+        let eval_time_width = cursor.read_f32()?;
+        let loop_type = cursor.read_u8()?.into();
+        let origin_v = cursor.read_u8()?.into();
+        let has_anim_info = cursor.read_u8()?;
+        let _reserve0 = cursor.read_u8()?;
+        let origin_v_offset = cursor.read_f32()?;
+        let fix_space_width = cursor.read_f32()?;
+        let horizontal_position = cursor.read_u8()?.into();
+
+        cursor.seek_relative(11);
+
         let mut transform = Self {
-            eval_time_offset: cursor.read_f32()?,
-            eval_time_width: cursor.read_f32()?,
-            loop_type: cursor.read_u8()?,
-            origin_v: cursor.read_u8()?,
-            has_anim_info: cursor.read_u8()?,
-            reserve0: cursor.read_u8()?,
-            reserve1: cursor.read_u32()?,
-            char_list: [
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-                cursor.read_u8()?,
-            ],
+            eval_time_offset,
+            eval_time_width,
+            loop_type,
+            origin_v,
+            has_anim_info,
+            origin_v_offset,
+            fix_space_width,
+            horizontal_position,
             anim_info: None,
         };
 
@@ -227,14 +254,16 @@ impl PerCharacterTransform {
 
         writer.write_f32(self.eval_time_offset);
         writer.write_f32(self.eval_time_width);
-        writer.write_u8(self.loop_type);
-        writer.write_u8(self.origin_v);
+        writer.write_u8(self.loop_type.into());
+        writer.write_u8(self.origin_v.into());
         writer.write_u8(self.has_anim_info);
-        writer.write_u8(self.reserve0);
-        writer.write_u32(self.reserve1);
+        writer.write_u8(0);
+        writer.write_f32(self.origin_v_offset);
+        writer.write_f32(self.fix_space_width);
+        writer.write_u8(self.horizontal_position.into());
 
-        for char in &self.char_list {
-            writer.write_u8(*char);
+        for _ in 0..11 {
+            writer.write_u8(0);
         }
 
         if let Some(anim_info) = &self.anim_info {
@@ -459,7 +488,6 @@ pub struct WindowContent {
     pub bottom_right_vertex_color: Color4u8,
     pub material_index: u16,
     pub uv_coordinate_count: u8,
-    pub reserve0: u8,
     pub picture_uvs: Vec<TextureUv>,
 }
 
@@ -471,7 +499,7 @@ impl WindowContent {
         let bottom_right_vertex_color = Color4u8::parse(cursor)?;
         let material_index = cursor.read_u16()?;
         let uv_coordinate_count = cursor.read_u8()?;
-        let reserve0 = cursor.read_u8()?;
+        let _reserve0 = cursor.read_u8()?;
         let mut picture_uvs = Vec::new();
 
         for _ in 0..uv_coordinate_count {
@@ -485,7 +513,6 @@ impl WindowContent {
             bottom_right_vertex_color,
             material_index,
             uv_coordinate_count,
-            reserve0,
             picture_uvs,
         })
     }
@@ -499,7 +526,7 @@ impl WindowContent {
         self.bottom_right_vertex_color.serialize(writer);
         writer.write_u16(self.material_index);
         writer.write_u8(self.picture_uvs.len() as u8);
-        writer.write_u8(self.reserve0);
+        writer.write_u8(0);
 
         for uv in &self.picture_uvs {
             uv.serialize(writer);
@@ -511,23 +538,25 @@ impl WindowContent {
 pub struct WindowFrame {
     pub material_index: u16,
     pub texture_flip_mode: u8,
-    pub reserve0: u8,
 }
 
 impl WindowFrame {
     pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
-        Ok(Self {
+        let out = Self {
             material_index: cursor.read_u16()?,
             texture_flip_mode: cursor.read_u8()?,
-            reserve0: cursor.read_u8()?,
-        })
+        };
+
+        let _reserve0 = cursor.read_u8()?;
+
+        Ok(out)
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("WindowFrame");
         writer.write_u16(self.material_index);
         writer.write_u8(self.texture_flip_mode);
-        writer.write_u8(self.reserve0);
+        writer.write_u8(0);
     }
 }
 
@@ -544,7 +573,6 @@ pub struct BflytWindowPane {
     pub frame_size_bottom: i16,
     pub frame_count: u8,
     pub flag: WindowFlags,
-    pub reserve0: u16,
     pub content: WindowContent,
     pub frames: Vec<WindowFrame>,
 }
@@ -565,7 +593,7 @@ impl BflytWindowPane {
 
         let frame_count = cursor.read_u8()?;
         let flag = WindowFlags::decode(cursor.read_u8()?);
-        let reserve0 = cursor.read_u16()?;
+        let _reserve0 = cursor.read_u16()?;
         let content_offset = cursor.read_u32()?;
         let frame_offset_array_offset = cursor.read_u32()?;
 
@@ -599,7 +627,6 @@ impl BflytWindowPane {
             frame_size_bottom,
             frame_count,
             flag,
-            reserve0,
             content,
             frames,
         })
@@ -620,7 +647,7 @@ impl BflytWindowPane {
         writer.write_u16(self.frame_size_bottom as u16);
         writer.write_u8(self.frames.len() as u8);
         writer.write_u8(self.flag.encode());
-        writer.write_u16(self.reserve0);
+        writer.write_u16(0);
 
         let content_offset_pos = writer.write_placeholder_u32();
         let frame_offsets_pos = writer.write_placeholder_u32();
@@ -660,13 +687,11 @@ pub struct PartsPaneBasicInfo {
     pub size_x: f32,
     pub size_y: f32,
     pub pane_alpha: u8,
-    pub reserve0: u8,
-    pub reserve1: u8,
 }
 
 impl PartsPaneBasicInfo {
     pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
-        Ok(Self {
+        let out = Self {
             user_name: cursor.read_fixed_string(USER_NAME_LEN)?,
             translation_x: cursor.read_f32()?,
             translation_y: cursor.read_f32()?,
@@ -679,9 +704,10 @@ impl PartsPaneBasicInfo {
             size_x: cursor.read_f32()?,
             size_y: cursor.read_f32()?,
             pane_alpha: cursor.read_u8()?,
-            reserve0: cursor.read_u8()?,
-            reserve1: cursor.read_u8()?,
-        })
+        };
+        let _reserve0 = cursor.read_u16()?;
+
+        Ok(out)
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
@@ -698,8 +724,7 @@ impl PartsPaneBasicInfo {
         writer.write_f32(self.size_x);
         writer.write_f32(self.size_y);
         writer.write_u8(self.pane_alpha);
-        writer.write_u8(self.reserve0);
-        writer.write_u8(self.reserve1);
+        writer.write_u16(0);
 
         writer.align(4);
     }
@@ -1003,21 +1028,23 @@ pub struct BflytAlignmentPane {
     pub default_margin: f32,
     pub is_align_last_pane: bool,
     pub is_vertical_alignment: bool,
-    pub reserve0: u16,
 }
 
 impl BflytAlignmentPane {
     pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
         let base = BflytPane::parse(cursor)?;
 
-        Ok(Self {
+        let out = Self {
             base,
             direction: cursor.read_u32()?,
             default_margin: cursor.read_f32()?,
             is_align_last_pane: cursor.read_u8()? != 0,
             is_vertical_alignment: cursor.read_u8()? != 0,
-            reserve0: cursor.read_u16()?,
-        })
+        };
+
+        let _reserve0 = cursor.read_u16()?;
+
+        Ok(out)
     }
     pub fn serialize(&self, writer: &mut Writer) {
         self.base.serialize(writer);
@@ -1027,87 +1054,6 @@ impl BflytAlignmentPane {
         writer.write_f32(self.default_margin);
         writer.write_u8(self.is_align_last_pane.into());
         writer.write_u8(self.is_vertical_alignment.into());
-        writer.write_u16(self.reserve0);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BflytCapturePane {
-    pub base: BflytPane,
-    pub reserve0: [u32; 4],
-    pub clear_color: [f32; 4],
-    pub image_format: u16,
-    pub is_copy_framebuffer: bool,
-    pub is_create_resource: bool,
-    pub reserve1: u16,
-    pub reserve2: [u8; 3],
-    pub reserve3: [u8; 3],
-    pub scale: f32,
-}
-
-impl BflytCapturePane {
-    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
-        let base = BflytPane::parse(cursor)?;
-        let mut reserve0 = [0u32; 4];
-
-        for val in &mut reserve0 {
-            *val = cursor.read_u32()?;
-        }
-
-        let clear_color = [
-            cursor.read_f32()?,
-            cursor.read_f32()?,
-            cursor.read_f32()?,
-            cursor.read_f32()?,
-        ];
-
-        let image_format = cursor.read_u16()?;
-        let is_copy_framebuffer = cursor.read_u8()? != 0;
-        let is_create_resource = cursor.read_u8()? != 0;
-        let reserve1 = cursor.read_u16()?;
-        let reserve2 = [cursor.read_u8()?, cursor.read_u8()?, cursor.read_u8()?];
-        let reserve3 = [cursor.read_u8()?, cursor.read_u8()?, cursor.read_u8()?];
-        let scale = cursor.read_f32()?;
-
-        Ok(Self {
-            base,
-            reserve0,
-            clear_color,
-            image_format,
-            is_copy_framebuffer,
-            is_create_resource,
-            reserve1,
-            reserve2,
-            reserve3,
-            scale,
-        })
-    }
-
-    pub fn serialize(&self, writer: &mut Writer) {
-        self.base.serialize(writer);
-        writer.mark("CapturePane");
-
-        for v in &self.reserve0 {
-            writer.write_u32(*v);
-        }
-
-        for v in &self.clear_color {
-            writer.write_f32(*v);
-        }
-
-        writer.write_u16(self.image_format);
-        writer.write_u8(self.is_copy_framebuffer.into());
-        writer.write_u8(self.is_create_resource.into());
-        writer.write_u16(self.reserve1);
-
-        for v in &self.reserve2 {
-            writer.write_u8(*v);
-        }
-
-        for v in &self.reserve3 {
-            writer.write_u8(*v);
-        }
-
-        writer.write_f32(self.scale);
+        writer.write_u16(0);
     }
 }

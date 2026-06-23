@@ -7,14 +7,12 @@ use crate::{
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResUi2dUserDataSection {
-    pub reserve0: u16,
     pub user_data: Vec<ResUi2dUserData>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResUi2dUserData {
     pub data_type: Ui2dUserDataType,
-    pub reserve0: u8,
     pub data_array: Vec<ResUi2dUserDataInner>,
     pub o_name: String,
 }
@@ -30,23 +28,20 @@ pub enum ResUi2dUserDataInner {
 impl ResUi2dUserDataSection {
     pub fn parse(cursor: &mut Cursor, is_pane: bool) -> Result<Self, FormatError> {
         let user_data_count = cursor.read_u16()?;
-        let reserve0 = cursor.read_u16()?;
+        let _reserve0 = cursor.read_u16()?;
         let mut user_data = Vec::new();
 
         for _ in 0..user_data_count {
             user_data.push(ResUi2dUserData::parse(cursor, is_pane)?)
         }
 
-        Ok(Self {
-            reserve0,
-            user_data,
-        })
+        Ok(Self { user_data })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("UserData (section)");
         writer.write_u16(self.user_data.len() as u16);
-        writer.write_u16(self.reserve0);
+        writer.write_u16(0);
 
         let mut slots: Vec<(usize, usize, usize)> = Vec::new();
 
@@ -72,7 +67,7 @@ impl ResUi2dUserDataSection {
             }
 
             writer.write_u8(data_type_val);
-            writer.write_u8(data.reserve0);
+            writer.write_u8(0);
 
             slots.push((entry_base, name_ph, data_ph));
         }
@@ -153,9 +148,10 @@ impl ResUi2dUserData {
         let data_array_offset = cursor.read_u32()?;
         let data_count = cursor.read_u16()?;
 
+        let data_type = cursor.read_u8()?.into();
+        let _reserve0 = cursor.read_u8()?;
         let mut data = Self {
-            data_type: cursor.read_u8()?.into(),
-            reserve0: cursor.read_u8()?,
+            data_type,
             data_array: Vec::new(),
             o_name: String::new(),
         };

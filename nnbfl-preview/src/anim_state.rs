@@ -333,6 +333,16 @@ fn cascade_translate(view: &mut BflytView, pane_idx: usize, new_trans_x: f32, ne
         if let Some(tq) = view.textured_quads.iter_mut().find(|tq| tq.pane_idx == idx) {
             tq.x = sx;
             tq.y = sy;
+            // Shift all corners by the same delta, preserving rotation
+            let base_corners = view
+                .base_textured_quads
+                .iter()
+                .find(|btq| btq.pane_idx == idx)
+                .map(|btq| btq.corners)
+                .unwrap_or(tq.corners);
+            for (i, bc) in base_corners.iter().enumerate() {
+                tq.corners[i] = [bc[0] + dx, bc[1] + dy];
+            }
         }
     }
 }

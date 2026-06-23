@@ -52,16 +52,26 @@ impl BflytOrigins {
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct PaneFlags {
     pub is_visible: bool,
-    pub is_scale_child_alpha: bool,
-    pub reserve0: u8,
+    pub influenced_alpha: bool,
+    pub location_adjust: bool,
+    pub user_allocated: bool,
+    pub is_global_matrix_dirty: bool,
+    pub is_srt_matrix_user: bool,
+    pub is_global_matrix_user: bool,
+    pub is_constant_buffer_ready: bool,
 }
 
 impl PaneFlags {
     pub fn decode(raw: u8) -> Self {
         Self {
             is_visible: (raw & 0x01) != 0,
-            is_scale_child_alpha: ((raw >> 1) & 0x01) != 0,
-            reserve0: raw >> 2,
+            influenced_alpha: ((raw >> 1) & 0x01) != 0,
+            location_adjust: ((raw >> 2) & 0x01) != 0,
+            user_allocated: ((raw >> 3) & 0x01) != 0,
+            is_global_matrix_dirty: ((raw >> 4) & 0x01) != 0,
+            is_srt_matrix_user: ((raw >> 5) & 0x01) != 0,
+            is_global_matrix_user: ((raw >> 6) & 0x01) != 0,
+            is_constant_buffer_ready: ((raw >> 7) & 0x01) != 0,
         }
     }
 
@@ -69,14 +79,37 @@ impl PaneFlags {
         let mut raw = 0u8;
 
         if self.is_visible {
-            raw |= 0x01;
+            raw |= 0b1;
         }
 
-        if self.is_scale_child_alpha {
-            raw |= 0x02;
+        if self.influenced_alpha {
+            raw |= 0b10;
         }
 
-        raw |= (self.reserve0 << 2) & 0xFC;
+        if self.location_adjust {
+            raw |= 0b100;
+        }
+
+        if self.user_allocated {
+            raw |= 0b1000;
+        }
+
+        if self.is_global_matrix_dirty {
+            raw |= 0b10000;
+        }
+
+        if self.is_srt_matrix_user {
+            raw |= 0b100000;
+        }
+
+        if self.is_global_matrix_user {
+            raw |= 0b1000000;
+        }
+
+        if self.is_constant_buffer_ready {
+            raw |= 0b10000000;
+        }
+
         raw
     }
 }
@@ -118,7 +151,6 @@ impl PaneFlagsEx {
         raw
     }
 }
-
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct TextPaneFlags {
     pub is_enable_shadow: bool,
@@ -133,29 +165,29 @@ pub struct TextPaneFlags {
     pub is_mix_shadow_alpha: bool,
     pub is_reverse: bool,
     pub is_per_character_transform_origin_to_center: bool,
-    pub reserve0: bool,
-    pub reserve1: bool,
-    pub reserve2: u16,
+    pub is_keeping_font_scale: bool,
+    pub is_per_character_transform_fix_space: bool,
+    pub is_per_character_transform_split_insert_space: bool,
 }
 
 impl TextPaneFlags {
     pub fn decode(raw: u16) -> Self {
         Self {
-            is_enable_shadow: (raw & 0x01) != 0,
-            is_limit_glyph_count_to_length: ((raw >> 1) & 0x01) != 0,
-            is_invisible_border: ((raw >> 2) & 0x01) != 0,
-            is_double_border: ((raw >> 3) & 0x01) != 0,
-            is_per_character_transform: ((raw >> 4) & 0x01) != 0,
-            is_enable_center_ceiling: ((raw >> 5) & 0x01) != 0,
-            is_line_transform: ((raw >> 6) & 0x01) != 0,
-            is_default_tag_processor: ((raw >> 7) & 0x01) != 0,
-            is_per_character_transform_split_by_char_width: ((raw >> 8) & 0x01) != 0,
-            is_mix_shadow_alpha: ((raw >> 9) & 0x01) != 0,
-            is_reverse: ((raw >> 10) & 0x01) != 0,
-            is_per_character_transform_origin_to_center: ((raw >> 11) & 0x01) != 0,
-            reserve0: ((raw >> 12) & 0x01) != 0,
-            reserve1: ((raw >> 13) & 0x01) != 0,
-            reserve2: (raw >> 14),
+            is_enable_shadow: (raw & (1 << 0)) != 0,
+            is_limit_glyph_count_to_length: (raw & (1 << 1)) != 0,
+            is_invisible_border: (raw & (1 << 2)) != 0,
+            is_double_border: (raw & (1 << 3)) != 0,
+            is_per_character_transform: (raw & (1 << 4)) != 0,
+            is_enable_center_ceiling: (raw & (1 << 5)) != 0,
+            is_line_transform: (raw & (1 << 6)) != 0,
+            is_default_tag_processor: (raw & (1 << 7)) != 0,
+            is_per_character_transform_split_by_char_width: (raw & (1 << 8)) != 0,
+            is_mix_shadow_alpha: (raw & (1 << 9)) != 0,
+            is_reverse: (raw & (1 << 10)) != 0,
+            is_per_character_transform_origin_to_center: (raw & (1 << 11)) != 0,
+            is_keeping_font_scale: (raw & (1 << 12)) != 0,
+            is_per_character_transform_fix_space: (raw & (1 << 13)) != 0,
+            is_per_character_transform_split_insert_space: (raw & (1 << 14)) != 0,
         }
     }
 
@@ -210,15 +242,17 @@ impl TextPaneFlags {
             raw |= 1 << 11;
         }
 
-        if self.reserve0 {
+        if self.is_keeping_font_scale {
             raw |= 1 << 12;
         }
 
-        if self.reserve1 {
+        if self.is_per_character_transform_fix_space {
             raw |= 1 << 13;
         }
 
-        raw |= ((self.reserve2) & 0x03) << 14;
+        if self.is_per_character_transform_split_insert_space {
+            raw |= 1 << 14;
+        }
 
         raw
     }
@@ -281,6 +315,18 @@ pub enum TexWrapMode {
     Clamp,
     Repeat,
     Mirror,
+}
+
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive,
+)]
+#[repr(u8)]
+pub enum TexResourceType {
+    #[num_enum(default)]
+    LocalFile,
+    LocalCaptured,
+    OverrideCaptured,
+    LocalVectorGraphicsFile,
 }
 
 #[derive(

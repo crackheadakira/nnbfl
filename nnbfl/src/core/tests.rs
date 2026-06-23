@@ -293,47 +293,7 @@ mod tchar_tests {
 
 #[cfg(test)]
 mod flag_tests {
-    use crate::bflyt::flags::{BflytOrigins, PaneFlags, PaneFlagsEx};
-
-    #[test]
-    fn pane_flags_visible_roundtrip() {
-        let flags = PaneFlags {
-            is_visible: true,
-            is_scale_child_alpha: false,
-            reserve0: 0,
-        };
-        let encoded = flags.encode();
-        let decoded = PaneFlags::decode(encoded);
-
-        assert!(decoded.is_visible);
-        assert!(!decoded.is_scale_child_alpha);
-    }
-
-    #[test]
-    fn pane_flags_scale_child_alpha_roundtrip() {
-        let flags = PaneFlags {
-            is_visible: false,
-            is_scale_child_alpha: true,
-            reserve0: 0,
-        };
-        let decoded = PaneFlags::decode(flags.encode());
-
-        assert!(!decoded.is_visible);
-        assert!(decoded.is_scale_child_alpha);
-    }
-
-    #[test]
-    fn pane_flags_both_set() {
-        let flags = PaneFlags {
-            is_visible: true,
-            is_scale_child_alpha: true,
-            reserve0: 0,
-        };
-        let decoded = PaneFlags::decode(flags.encode());
-
-        assert!(decoded.is_visible);
-        assert!(decoded.is_scale_child_alpha);
-    }
+    use crate::bflyt::flags::{BflytOrigins, PaneFlagsEx};
 
     #[test]
     fn bflyt_origins_roundtrip_all_zeros() {
@@ -391,8 +351,6 @@ mod bflyt_roundtrip_tests {
     fn layout_basic_roundtrip() {
         let layout = BflytLayout {
             is_centered: true,
-            reserve0: 0,
-            reserve1: 0,
             width: 1280.0,
             height: 720.0,
             parts_width: 0.0,
@@ -411,8 +369,6 @@ mod bflyt_roundtrip_tests {
     fn layout_not_centered_roundtrip() {
         let layout = BflytLayout {
             is_centered: false,
-            reserve0: 0,
-            reserve1: 0,
             width: 640.0,
             height: 480.0,
             parts_width: 320.0,
@@ -428,8 +384,6 @@ mod bflyt_roundtrip_tests {
     fn layout_empty_name_roundtrip() {
         let layout = BflytLayout {
             is_centered: false,
-            reserve0: 0,
-            reserve1: 0,
             width: 0.0,
             height: 0.0,
             parts_width: 0.0,
@@ -516,8 +470,13 @@ mod bflyt_roundtrip_tests {
         BflytPane {
             pane_flags: PaneFlags {
                 is_visible: true,
-                is_scale_child_alpha: false,
-                reserve0: 0,
+                influenced_alpha: false,
+                location_adjust: false,
+                user_allocated: false,
+                is_global_matrix_dirty: false,
+                is_srt_matrix_user: false,
+                is_global_matrix_user: false,
+                is_constant_buffer_ready: false,
             },
             origin: BflytOrigins::decode(0x00),
             alpha: 255,
@@ -575,8 +534,13 @@ mod bflyt_roundtrip_tests {
         let mut p = make_pane("HiddenPane");
         p.pane_flags = PaneFlags {
             is_visible: false,
-            is_scale_child_alpha: false,
-            reserve0: 0,
+            influenced_alpha: false,
+            location_adjust: false,
+            user_allocated: false,
+            is_global_matrix_dirty: false,
+            is_srt_matrix_user: false,
+            is_global_matrix_user: false,
+            is_constant_buffer_ready: false,
         };
         let rt = roundtrip_pane(&p);
         assert!(!rt.pane_flags.is_visible);

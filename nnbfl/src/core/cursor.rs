@@ -37,6 +37,13 @@ impl<'a> Cursor<'a> {
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
+    pub fn read_u64(&mut self) -> Result<u64, FormatError> {
+        let b = self.read_bytes(8)?;
+        Ok(u64::from_le_bytes([
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+        ]))
+    }
+
     pub fn read_i16(&mut self) -> Result<i16, FormatError> {
         let b = self.read_bytes(2)?;
         Ok(i16::from_le_bytes([b[0], b[1]]))
@@ -107,7 +114,7 @@ impl<'a> Cursor<'a> {
         Ok(())
     }
 
-    pub fn seek_relative(&mut self, pos: usize) {
-        self.pos += pos;
+    pub fn seek_relative(&mut self, bytes: usize) {
+        self.pos += bytes;
     }
 }

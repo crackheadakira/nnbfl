@@ -8,8 +8,8 @@ use crate::{
             BflytMaterialList, BflytTextureList, BflytVectorGraphicsList,
         },
         pane::{
-            BflytAlignmentPane, BflytCapturePane, BflytPane, BflytPartsPane, BflytPicturePane,
-            BflytTextBoxPane, BflytWindowPane,
+            BflytAlignmentPane, BflytPane, BflytPartsPane, BflytPicturePane, BflytTextBoxPane,
+            BflytWindowPane,
         },
     },
     core::{Cursor, FormatError, ReadWriteable, SectionHeader, Writer, tchar_code32},
@@ -31,7 +31,7 @@ pub enum BflytSection {
     WindowPane(BflytWindowPane),
     PartsPane(BflytPartsPane),
     AlignmentPane(BflytAlignmentPane),
-    CapturePane(BflytCapturePane),
+    CapturePane(BflytPane),
     BoundingPane(BflytPane),
     ScissorPane(BflytPane),
     Group(BflytGroup),
@@ -119,7 +119,7 @@ impl BflytSection {
                 BflytSection::AlignmentPane(s)
             }
             MAGIC_CAPTUREPANE => {
-                let s = BflytCapturePane::parse(cursor)?;
+                let s = BflytPane::parse(cursor)?;
                 BflytSection::CapturePane(s)
             }
             MAGIC_BOUNDINGPANE => {

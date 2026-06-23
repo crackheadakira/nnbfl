@@ -113,6 +113,9 @@ pub struct TexturedQuad {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    /// World-space corner positions [TL, TR, BL, BR] after rotation.
+    pub corners: [[f32; 2]; 4],
+    pub rotate_z: f32,
 
     pub uvs: [[[f32; 2]; 3]; 4],
     pub base_uvs: [[[f32; 2]; 3]; 4],
@@ -371,35 +374,36 @@ impl TexturedQuadRenderer {
                 detailed_combiner_hash,
             };
 
-            let mut x0 = q.x;
-            let mut y0 = q.y;
-            let mut w = q.width;
-            let mut h = q.height;
+            let positions = {
+                let mut corners = q.corners;
+                let is_projection = (q.standard_material.tex_gen_mode & 0x3) != 0;
 
-            let is_projection = (q.standard_material.tex_gen_mode & 0x3) != 0;
+                if !is_projection {
+                    if let Some(gpu_tex) = texture_cache.get(&q.texture_name) {
+                        let pane_aspect = q.width / q.height;
+                        let texture_aspect = gpu_tex.width as f32 / gpu_tex.height as f32;
 
-            if !is_projection {
-                if let Some(gpu_tex) = texture_cache.get(&q.texture_name) {
-                    let pane_aspect = w / h;
-                    let texture_aspect = gpu_tex.width as f32 / gpu_tex.height as f32;
+                        let (local_dx, local_dy) = if texture_aspect > pane_aspect {
+                            let target_h = q.width / texture_aspect;
+                            (0.0f32, (q.height - target_h) * 0.5)
+                        } else {
+                            let target_w = q.height * texture_aspect;
+                            ((q.width - target_w) * 0.5, 0.0f32)
+                        };
 
-                    if texture_aspect > pane_aspect {
-                        let target_h = w / texture_aspect;
-                        let delta_y = h - target_h;
-                        h = target_h;
-                        y0 += delta_y * 0.5;
-                    } else {
-                        let target_w = h * texture_aspect;
-                        let delta_x = w - target_w;
-                        w = target_w;
-                        x0 += delta_x * 0.5;
+                        if local_dx != 0.0 || local_dy != 0.0 {
+                            let (sin_r, cos_r) = q.rotate_z.to_radians().sin_cos();
+                            let rdx = local_dx * cos_r - local_dy * sin_r;
+                            let rdy = local_dx * sin_r + local_dy * cos_r;
+                            for c in corners.iter_mut() {
+                                c[0] += rdx;
+                                c[1] += rdy;
+                            }
+                        }
                     }
                 }
-            }
-
-            let x1 = x0 + w;
-            let y1 = y0 + h;
-            let positions = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
+                corners
+            };
 
             let mut match_found = false;
             if let Some(last) = self.batches.last_mut()
@@ -965,34 +969,11 @@ impl TexturedQuadRenderer {
                     continue;
                 };
 
-                let stored_x0 = base_positions[0][0];
-                let stored_y0 = base_positions[0][1];
-                let stored_x1 = base_positions[3][0];
-                let stored_y1 = base_positions[3][1];
-                let stored_w = stored_x1 - stored_x0;
-                let stored_h = stored_y1 - stored_y0;
-
-                let (ax0, ay0) = {
-                    let mut x0 = tq.x;
-                    let mut y0 = tq.y;
-                    let w = tq.width;
-                    let h = tq.height;
-                    let pane_aspect = w / h;
-
-                    let tex_aspect = stored_w / stored_h;
-                    if tex_aspect > pane_aspect {
-                        let target_h = w / tex_aspect;
-                        y0 += (h - target_h) * 0.5;
-                    } else {
-                        let target_w = h * tex_aspect;
-                        x0 += (w - target_w) * 0.5;
-                    }
-
-                    (x0, y0)
-                };
-
-                let dx = ax0 - stored_x0;
-                let dy = ay0 - stored_y0;
+                // Translate base corners by the delta between current and base TL corner.
+                // This preserves any aspect-ratio correction baked into adjusted_positions
+                // while correctly moving all corners (including rotated ones) together.
+                let dx = tq.corners[0][0] - base_positions[0][0];
+                let dy = tq.corners[0][1] - base_positions[0][1];
 
                 let positions = [
                     [base_positions[0][0] + dx, base_positions[0][1] + dy],

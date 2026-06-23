@@ -9,8 +9,6 @@ use crate::{
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResUi2dSystemDataArray {
-    pub reserve0: u16,
-
     pub data_array: Vec<ResUi2dSystemDataInner>,
 }
 
@@ -18,7 +16,7 @@ impl ResUi2dSystemDataArray {
     pub fn parse(cursor: &mut Cursor, is_pane: bool) -> Result<Self, FormatError> {
         let base_offset = cursor.pos;
 
-        let reserve0 = cursor.read_u16()?;
+        let _reserve0 = cursor.read_u16()?;
         let count = cursor.read_u16()?;
         let offset = cursor.read_u32()?;
 
@@ -34,19 +32,17 @@ impl ResUi2dSystemDataArray {
             } else {
                 ResUi2dSystemDataInner::Layout(ResUi2dLayoutData::parse(cursor, post_header_point)?)
             };
+
             data_array.push(data);
         }
 
-        Ok(Self {
-            reserve0,
-            data_array,
-        })
+        Ok(Self { data_array })
     }
 
     pub fn serialize(&self, writer: &mut Writer) {
         writer.mark("Ui2dSystemDataArray");
 
-        writer.write_u16(self.reserve0);
+        writer.write_u16(0);
         writer.write_u16(self.data_array.len() as u16);
 
         let count = self.data_array.len();
@@ -290,14 +286,11 @@ pub struct ResUi2dSystemDataDropShadow {
     pub u_options: TexOptions,
     pub v_options: TexOptions,
     pub flags: DropShadowFlags,
-    pub reserve0: [u8; 3],
 
     pub max_size: u8,
     pub stroke_blend_mode: DropShadowBlendMode,
     pub outer_glow_blend_mode: DropShadowBlendMode,
     pub drop_shadow_blend_mode: DropShadowBlendMode,
-
-    pub reserve5: [u32; 4],
 
     pub stroke_size: f32,
     pub stroke_color: Color4f,
@@ -311,48 +304,66 @@ pub struct ResUi2dSystemDataDropShadow {
     pub drop_shadow_distance: f32,
     pub drop_shadow_spread: f32,
     pub drop_shadow_size: f32,
-
-    pub reserve15: u32,
-    pub reserve16: u32,
-    pub reserve17: u32,
-    pub reserve18: u32,
 }
 
 impl ResUi2dSystemDataDropShadow {
     pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let texture_id = cursor.read_u16()?;
+        let u_options = TexOptions::decode(cursor.read_u8()?);
+        let v_options = TexOptions::decode(cursor.read_u8()?);
+        let flags = DropShadowFlags::decode(cursor.read_u8()?);
+
+        cursor.read_u8()?;
+        cursor.read_u8()?;
+        cursor.read_u8()?;
+
+        let max_size = cursor.read_u8()?;
+        let stroke_blend_mode = cursor.read_u8()?.into();
+        let outer_glow_blend_mode = cursor.read_u8()?.into();
+        let drop_shadow_blend_mode = cursor.read_u8()?.into();
+
+        cursor.read_u32()?;
+        cursor.read_u32()?;
+        cursor.read_u32()?;
+        cursor.read_u32()?;
+
+        let stroke_size = cursor.read_f32()?;
+        let stroke_color = Color4f::parse(cursor)?;
+
+        let outer_glow_color = Color4f::parse(cursor)?;
+        let outer_glow_spread = cursor.read_f32()?;
+        let outer_glow_size = cursor.read_f32()?;
+
+        let drop_shadow_color = Color4f::parse(cursor)?;
+        let drop_shadow_angle = cursor.read_f32()?;
+        let drop_shadow_distance = cursor.read_f32()?;
+        let drop_shadow_spread = cursor.read_f32()?;
+        let drop_shadow_size = cursor.read_f32()?;
+
+        cursor.read_u32()?;
+        cursor.read_u32()?;
+        cursor.read_u32()?;
+        cursor.read_u32()?;
+
         Ok(Self {
-            texture_id: cursor.read_u16()?,
-            u_options: TexOptions::decode(cursor.read_u8()?),
-            v_options: TexOptions::decode(cursor.read_u8()?),
-            flags: DropShadowFlags::decode(cursor.read_u8()?),
-            reserve0: [cursor.read_u8()?, cursor.read_u8()?, cursor.read_u8()?],
-            max_size: cursor.read_u8()?,
-            stroke_blend_mode: cursor.read_u8()?.into(),
-            outer_glow_blend_mode: cursor.read_u8()?.into(),
-            drop_shadow_blend_mode: cursor.read_u8()?.into(),
-            reserve5: [
-                cursor.read_u32()?,
-                cursor.read_u32()?,
-                cursor.read_u32()?,
-                cursor.read_u32()?,
-            ],
-            stroke_size: cursor.read_f32()?,
-            stroke_color: Color4f::parse(cursor)?,
-
-            outer_glow_color: Color4f::parse(cursor)?,
-            outer_glow_spread: cursor.read_f32()?,
-            outer_glow_size: cursor.read_f32()?,
-
-            drop_shadow_color: Color4f::parse(cursor)?,
-            drop_shadow_angle: cursor.read_f32()?,
-            drop_shadow_distance: cursor.read_f32()?,
-            drop_shadow_spread: cursor.read_f32()?,
-            drop_shadow_size: cursor.read_f32()?,
-
-            reserve15: cursor.read_u32()?,
-            reserve16: cursor.read_u32()?,
-            reserve17: cursor.read_u32()?,
-            reserve18: cursor.read_u32()?,
+            texture_id,
+            u_options,
+            v_options,
+            flags,
+            max_size,
+            stroke_blend_mode,
+            outer_glow_blend_mode,
+            drop_shadow_blend_mode,
+            stroke_size,
+            stroke_color,
+            outer_glow_color,
+            outer_glow_spread,
+            outer_glow_size,
+            drop_shadow_color,
+            drop_shadow_angle,
+            drop_shadow_distance,
+            drop_shadow_spread,
+            drop_shadow_size,
         })
     }
 
@@ -363,18 +374,17 @@ impl ResUi2dSystemDataDropShadow {
         writer.write_u8(self.v_options.encode());
         writer.write_u8(self.flags.encode());
 
-        for &b in &self.reserve0 {
-            writer.write_u8(b);
-        }
+        writer.write_u8(0);
+        writer.write_u8(0);
+        writer.write_u8(0);
 
         writer.write_u8(self.max_size);
         writer.write_u8(self.stroke_blend_mode as u8);
         writer.write_u8(self.outer_glow_blend_mode as u8);
         writer.write_u8(self.drop_shadow_blend_mode as u8);
 
-        for &v in &self.reserve5 {
-            writer.write_u32(v);
-        }
+        writer.write_u64(0);
+        writer.write_u64(0);
 
         writer.write_f32(self.stroke_size);
         self.stroke_color.serialize(writer);
@@ -389,17 +399,14 @@ impl ResUi2dSystemDataDropShadow {
         writer.write_f32(self.drop_shadow_spread);
         writer.write_f32(self.drop_shadow_size);
 
-        writer.write_u32(self.reserve15);
-        writer.write_u32(self.reserve16);
-        writer.write_u32(self.reserve17);
-        writer.write_u32(self.reserve18);
+        writer.write_u64(0);
+        writer.write_u64(0);
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct ResUi2dSystemDataMaskTexture {
     pub flags: u8,
-    pub reserve0: [u8; 3],
     pub texture_id: u16,
     pub u_options: u8,
     pub v_options: u8,
@@ -408,7 +415,6 @@ pub struct ResUi2dSystemDataMaskTexture {
     pub capture_u_options: u8,
     pub capture_v_options: u8,
     pub is_use_capture_mask: bool,
-    pub reserve1: [u8; 3],
     pub translation: [f32; 2],
     pub rotation: f32,
     pub scale: [f32; 2],
@@ -416,21 +422,34 @@ pub struct ResUi2dSystemDataMaskTexture {
 
 impl ResUi2dSystemDataMaskTexture {
     pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let flags = cursor.read_u8()?;
+        let _reserve0 = [cursor.read_u8()?, cursor.read_u8()?, cursor.read_u8()?];
+        let texture_id = cursor.read_u16()?;
+        let u_options = cursor.read_u8()?;
+        let v_options = cursor.read_u8()?;
+        let tex_ext_flags = cursor.read_u32()?;
+        let capture_texture_id = cursor.read_u16()?;
+        let capture_u_options = cursor.read_u8()?;
+        let capture_v_options = cursor.read_u8()?;
+        let is_use_capture_mask = cursor.read_u8()? != 0;
+        let _reserve1 = [cursor.read_u8()?, cursor.read_u8()?, cursor.read_u8()?];
+        let translation = [cursor.read_f32()?, cursor.read_f32()?];
+        let rotation = cursor.read_f32()?;
+        let scale = [cursor.read_f32()?, cursor.read_f32()?];
+
         Ok(Self {
-            flags: cursor.read_u8()?,
-            reserve0: [cursor.read_u8()?, cursor.read_u8()?, cursor.read_u8()?],
-            texture_id: cursor.read_u16()?,
-            u_options: cursor.read_u8()?,
-            v_options: cursor.read_u8()?,
-            tex_ext_flags: cursor.read_u32()?,
-            capture_texture_id: cursor.read_u16()?,
-            capture_u_options: cursor.read_u8()?,
-            capture_v_options: cursor.read_u8()?,
-            is_use_capture_mask: cursor.read_u8()? != 0,
-            reserve1: [cursor.read_u8()?, cursor.read_u8()?, cursor.read_u8()?],
-            translation: [cursor.read_f32()?, cursor.read_f32()?],
-            rotation: cursor.read_f32()?,
-            scale: [cursor.read_f32()?, cursor.read_f32()?],
+            flags,
+            texture_id,
+            u_options,
+            v_options,
+            tex_ext_flags,
+            capture_texture_id,
+            capture_u_options,
+            capture_v_options,
+            is_use_capture_mask,
+            translation,
+            rotation,
+            scale,
         })
     }
 
@@ -439,9 +458,9 @@ impl ResUi2dSystemDataMaskTexture {
 
         writer.write_u8(self.flags);
 
-        for &b in &self.reserve0 {
-            writer.write_u8(b);
-        }
+        writer.write_u8(0);
+        writer.write_u8(0);
+        writer.write_u8(0);
 
         writer.write_u16(self.texture_id);
         writer.write_u8(self.u_options);
@@ -452,9 +471,9 @@ impl ResUi2dSystemDataMaskTexture {
         writer.write_u8(self.capture_v_options);
         writer.write_u8(self.is_use_capture_mask.into());
 
-        for &b in &self.reserve1 {
-            writer.write_u8(b);
-        }
+        writer.write_u8(0);
+        writer.write_u8(0);
+        writer.write_u8(0);
 
         for &f in &self.translation {
             writer.write_f32(f);
@@ -477,10 +496,12 @@ pub struct ResUi2dSystemDataProceduralShape {
     pub gradation_overlay_options: u8,
     pub drop_shadow_blend_mode: u8,
     pub drop_shadow_base_comp: u8,
-    pub reserve0: [u32; 4],
+
     pub rounded_corner0: [f32; 4],
     pub rounded_corner1: [f32; 4],
-    pub reserve1: f32,
+
+    pub inner_stroke_size: f32,
+
     pub color0: Color4f,
     pub inner_shadow_color: Color4f,
     pub inner_shadow_transform: [f32; 3],
@@ -490,64 +511,90 @@ pub struct ResUi2dSystemDataProceduralShape {
     pub gradation_rotation: f32,
     pub drop_shadow_color: Color4f,
     pub drop_shadow_transform: [f32; 3],
-    pub reserve2: [u32; 4],
 }
 
 impl ResUi2dSystemDataProceduralShape {
     pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let options = cursor.read_u8()?;
+        let color0_options = cursor.read_u8()?;
+        let inner_shadow_options = cursor.read_u8()?;
+        let inner_shadow_base_comp = cursor.read_u8()?;
+        let color_overlay_options = cursor.read_u8()?;
+        let gradation_overlay_options = cursor.read_u8()?;
+        let drop_shadow_blend_mode = cursor.read_u8()?;
+        let drop_shadow_base_comp = cursor.read_u8()?;
+
+        cursor.read_u32()?;
+        cursor.read_u32()?;
+        cursor.read_u32()?;
+        cursor.read_u32()?;
+
+        let rounded_corner0 = [
+            cursor.read_f32()?,
+            cursor.read_f32()?,
+            cursor.read_f32()?,
+            cursor.read_f32()?,
+        ];
+
+        let rounded_corner1 = [
+            cursor.read_f32()?,
+            cursor.read_f32()?,
+            cursor.read_f32()?,
+            cursor.read_f32()?,
+        ];
+
+        let inner_stroke_size = cursor.read_f32()?;
+
+        let color0 = Color4f::parse(cursor)?;
+        let inner_shadow_color = Color4f::parse(cursor)?;
+        let inner_shadow_transform = [cursor.read_f32()?, cursor.read_f32()?, cursor.read_f32()?];
+        let color_overlay = Color4f::parse(cursor)?;
+
+        let gradation_weights = [
+            cursor.read_f32()?,
+            cursor.read_f32()?,
+            cursor.read_f32()?,
+            cursor.read_f32()?,
+        ];
+
+        let gradation_color_array = [
+            Color4f::parse(cursor)?,
+            Color4f::parse(cursor)?,
+            Color4f::parse(cursor)?,
+            Color4f::parse(cursor)?,
+        ];
+
+        let gradation_rotation = cursor.read_f32()?;
+
+        let drop_shadow_color = Color4f::parse(cursor)?;
+        let drop_shadow_transform = [cursor.read_f32()?, cursor.read_f32()?, cursor.read_f32()?];
+
+        cursor.read_u32()?;
+        cursor.read_u32()?;
+        cursor.read_u32()?;
+        cursor.read_u32()?;
+
         Ok(Self {
-            options: cursor.read_u8()?,
-            color0_options: cursor.read_u8()?,
-            inner_shadow_options: cursor.read_u8()?,
-            inner_shadow_base_comp: cursor.read_u8()?,
-            color_overlay_options: cursor.read_u8()?,
-            gradation_overlay_options: cursor.read_u8()?,
-            drop_shadow_blend_mode: cursor.read_u8()?,
-            drop_shadow_base_comp: cursor.read_u8()?,
-            reserve0: [
-                cursor.read_u32()?,
-                cursor.read_u32()?,
-                cursor.read_u32()?,
-                cursor.read_u32()?,
-            ],
-            rounded_corner0: [
-                cursor.read_f32()?,
-                cursor.read_f32()?,
-                cursor.read_f32()?,
-                cursor.read_f32()?,
-            ],
-            rounded_corner1: [
-                cursor.read_f32()?,
-                cursor.read_f32()?,
-                cursor.read_f32()?,
-                cursor.read_f32()?,
-            ],
-            reserve1: cursor.read_f32()?,
-            color0: Color4f::parse(cursor)?,
-            inner_shadow_color: Color4f::parse(cursor)?,
-            inner_shadow_transform: [cursor.read_f32()?, cursor.read_f32()?, cursor.read_f32()?],
-            color_overlay: Color4f::parse(cursor)?,
-            gradation_weights: [
-                cursor.read_f32()?,
-                cursor.read_f32()?,
-                cursor.read_f32()?,
-                cursor.read_f32()?,
-            ],
-            gradation_color_array: [
-                Color4f::parse(cursor)?,
-                Color4f::parse(cursor)?,
-                Color4f::parse(cursor)?,
-                Color4f::parse(cursor)?,
-            ],
-            gradation_rotation: cursor.read_f32()?,
-            drop_shadow_color: Color4f::parse(cursor)?,
-            drop_shadow_transform: [cursor.read_f32()?, cursor.read_f32()?, cursor.read_f32()?],
-            reserve2: [
-                cursor.read_u32()?,
-                cursor.read_u32()?,
-                cursor.read_u32()?,
-                cursor.read_u32()?,
-            ],
+            options,
+            color0_options,
+            inner_shadow_options,
+            inner_shadow_base_comp,
+            color_overlay_options,
+            gradation_overlay_options,
+            drop_shadow_blend_mode,
+            drop_shadow_base_comp,
+            rounded_corner0,
+            rounded_corner1,
+            inner_stroke_size,
+            color0,
+            inner_shadow_color,
+            inner_shadow_transform,
+            color_overlay,
+            gradation_weights,
+            gradation_color_array,
+            gradation_rotation,
+            drop_shadow_color,
+            drop_shadow_transform,
         })
     }
 
@@ -562,9 +609,8 @@ impl ResUi2dSystemDataProceduralShape {
         writer.write_u8(self.drop_shadow_blend_mode);
         writer.write_u8(self.drop_shadow_base_comp);
 
-        for &b in &self.reserve0 {
-            writer.write_u32(b);
-        }
+        writer.write_u64(0);
+        writer.write_u64(0);
 
         for &f in &self.rounded_corner0 {
             writer.write_f32(f);
@@ -574,7 +620,7 @@ impl ResUi2dSystemDataProceduralShape {
             writer.write_f32(f);
         }
 
-        writer.write_f32(self.reserve1);
+        writer.write_f32(self.inner_stroke_size);
 
         self.color0.serialize(writer);
         self.inner_shadow_color.serialize(writer);
@@ -600,8 +646,7 @@ impl ResUi2dSystemDataProceduralShape {
             writer.write_f32(f);
         }
 
-        for &v in &self.reserve2 {
-            writer.write_u32(v);
-        }
+        writer.write_u64(0);
+        writer.write_u64(0);
     }
 }

@@ -23,11 +23,19 @@ impl Writer {
         self.buffer.push(val);
     }
 
+    pub fn write_i16(&mut self, val: i16) {
+        self.buffer.extend_from_slice(&val.to_le_bytes());
+    }
+
     pub fn write_u16(&mut self, val: u16) {
         self.buffer.extend_from_slice(&val.to_le_bytes());
     }
 
     pub fn write_u32(&mut self, val: u32) {
+        self.buffer.extend_from_slice(&val.to_le_bytes());
+    }
+
+    pub fn write_u64(&mut self, val: u64) {
         self.buffer.extend_from_slice(&val.to_le_bytes());
     }
 

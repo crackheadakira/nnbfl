@@ -12,8 +12,6 @@ pub struct ResBflanPaneAnimTag {
     pub start_frame: u16,
     pub end_frame: u16,
     pub is_descending_bind: bool,
-    pub reserve0: u8,
-    pub reserve1: u16,
 
     pub o_name: String,
     pub groups: Vec<ResBflanGroup>,
@@ -32,8 +30,8 @@ impl ResBflanPaneAnimTag {
         let start_frame = cursor.read_u16()?;
         let end_frame = cursor.read_u16()?;
         let is_descending_bind = cursor.read_u8()? != 0;
-        let reserve0 = cursor.read_u8()?;
-        let reserve1 = cursor.read_u16()?;
+        let _reserve0 = cursor.read_u8()?;
+        let _reserve1 = cursor.read_u16()?;
 
         let mut o_name = String::new();
         let mut groups = Vec::new();
@@ -47,11 +45,10 @@ impl ResBflanPaneAnimTag {
         if group_count > 0 && group_array_offset > 0 {
             cursor.seek(section_start + group_array_offset as usize)?;
             for _ in 0..group_count {
-                groups.push(ResBflanGroup {
-                    group_name: cursor.read_fixed_string(0x21)?,
-                    flag: cursor.read_u8()?,
-                    reserve0: cursor.read_u16()?,
-                });
+                let group_name = cursor.read_fixed_string(0x21)?;
+                let flag = cursor.read_u8()?;
+                let _reserve0 = cursor.read_u16()?;
+                groups.push(ResBflanGroup { group_name, flag });
             }
         }
 
@@ -71,8 +68,6 @@ impl ResBflanPaneAnimTag {
             start_frame,
             end_frame,
             is_descending_bind,
-            reserve0,
-            reserve1,
             o_name,
             groups,
             user_data,
@@ -91,8 +86,8 @@ impl ResBflanPaneAnimTag {
         writer.write_u16(self.start_frame);
         writer.write_u16(self.end_frame);
         writer.write_u8(self.is_descending_bind.into());
-        writer.write_u8(self.reserve0);
-        writer.write_u16(self.reserve1);
+        writer.write_u8(0);
+        writer.write_u16(0);
 
         writer.patch_u32(name_offset_pos, (writer.pos() - section_start) as u32);
         writer.write_null_terminated_string(&self.o_name);
@@ -102,7 +97,7 @@ impl ResBflanPaneAnimTag {
         for group in &self.groups {
             writer.write_fixed_string(&group.group_name, 0x21);
             writer.write_u8(group.flag);
-            writer.write_u16(group.reserve0);
+            writer.write_u16(0);
         }
 
         if let Some(user_data) = &self.user_data {
@@ -125,5 +120,4 @@ impl ResBflanPaneAnimTag {
 pub struct ResBflanGroup {
     pub group_name: String,
     pub flag: u8,
-    pub reserve0: u16,
 }
