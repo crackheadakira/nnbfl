@@ -5,7 +5,7 @@ use nnbfl::{
         file::{Bflyt, BflytNode, BflytSection},
         flags::{BflytOrigin, BflytParentOrigin, TexFilter, TexWrapMode},
         list::{BflytMaterialList, MaterialColorEntry, TexGenSrc},
-        pane::{BflytPane, Color4u8},
+        pane::{BflytPane, BflytPicturePane, Color4u8},
     },
     core::ReadWriteable,
 };
@@ -418,8 +418,8 @@ impl<'a> Walker<'a> {
 
     fn make_textured_quad(
         &self,
-        mat_list: &nnbfl::bflyt::list::BflytMaterialList,
-        pic: &nnbfl::bflyt::pane::BflytPicturePane,
+        mat_list: &BflytMaterialList,
+        pic: &BflytPicturePane,
         x: f32,
         y: f32,
         w: f32,
@@ -488,15 +488,18 @@ impl<'a> Walker<'a> {
             TexWrapMode::Mirror => wgpu::AddressMode::MirrorRepeat,
             TexWrapMode::Clamp => wgpu::AddressMode::ClampToEdge,
         };
+
         let address_mode_v = match tex_map.v_options.wrap_mode {
             TexWrapMode::Repeat => wgpu::AddressMode::Repeat,
             TexWrapMode::Mirror => wgpu::AddressMode::MirrorRepeat,
             TexWrapMode::Clamp => wgpu::AddressMode::ClampToEdge,
         };
+
         let min_filter = match tex_map.u_options.filter {
             TexFilter::Linear => wgpu::FilterMode::Linear,
             TexFilter::Near => wgpu::FilterMode::Nearest,
         };
+
         let mag_filter = match tex_map.v_options.filter {
             TexFilter::Linear => wgpu::FilterMode::Linear,
             TexFilter::Near => wgpu::FilterMode::Nearest,
@@ -507,6 +510,7 @@ impl<'a> Walker<'a> {
             TexWrapMode::Mirror => wgpu::AddressMode::MirrorRepeat,
             TexWrapMode::Clamp => wgpu::AddressMode::ClampToEdge,
         };
+
         let filter_to_mode = |f: &TexFilter| match f {
             TexFilter::Linear => wgpu::FilterMode::Linear,
             TexFilter::Near => wgpu::FilterMode::Nearest,
@@ -518,12 +522,15 @@ impl<'a> Walker<'a> {
         let address_mode_u1 = tex_map1
             .map(|m| wrap_to_address(&m.u_options.wrap_mode))
             .unwrap_or(wgpu::AddressMode::ClampToEdge);
+
         let address_mode_v1 = tex_map1
             .map(|m| wrap_to_address(&m.v_options.wrap_mode))
             .unwrap_or(wgpu::AddressMode::ClampToEdge);
+
         let min_filter1 = tex_map1
             .map(|m| filter_to_mode(&m.u_options.filter))
             .unwrap_or(wgpu::FilterMode::Linear);
+
         let mag_filter1 = tex_map1
             .map(|m| filter_to_mode(&m.v_options.filter))
             .unwrap_or(wgpu::FilterMode::Linear);
@@ -531,12 +538,15 @@ impl<'a> Walker<'a> {
         let address_mode_u2 = tex_map2
             .map(|m| wrap_to_address(&m.u_options.wrap_mode))
             .unwrap_or(wgpu::AddressMode::ClampToEdge);
+
         let address_mode_v2 = tex_map2
             .map(|m| wrap_to_address(&m.v_options.wrap_mode))
             .unwrap_or(wgpu::AddressMode::ClampToEdge);
+
         let min_filter2 = tex_map2
             .map(|m| filter_to_mode(&m.u_options.filter))
             .unwrap_or(wgpu::FilterMode::Linear);
+
         let mag_filter2 = tex_map2
             .map(|m| filter_to_mode(&m.v_options.filter))
             .unwrap_or(wgpu::FilterMode::Linear);
@@ -570,8 +580,39 @@ impl<'a> Walker<'a> {
             };
         }
 
+        let mut proj_scales = [[1.0f32; 2]; 3];
+        let mut proj_translations = [[0.0f32; 2]; 3];
+
+        let mut target_layer = 0;
+        for tex_gen in mat.projection_tex_gens.iter().take(texture_count as usize) {
+            while target_layer < 3 && tex_gen_flags[target_layer] != 1 {
+                target_layer += 1;
+            }
+
+            if target_layer >= 3 {
+                break;
+            }
+
+            proj_scales[target_layer] = [tex_gen.scale.x, tex_gen.scale.y];
+            proj_translations[target_layer] = [tex_gen.translation.x, tex_gen.translation.y];
+
+            if tex_gen.flags.fitting_layout_size {
+                tex_gen_flags[target_layer] |= 1 << 2;
+            }
+
+            if tex_gen.flags.fitting_pane_size {
+                tex_gen_flags[target_layer] |= 1 << 3;
+            }
+
+            if tex_gen.flags.adjust_projection_scale_rotate {
+                tex_gen_flags[target_layer] |= 1 << 4;
+            }
+
+            target_layer += 1;
+        }
+
         let tex_gen_mode_packed =
-            tex_gen_flags[0] | (tex_gen_flags[1] << 4) | (tex_gen_flags[2] << 8);
+            tex_gen_flags[0] | (tex_gen_flags[1] << 8) | (tex_gen_flags[2] << 16);
 
         let color_f32 = |entry: &MaterialColorEntry| -> [f32; 4] {
             if let Some(c) = &entry.color_u8 {
@@ -710,6 +751,8 @@ impl<'a> Walker<'a> {
             is_detailed,
             pane_idx,
             tex_srts: mat.tex_srts.clone(),
+            proj_scales,
+            proj_translations,
         })
     }
 

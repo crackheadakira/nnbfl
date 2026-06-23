@@ -625,6 +625,49 @@ fn draw_material_list(ui: &mut Ui, list: &BflytMaterialList) {
                         });
 
                         egui::CollapsingHeader::new(format!(
+                            "Projection Tex Gens ({})",
+                            material.projection_tex_gens.len()
+                        ))
+                        .id_salt("proj_gen")
+                        .show(ui, |ui| {
+                            draw_vec_grid(
+                                ui,
+                                "proj_gen_grid",
+                                &material.projection_tex_gens,
+                                |ui, i, proj_gen| {
+                                    draw_prop(
+                                        ui,
+                                        &format!("[{i}] Adjust Projection Scale Rotate"),
+                                        proj_gen.flags.adjust_projection_scale_rotate,
+                                    );
+
+                                    draw_prop(
+                                        ui,
+                                        &format!("[{i}] Fitting Layout Size"),
+                                        proj_gen.flags.fitting_layout_size,
+                                    );
+
+                                    draw_prop(
+                                        ui,
+                                        &format!("[{i}] Fitting Pane Size"),
+                                        proj_gen.flags.fitting_pane_size,
+                                    );
+
+                                    draw_vector_2f(
+                                        ui,
+                                        &format!("[{i}] Translation"),
+                                        proj_gen.scale,
+                                    );
+                                    draw_vector_2f(
+                                        ui,
+                                        &format!("[{i}] Scale"),
+                                        proj_gen.translation,
+                                    );
+                                },
+                            );
+                        });
+
+                        egui::CollapsingHeader::new(format!(
                             "Texture Environment Combiners ({})",
                             material.tev_combiners.len()
                         ))

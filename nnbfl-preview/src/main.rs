@@ -100,6 +100,8 @@ impl GpuState {
         let mut quad_renderer = QuadRenderer::new(&device, surface_format);
         quad_renderer.upload_quads(&device, &[]);
 
+        let texture_cache = TextureCache::new();
+
         let egui_renderer =
             egui_wgpu::Renderer::new(&device, surface_format, RendererOptions::default());
         let textured_quad_renderer = None; // created after textures load
@@ -111,7 +113,7 @@ impl GpuState {
             config,
             quad_renderer,
             textured_quad_renderer,
-            texture_cache: TextureCache::new(),
+            texture_cache,
             egui_renderer,
         }
     }
@@ -226,6 +228,14 @@ impl GpuState {
                     &self.queue,
                     &bflyt_view.textured_quads,
                     &ui_state.hidden_panes,
+                );
+
+                tqr.recompute_proj_mtx(
+                    &self.queue,
+                    &bflyt_view.textured_quads,
+                    &self.texture_cache,
+                    bflyt_view.layout_width,
+                    bflyt_view.layout_height,
                 );
 
                 tqr.update_texture_pattern(
@@ -407,7 +417,13 @@ impl App {
 
             let mut tgr = TexturedQuadRenderer::new(&gpu.device, gpu.config.format);
 
-            tgr.upload_quads(&gpu.device, &view.textured_quads, &gpu.texture_cache);
+            tgr.upload_quads(
+                &gpu.device,
+                &view.textured_quads,
+                &gpu.texture_cache,
+                view.layout_width,
+                view.layout_height,
+            );
             gpu.textured_quad_renderer = Some(tgr);
 
             if let Some(window) = &self.window {

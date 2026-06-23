@@ -479,30 +479,52 @@ impl MaterialIndirectMatrix {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct MaterialProjectionTexGenFlags {
+    pub fitting_layout_size: bool,
+    pub fitting_pane_size: bool,
+    pub adjust_projection_scale_rotate: bool,
+}
+
+impl MaterialProjectionTexGenFlags {
+    pub fn decode(raw: u32) -> Self {
+        Self {
+            fitting_layout_size: (raw & 0x1) != 0,
+            fitting_pane_size: ((raw >> 1) & 0x1) != 0,
+            adjust_projection_scale_rotate: ((raw >> 2) & 0x1) != 0,
+        }
+    }
+
+    pub fn encode(&self) -> u32 {
+        (self.fitting_layout_size as u32)
+            | ((self.fitting_pane_size as u32) << 1)
+            | ((self.adjust_projection_scale_rotate as u32) << 2)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialProjectionTexGen {
-    pub translation: [f32; 2],
-    pub scale: [f32; 2],
-    pub rotation: f32,
+    pub translation: Vector2f,
+    pub scale: Vector2f,
+    pub flags: MaterialProjectionTexGenFlags,
 }
 
 impl MaterialProjectionTexGen {
     fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
-        Ok(Self {
-            translation: [c.read_f32()?, c.read_f32()?],
-            scale: [c.read_f32()?, c.read_f32()?],
-            rotation: c.read_f32()?,
-        })
+        let s = Self {
+            translation: Vector2f::parse(c)?,
+            scale: Vector2f::parse(c)?,
+            flags: MaterialProjectionTexGenFlags::decode(c.read_u32()?),
+        };
+
+        Ok(s)
     }
 
     fn serialize(&self, w: &mut Writer) {
-        for v in &self.translation {
-            w.write_f32(*v);
-        }
-        for v in &self.scale {
-            w.write_f32(*v);
-        }
-        w.write_f32(self.rotation);
+        self.translation.serialize(w);
+        self.scale.serialize(w);
+
+        w.write_u32(self.flags.encode());
     }
 }
 

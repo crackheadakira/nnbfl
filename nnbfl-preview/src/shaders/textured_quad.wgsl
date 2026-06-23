@@ -16,17 +16,21 @@ struct VertexOutput {
 }
 
 struct StandardMaterial {
-    interpolate_width: vec4<f32>,
-    interpolate_offset:vec4<f32>,
-    combine_mode: u32,
+    interpolate_width:  vec4<f32>,
+    interpolate_offset: vec4<f32>,
+    combine_mode:  u32,
     combine_mode2: u32,
 
     texture_count: u32,
-    alpha_select: u32,
-    tex_gen_mode: u32,
-    visible: u32,
+    alpha_select:  u32,
+    tex_gen_mode:  u32,
+    visible:       u32,
+
     indirect_mtx0: vec4<f32>,
     indirect_mtx1: vec4<f32>,
+    proj_mtx0:     array<vec4<f32>, 2>,
+    proj_mtx1:     array<vec4<f32>, 2>,
+    proj_mtx2:     array<vec4<f32>, 2>,
 }
 
 //   stage_bits[6]
@@ -460,38 +464,37 @@ fn sample_textures(count: u32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, p
 {
     var t = array<vec4<f32>, 3>(vec4<f32>(1.0), vec4<f32>(1.0), vec4<f32>(1.0));
 
-    let gen0 = mat.tex_gen_mode & 0xFu;
-    let gen1 = (mat.tex_gen_mode >> 4u) & 0xFu;
-    let gen2 = (mat.tex_gen_mode >> 8u) & 0xFu;
+    let byte0 = mat.tex_gen_mode & 0xFFu;
+    let byte1 = (mat.tex_gen_mode >> 8u) & 0xFFu;
+    let byte2 = (mat.tex_gen_mode >> 16u) & 0xFFu;
 
-    if count > 0u { 
+    let pos4 = vec4<f32>(pos_mesh, 0.0, 1.0);
+
+    if count > 0u {
         var uv = uv0;
-        if (gen0 & 1u) != 0u { 
-            let pos_4d = vec4<f32>(pos_mesh, 0.0, 1.0);
-            uv = vec2<f32>(dot(pos_4d, mat.indirect_mtx0), dot(pos_4d, mat.indirect_mtx1));
+        if (byte0 & 0x3u) != 0u {
+            uv = vec2<f32>(dot(pos4, mat.proj_mtx0[0]), dot(pos4, mat.proj_mtx0[1]));
         }
 
-        t[0] = textureSample(t_texture0, s_sampler0, uv); 
+        t[0] = textureSample(t_texture0, s_sampler0, uv);
     }
-    
-    if count > 1u { 
+
+    if count > 1u {
         var uv = uv1;
-        if (gen1 & 1u) != 0u { 
-            let pos_4d = vec4<f32>(pos_mesh, 0.0, 1.0);
-            uv = vec2<f32>(dot(pos_4d, mat.indirect_mtx0), dot(pos_4d, mat.indirect_mtx1));
+        if (byte1 & 0x3u) != 0u {
+            uv = vec2<f32>(dot(pos4, mat.proj_mtx1[0]), dot(pos4, mat.proj_mtx1[1]));
         }
 
-        t[1] = textureSample(t_texture1, s_sampler1, uv); 
+        t[1] = textureSample(t_texture1, s_sampler1, uv);
     }
 
-    if count > 2u { 
+    if count > 2u {
         var uv = uv2;
-        if (gen2 & 1u) != 0u { 
-            let pos_4d = vec4<f32>(pos_mesh, 0.0, 1.0);
-            uv = vec2<f32>(dot(pos_4d, mat.indirect_mtx0), dot(pos_4d, mat.indirect_mtx1));
+        if (byte2 & 0x3u) != 0u {
+            uv = vec2<f32>(dot(pos4, mat.proj_mtx2[0]), dot(pos4, mat.proj_mtx2[1]));
         }
 
-        t[2] = textureSample(t_texture2, s_sampler2, uv); 
+        t[2] = textureSample(t_texture2, s_sampler2, uv);
     }
 
     return t;

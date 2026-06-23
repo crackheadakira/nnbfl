@@ -50,6 +50,10 @@ pub struct StandardMaterial {
 
     pub indirect_mtx0: [f32; 4],
     pub indirect_mtx1: [f32; 4],
+
+    pub proj_mtx0: [[f32; 4]; 2],
+    pub proj_mtx1: [[f32; 4]; 2],
+    pub proj_mtx2: [[f32; 4]; 2],
 }
 
 impl Default for StandardMaterial {
@@ -66,6 +70,9 @@ impl Default for StandardMaterial {
             _pad0: [0; 2],
             indirect_mtx0: [0.0; 4],
             indirect_mtx1: [0.0; 4],
+            proj_mtx0: [[1.0, 0.0, 0.0, 0.5], [0.0, 1.0, 0.0, 0.5]],
+            proj_mtx1: [[1.0, 0.0, 0.0, 0.5], [0.0, 1.0, 0.0, 0.5]],
+            proj_mtx2: [[1.0, 0.0, 0.0, 0.5], [0.0, 1.0, 0.0, 0.5]],
         }
     }
 }
@@ -132,6 +139,9 @@ pub struct TexturedQuad {
     pub is_detailed: bool,
     pub standard_material: StandardMaterial,
     pub detailed_combiner_material: DetailedCombinerMaterial,
+
+    pub proj_scales: [[f32; 2]; 3],
+    pub proj_translations: [[f32; 2]; 3],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -328,6 +338,8 @@ impl TexturedQuadRenderer {
         device: &wgpu::Device,
         quads: &[TexturedQuad],
         texture_cache: &TextureCache,
+        layout_w: f32,
+        layout_h: f32,
     ) {
         self.batches.clear();
 
@@ -362,23 +374,24 @@ impl TexturedQuadRenderer {
             let mut w = q.width;
             let mut h = q.height;
 
-            if let Some(gpu_tex) = texture_cache.get(&q.texture_name) {
-                let pane_aspect = w / h;
-                let texture_aspect = gpu_tex.width as f32 / gpu_tex.height as f32;
+            let is_projection = (q.standard_material.tex_gen_mode & 0x3) != 0;
 
-                // it seems to be aspect-ratio locked?
-                if texture_aspect > pane_aspect {
-                    let target_h = w / texture_aspect;
-                    let delta_y = h - target_h;
-                    h = target_h;
+            if !is_projection {
+                if let Some(gpu_tex) = texture_cache.get(&q.texture_name) {
+                    let pane_aspect = w / h;
+                    let texture_aspect = gpu_tex.width as f32 / gpu_tex.height as f32;
 
-                    y0 += delta_y * 0.5;
-                } else {
-                    let target_w = h * texture_aspect;
-                    let delta_x = w - target_w;
-                    w = target_w;
-
-                    x0 += delta_x * 0.5;
+                    if texture_aspect > pane_aspect {
+                        let target_h = w / texture_aspect;
+                        let delta_y = h - target_h;
+                        h = target_h;
+                        y0 += delta_y * 0.5;
+                    } else {
+                        let target_w = h * texture_aspect;
+                        let delta_x = w - target_w;
+                        w = target_w;
+                        x0 += delta_x * 0.5;
+                    }
                 }
             }
 
@@ -456,9 +469,88 @@ impl TexturedQuadRenderer {
 
             let gpu_tex0 = texture_cache.get(&batch.key.texture_name).unwrap();
 
+            let pane_cx = rep_quad.x + rep_quad.width * 0.5;
+            let pane_cy = rep_quad.y + rep_quad.height * 0.5;
+
+            let make_proj = |tex_name: &str, layer_idx: usize| -> [[f32; 4]; 2] {
+                let shift = layer_idx * 8;
+                let packed = rep_quad.standard_material.tex_gen_mode >> shift;
+                let mode = packed & 0x3;
+
+                if mode != 1 {
+                    return [[1.0, 0.0, 0.0, 0.5], [0.0, 1.0, 0.0, 0.5]];
+                }
+
+                let fitting_layout_size = (packed & (1 << 2)) != 0;
+                let fitting_pane_size = (packed & (1 << 3)) != 0;
+                let adjust_sr = (packed & (1 << 4)) != 0;
+
+                let (base_w, base_h) = if fitting_layout_size {
+                    (layout_w, layout_h)
+                } else if fitting_pane_size {
+                    (rep_quad.width, rep_quad.height)
+                } else if adjust_sr {
+                    (rep_quad.width, rep_quad.height)
+                } else if let Some(t) = texture_cache.get(tex_name) {
+                    (t.width as f32, t.height as f32)
+                } else {
+                    (rep_quad.width, rep_quad.height)
+                };
+
+                if adjust_sr {
+                    let sx = rep_quad.proj_scales[layer_idx][0];
+                    let sy = rep_quad.proj_scales[layer_idx][1];
+                    let tx = rep_quad.proj_translations[layer_idx][0];
+                    let ty = rep_quad.proj_translations[layer_idx][1];
+
+                    // Since pos_mesh is already 0.0 to 1.0, scale_s controls the tiling directly.
+                    let scale_s = 1.0 / sx;
+                    let scale_t = 1.0 / sy;
+
+                    // Translation offsets also need to be normalized relative to the texture scale
+                    let trans_s = -tx * scale_s;
+                    let trans_t = -ty * scale_t;
+
+                    let row0 = [scale_s, 0.0, 0.0, trans_s];
+                    let row1 = [0.0, scale_t, 0.0, trans_t];
+
+                    println!("Row 0: {:?}", row0);
+                    println!("Row 1: {:?}", row1);
+                    println!(
+                        "pos_mesh values look like: x={}, y={}, w={}, h={}",
+                        rep_quad.x, rep_quad.y, rep_quad.width, rep_quad.height
+                    );
+
+                    [row0, row1]
+                } else {
+                    [
+                        [1.0 / base_w, 0.0, 0.0, 0.5 - pane_cx / base_w],
+                        [0.0, -1.0 / base_h, 0.0, 0.5 + pane_cy / base_h],
+                    ]
+                }
+            };
+
+            let mut final_mat = rep_quad.standard_material;
+            final_mat.proj_mtx0 = make_proj(&rep_quad.texture_name, 0);
+            final_mat.proj_mtx1 = make_proj(
+                rep_quad
+                    .texture_name1
+                    .as_deref()
+                    .unwrap_or(&rep_quad.texture_name),
+                1,
+            );
+
+            final_mat.proj_mtx2 = make_proj(
+                rep_quad
+                    .texture_name2
+                    .as_deref()
+                    .unwrap_or(&rep_quad.texture_name),
+                2,
+            );
+
             let mat_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("tq_standard_mat_buf"),
-                contents: bytemuck::bytes_of(&rep_quad.standard_material),
+                contents: bytemuck::bytes_of(&final_mat),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
 
@@ -606,6 +698,7 @@ impl TexturedQuadRenderer {
                 if is_hidden {
                     mat.visible = 0;
                 }
+
                 queue.write_buffer(mb, 0, bytemuck::bytes_of(&mat));
             }
 
@@ -692,14 +785,12 @@ impl TexturedQuadRenderer {
                 batch.key.min_filter,
                 batch.key.mag_filter,
             );
-
             let sampler1 = make_sampler(
                 tq.address_mode_u1,
                 tq.address_mode_v1,
                 tq.min_filter1,
                 tq.mag_filter1,
             );
-
             let sampler2 = make_sampler(
                 tq.address_mode_u2,
                 tq.address_mode_v2,
@@ -758,6 +849,95 @@ impl TexturedQuadRenderer {
 
             batch.detailed_buffer = Some(detailed_buf);
             batch.key.texture_name = tex0_name.clone();
+        }
+    }
+
+    pub fn recompute_proj_mtx(
+        &mut self,
+        queue: &wgpu::Queue,
+        quads: &[TexturedQuad],
+        texture_cache: &TextureCache,
+        layout_w: f32,
+        layout_h: f32,
+    ) {
+        for batch in &mut self.batches {
+            let Some(&first_pane) = batch.pane_indices.first() else {
+                continue;
+            };
+            let Some(tq) = quads.iter().find(|q| q.pane_idx == first_pane) else {
+                continue;
+            };
+
+            let mode0 = tq.standard_material.tex_gen_mode & 0x3;
+            let mode1 = (tq.standard_material.tex_gen_mode >> 4) & 0x3;
+            let mode2 = (tq.standard_material.tex_gen_mode >> 8) & 0x3;
+            if mode0 != 1 && mode1 != 1 && mode2 != 1 {
+                continue;
+            }
+
+            let pane_cx = tq.x + tq.width * 0.5;
+            let pane_cy = tq.y + tq.height * 0.5;
+
+            let make_proj = |tex_name: &str, layer_idx: usize| -> [[f32; 4]; 2] {
+                let shift = layer_idx * 8;
+                let packed = tq.standard_material.tex_gen_mode >> shift;
+                let mode = packed & 0x3;
+
+                if mode != 1 {
+                    return [[1.0, 0.0, 0.0, 0.5], [0.0, 1.0, 0.0, 0.5]];
+                }
+
+                let fitting_layout_size = (packed & (1 << 2)) != 0;
+                let fitting_pane_size = (packed & (1 << 3)) != 0;
+                let adjust_sr = (packed & (1 << 4)) != 0;
+
+                let (base_w, base_h) = if fitting_layout_size {
+                    (layout_w, layout_h)
+                } else if fitting_pane_size {
+                    (tq.width, tq.height)
+                } else if adjust_sr {
+                    (tq.width, tq.height)
+                } else if let Some(t) = texture_cache.get(tex_name) {
+                    (t.width as f32, t.height as f32)
+                } else {
+                    (tq.width, tq.height)
+                };
+
+                if adjust_sr {
+                    let sx = tq.proj_scales[layer_idx][0];
+                    let sy = tq.proj_scales[layer_idx][1];
+                    let tx = tq.proj_translations[layer_idx][0];
+                    let ty = tq.proj_translations[layer_idx][1];
+
+                    let reciprocal_width = 1.0 / tq.width;
+                    let reciprocal_height = 1.0 / -tq.height;
+
+                    let scale_s = 0.5 / sx;
+                    let scale_t = 0.5 / sy;
+
+                    let trans_s = 0.5 - (tx / sx / base_w);
+                    let trans_t = 0.5 + (ty / sy / base_h);
+
+                    let row0 = [2.0 * reciprocal_width * scale_s, 0.0, 0.0, trans_s];
+                    let row1 = [0.0, 2.0 * reciprocal_height * scale_t, 0.0, trans_t];
+
+                    [row0, row1]
+                } else {
+                    [
+                        [1.0 / base_w, 0.0, 0.0, 0.5 - pane_cx / base_w],
+                        [0.0, -1.0 / base_h, 0.0, 0.5 + pane_cy / base_h],
+                    ]
+                }
+            };
+
+            let mut mat = tq.standard_material;
+            mat.proj_mtx0 = make_proj(&tq.texture_name, 0);
+            mat.proj_mtx1 = make_proj(tq.texture_name1.as_deref().unwrap_or(&tq.texture_name), 1);
+            mat.proj_mtx2 = make_proj(tq.texture_name2.as_deref().unwrap_or(&tq.texture_name), 2);
+
+            if let Some(mb) = &batch.mat_buffer {
+                queue.write_buffer(mb, 0, bytemuck::bytes_of(&mat));
+            }
         }
     }
 
