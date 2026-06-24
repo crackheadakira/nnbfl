@@ -140,7 +140,7 @@ fn base_pane(section: &BflytSection) -> Option<&BflytPane> {
         BflytSection::WindowPane(p) => Some(&p.base),
         BflytSection::PartsPane(p) => Some(&p.base),
         BflytSection::AlignmentPane(p) => Some(&p.base),
-        BflytSection::CapturePane(p) => Some(&p.base),
+        BflytSection::CapturePane(p) => Some(p),
         _ => None,
     }
 }
@@ -729,7 +729,7 @@ impl<'a> Walker<'a> {
             detailed_combiner_material.constant_colors[6] = [0.0, 0.0, 0.0, 0.0];
 
             for (idx, entry) in dc.entries.iter().enumerate().take(6) {
-                let (color_flags, alpha_flags, constant_selectors) = entry.pack_flags();
+                let (color_flags, alpha_flags, constant_selectors, _) = entry.pack_flags();
 
                 let stage_active = 1i32;
 

@@ -481,11 +481,7 @@ fn draw_pane_section(ui: &mut Ui, pane: &BflytPane) {
     draw_vector_2f(ui, "Size", pane.size);
 
     draw_prop(ui, "Alpha", pane.alpha);
-    draw_prop(
-        ui,
-        "Scale Child Alpha",
-        pane.pane_flags.is_scale_child_alpha,
-    );
+    draw_prop(ui, "Influenced Alpha", pane.pane_flags.influenced_alpha);
     draw_prop(ui, "Visible", pane.pane_flags.is_visible);
 
     draw_prop(ui, "Extended User Data", pane.flag_ex.is_ext_user_data);
