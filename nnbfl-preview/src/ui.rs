@@ -75,11 +75,30 @@ pub fn draw_ui(
 
         for (i, pane) in view.panes.iter().enumerate() {
             if let BflytSection::TextBoxPane(text_box) = &pane.section
-                && let Some(text) = &text_box.text
                 && let Some(quad) = view.quads.get(i)
                 && !state.hidden_panes.contains(&i)
                 && pane.visible
             {
+                let pane_label = pane.label.trim_end_matches('\0');
+                let lookup_key = if let Some(source) = &pane.parts_source {
+                    format!("{}:{source}-{pane_label}", view.file_name)
+                } else {
+                    format!("{}:{pane_label}", view.file_name)
+                };
+
+                // println!("{lookup_key}");
+
+                let default_text = text_box.text.as_deref().unwrap_or("");
+                let display_text = state
+                    .localized_strings
+                    .get(&lookup_key)
+                    .map(|s| s.as_str())
+                    .unwrap_or(default_text);
+
+                if display_text.is_empty() {
+                    continue;
+                }
+
                 let center_x = quad.x + (quad.width * 0.5);
                 let center_y = quad.y + (quad.height * 0.5);
 
@@ -94,7 +113,7 @@ pub fn draw_ui(
                 painter.text(
                     shadow_pos,
                     egui::Align2::CENTER_CENTER,
-                    text,
+                    display_text,
                     font_id.clone(),
                     egui::Color32::from_black_alpha(220),
                 );
@@ -102,7 +121,7 @@ pub fn draw_ui(
                 painter.text(
                     screen_pos,
                     egui::Align2::CENTER_CENTER,
-                    text,
+                    display_text,
                     font_id,
                     egui::Color32::WHITE,
                 );
@@ -431,19 +450,19 @@ pub fn draw_ui(
                     ui.close();
                 }
 
-                if ui.button("Set blarc folder...").clicked() {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        state.pending_action = Some(UiAction::SetBlarcDir(dir));
-                    }
-                    ui.close();
-                }
-
                 if ui.button("Load MALs...").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Supported files", SUPPORTED_SARC_EXTENSIONS)
                         .pick_file()
                     {
                         state.pending_action = Some(UiAction::LoadMal(path));
+                    }
+                    ui.close();
+                }
+
+                if ui.button("Set blarc folder...").clicked() {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        state.pending_action = Some(UiAction::SetBlarcDir(dir));
                     }
                     ui.close();
                 }

@@ -99,7 +99,7 @@ fn scale_vertex_uv(uv: vec2<f32>, ratio: f32) -> vec2<f32> {
     if (ratio > 1.0) {
         scaled.y = centered.y * ratio;
     } else {
-        scaled.x = centered.x * (1.0 /ratio); 
+        scaled.x = centered.x * (1.0 / ratio); 
     }
 
     return scaled + vec2<f32>(0.5);

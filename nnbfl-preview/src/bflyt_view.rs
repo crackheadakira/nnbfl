@@ -46,6 +46,7 @@ pub struct BflytView {
     pub discovered_bntx_buffers: Vec<Vec<u8>>,
     pub base_panes: Vec<PaneInfo>,
     pub base_textured_quads: Vec<TexturedQuad>,
+    pub file_name: String,
 }
 
 impl BflytView {
@@ -1171,7 +1172,7 @@ impl<'a> Walker<'a> {
     }
 }
 
-pub fn build_view(file: Bflyt, blarc_dir: Option<&Path>) -> BflytView {
+pub fn build_view(file: Bflyt, blarc_dir: Option<&Path>, file_name: String) -> BflytView {
     let layout_w = file.layout.width;
     let layout_h = file.layout.height;
 
@@ -1210,5 +1211,6 @@ pub fn build_view(file: Bflyt, blarc_dir: Option<&Path>) -> BflytView {
         layout_width: layout_w,
         layout_height: layout_h,
         discovered_bntx_buffers,
+        file_name,
     }
 }

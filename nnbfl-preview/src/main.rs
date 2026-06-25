@@ -386,7 +386,17 @@ impl App {
 
     fn load_file_from_buffer(&mut self, res: ResolvedBlarc, file_name: String) {
         let file = Bflyt::parse(&res.bflyt_bytes).expect("parse bflyt file");
-        let mut view = build_view(file, self.blarc_dir.as_deref());
+
+        let current_layout_name = file_name
+            .strip_prefix("blyt/")
+            .and_then(|s| s.strip_suffix(".bflyt"))
+            .unwrap_or(&file_name);
+
+        let mut view = build_view(
+            file,
+            self.blarc_dir.as_deref(),
+            current_layout_name.to_string(),
+        );
 
         if let Some(root_bntx) = res.bntx_bytes {
             view.discovered_bntx_buffers.push(root_bntx);
@@ -440,12 +450,12 @@ impl App {
                     size.height as f32,
                 );
 
-                window.set_title(&format!("nnbfl-preview - {file_name}"));
+                window.set_title(&format!("nnbfl-preview - {current_layout_name}"));
             }
         }
 
         log::info!(
-            "Loaded {} panes from {file_name:?}",
+            "Loaded {} panes from {current_layout_name:?}",
             self.bflyt_view.as_ref().unwrap().panes.len(),
         );
     }
@@ -695,7 +705,7 @@ impl ApplicationHandler for App {
                         .iter()
                         .find(|(name, _)| name.to_lowercase().ends_with("project.msbp"));
 
-                    let Some((_, msbp_data)) = msbp_file else {
+                    let Some((_, _)) = msbp_file else {
                         log::error!(
                             "Selected archive is not a valid MAL file (missing project.msbp)"
                         );
@@ -706,19 +716,10 @@ impl ApplicationHandler for App {
                         return;
                     };
 
-                    let Ok(msbp) = tomolib::formats::msbp::Msbp::parse(msbp_data) else {
-                        log::error!("Experienced an error parsing project.msbp for registry");
-
-                        self.ui_state.error_message =
-                            Some("MAL file: error parsing project.smbp".to_string());
-
-                        return;
-                    };
-
                     self.ui_state.localized_strings.clear();
 
-                    // TODO: wait for frenchie to fix MSBT & MSBP api
-                    /*for (name, data) in &all_files {
+                    let mut total_files_loaded = 0;
+                    for (name, data) in &all_files {
                         if name.starts_with("LayoutMsg/") && name.to_lowercase().ends_with(".msbt")
                         {
                             let clean_key = name
@@ -728,11 +729,19 @@ impl ApplicationHandler for App {
 
                             if let Ok(msbt) = tomolib::formats::msbt::Msbt::parse(data) {
                                 for msg in &msbt.messages {
-                                    let label = msg.label;
+                                    let label = msg.label();
+                                    let text = msg.text_lossy();
+
+                                    let full_key = format!("{}:{}", clean_key, label);
+                                    self.ui_state.localized_strings.insert(full_key, text);
                                 }
+
+                                total_files_loaded += msbt.messages.len();
                             }
                         }
-                    }*/
+                    }
+
+                    log::info!("Loaded {total_files_loaded} MSBTs from MAL file");
                 }
             }
         }
