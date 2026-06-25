@@ -34,7 +34,11 @@ struct StandardMaterial {
     // 2 = tex1
     // 3 = tex2
     // 4 = post-combine
-    // 5 = final
+    // 5 = indirect raw vector offset
+    // 6 = indirect displaced UV coordinates
+    // 7 = indirect isolated sample output
+    // 8 = composite layer alpha visualized as grayscale
+    // 9 = final
     debug_stage: u32,
 
     indirect_mtx0: vec4<f32>,
@@ -535,7 +539,6 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
 
     if mat.use_texture_only == 1u {
         var color = textureSample(t_texture0, s_sampler0, in.uv0);
-        
         if mat.use_thresholding_alpha_interpolation == 1u {
             color.a = select(0.0, 1.0, color.a >= 0.5);
         }
@@ -543,14 +546,20 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
         return color;
     }
     
-    let t   = sample_textures(mat.texture_count, in.uv0, in.uv1, in.uv2, in.pos_mesh, mat);
-
-    let sel_a1 = (mat.alpha_select & 1u) != 0u;
-    let sel_a2 = (mat.alpha_select & 2u) != 0u;
+    let t = sample_textures(mat.texture_count, in.uv0, in.uv1, in.uv2, in.pos_mesh, mat);
 
     if mat.debug_stage == 1u { return t[0]; }
     if mat.debug_stage == 2u { return t[1]; }
     if mat.debug_stage == 3u { return t[2]; }
+
+    let iv = vec4<f32>(t[1].xyz, 1.0);
+    let offset = vec2<f32>(dot(iv, mat.indirect_mtx0), dot(iv, mat.indirect_mtx1));
+
+    if mat.debug_stage == 5u { return vec4<f32>(offset, 0.0, 1.0); }
+    if mat.debug_stage == 6u { return vec4<f32>(in.uv0 + offset, 0.0, 1.0); }
+
+    let sel_a1 = (mat.alpha_select & 1u) != 0u;
+    let sel_a2 = (mat.alpha_select & 2u) != 0u;
 
     var tex_color: vec4<f32>;
 
@@ -562,6 +571,8 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
         if mat.combine_mode == TEV_MODE_INDIRECT {
             tex_color = sample_indirect(t[1], in.uv0,
                 mat.indirect_mtx0, mat.indirect_mtx1, t_texture0, s_sampler0);
+            
+            if mat.debug_stage == 7u { return tex_color; }
         } else if mat.combine_mode == TEV_MODE_BLEND_INDIRECT || mat.combine_mode == TEV_MODE_EACH_INDIRECT {
             tex_color = sample_double_indirect(t[1], t[1], in.uv0,
                 mat.indirect_mtx0, mat.indirect_mtx1, t_texture0, s_sampler0, mat.combine_mode2);
@@ -572,6 +583,8 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
         if mat.combine_mode == TEV_MODE_INDIRECT {
             let ai = sample_indirect(t[1], in.uv0,
                 mat.indirect_mtx0, mat.indirect_mtx1, t_texture0, s_sampler0);
+            
+            if mat.debug_stage == 7u { return ai; }
             tex_color = combine_layer(ai, t[2], mat.combine_mode2, sel_a2);
         } else if mat.combine_mode2 == TEV_MODE_INDIRECT {
             let ai = sample_indirect(t[2], in.uv1,
@@ -588,9 +601,12 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
 
     if mat.debug_stage == 4u { return tex_color; }
 
+    if mat.debug_stage == 8u { return vec4<f32>(vec3<f32>(tex_color.a), 1.0); }
+
     var color = mat.interpolate_offset + mat.interpolate_width * tex_color;
-    // color       *= in.tint;
     color.a     = clamp(color.a, 0.0, 1.0);
+
+    if mat.debug_stage == 9u { return color; }
 
     if mat.use_thresholding_alpha_interpolation == 1u {
         color.a = select(0.0, 1.0, color.a >= 0.5);

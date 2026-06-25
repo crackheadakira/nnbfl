@@ -10,7 +10,10 @@ use nnbfl::{
     core::ReadWriteable,
 };
 
-use crate::{decompress_if_needed, extract_all_files_recursive, renderer::quad::Quad};
+use crate::{
+    anim_state::transform_uv_srt, decompress_if_needed, extract_all_files_recursive,
+    renderer::quad::Quad,
+};
 use crate::{
     renderer::textured_quad::{DetailedCombinerMaterial, StandardMaterial, TexturedQuad},
     ui::SUPPORTED_SARC_EXTENSIONS,
@@ -551,10 +554,9 @@ impl<'a> Walker<'a> {
         for layer in 0..3 {
             if let Some(srt) = mat.tex_srts.get(layer) {
                 for v_idx in 0..4 {
-                    uvs[v_idx][layer][0] =
-                        base_uvs[v_idx][layer][0] * srt.scale_u + srt.translate_u;
-                    uvs[v_idx][layer][1] =
-                        base_uvs[v_idx][layer][1] * srt.scale_v + srt.translate_v;
+                    let base_uv = base_uvs[v_idx][layer];
+
+                    uvs[v_idx][layer] = transform_uv_srt(srt, base_uv);
                 }
             }
         }

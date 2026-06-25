@@ -794,6 +794,7 @@ impl TexturedQuadRenderer {
             let Some(&first_pane) = batch.pane_indices.first() else {
                 continue;
             };
+
             let Some(tq) = quads.iter_mut().find(|q| q.pane_idx == first_pane) else {
                 continue;
             };
@@ -860,15 +861,11 @@ impl TexturedQuadRenderer {
         }
 
         let fitting_layout_size = (packed & (1 << 2)) != 0;
-        let fitting_pane_size = (packed & (1 << 3)) != 0;
+        let _fitting_pane_size = (packed & (1 << 3)) != 0;
         let adjust_sr = (packed & (1 << 4)) != 0;
 
         let (base_w, base_h) = if fitting_layout_size {
             (layout_w, layout_h)
-        } else if fitting_pane_size {
-            (quad.width, quad.height)
-        } else if adjust_sr {
-            (quad.width, quad.height)
         } else {
             (quad.width, quad.height)
         };

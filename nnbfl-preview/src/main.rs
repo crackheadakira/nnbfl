@@ -230,17 +230,17 @@ impl GpuState {
                     &ui_state.hidden_panes,
                 );
 
+                tqr.update_texture_pattern(
+                    &self.device,
+                    &bflyt_view.textured_quads,
+                    &self.texture_cache,
+                );
+
                 tqr.recompute_proj_mtx(
                     &mut bflyt_view.textured_quads,
                     &self.texture_cache,
                     bflyt_view.layout_width,
                     bflyt_view.layout_height,
-                );
-
-                tqr.update_texture_pattern(
-                    &self.device,
-                    &bflyt_view.textured_quads,
-                    &self.texture_cache,
                 );
 
                 tqr.update_selection(

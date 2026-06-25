@@ -101,8 +101,8 @@ pub fn draw_ui(
 
                 let center_x = quad.x + (quad.width * 0.5);
                 let center_y = quad.y + (quad.height * 0.5);
-
                 let screen_pos = camera.world_to_screen([center_x, center_y], screen_w, screen_h);
+
                 let font_size = (32.0 * camera.zoom).clamp(8.0, 128.0);
                 let font_id = egui::FontId::proportional(font_size);
 
@@ -370,10 +370,14 @@ pub fn draw_ui(
 
                                 let current_label = match state.active_debug_stage {
                                     0 => "Disabled",
-                                    1 => "Layer 0 Raw Texture",
-                                    2 => "Layer 1 Raw Texture",
-                                    3 => "Layer 2 Raw Texture",
-                                    4 => "Post-Texture Combiner Blend",
+                                    1 => "1. Layer 0 Raw Texture",
+                                    2 => "2. Layer 1 Raw Texture",
+                                    3 => "3. Layer 2 Raw Texture",
+                                    4 => "4. Post-Texture Combiner Blend",
+                                    5 => "5. Indirect Raw Vector Offset",
+                                    6 => "6. Indirect Displaced UV Coordinates",
+                                    7 => "7. Indirect Isolated Sample Output",
+                                    8 => "8. Composite Layer Alpha (Grayscale)",
                                     _ => "Unknown Stage",
                                 };
 
@@ -389,25 +393,49 @@ pub fn draw_ui(
                                         ui.selectable_value(
                                             &mut state.active_debug_stage,
                                             1,
-                                            "Layer 0 Raw Texture",
+                                            "1. Layer 0 Raw Texture",
                                         );
 
                                         ui.selectable_value(
                                             &mut state.active_debug_stage,
                                             2,
-                                            "Layer 1 Raw Texture",
+                                            "2. Layer 1 Raw Texture",
                                         );
 
                                         ui.selectable_value(
                                             &mut state.active_debug_stage,
                                             3,
-                                            "Layer 2 Raw Texture",
+                                            "3. Layer 2 Raw Texture",
                                         );
 
                                         ui.selectable_value(
                                             &mut state.active_debug_stage,
                                             4,
-                                            "Post-Texture Combiner Blend",
+                                            "4. Post-Texture Combiner Blend",
+                                        );
+
+                                        ui.selectable_value(
+                                            &mut state.active_debug_stage,
+                                            5,
+                                            "5. Indirect Raw Vector Offset",
+                                        );
+
+                                        ui.selectable_value(
+                                            &mut state.active_debug_stage,
+                                            6,
+                                            "6. Indirect Displaced UV Coordinates",
+                                        );
+
+                                        ui.selectable_value(
+                                            &mut state.active_debug_stage,
+                                            7,
+                                            "7. Indirect Isolated Sample Output",
+                                        );
+
+                                        ui.selectable_value(
+                                            &mut state.active_debug_stage,
+                                            8,
+                                            "8. Composite Layer Alpha (Grayscale)",
                                         );
                                     });
                             });

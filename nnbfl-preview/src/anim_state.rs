@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use nnbfl::bflyt::list::MaterialTextureSrt;
 use nnbfl::ui2d::userdata::ResUi2dUserDataInner;
 use nnbfl::{
     bflan::{
@@ -548,23 +549,26 @@ fn apply_pane_content(content: &AnimContent, frame: f32, pane_idx: usize, view: 
     }
 }
 
+#[inline]
+pub fn transform_uv_srt(srt: &MaterialTextureSrt, uv: [f32; 2]) -> [f32; 2] {
+    let rad = srt.rotate.to_radians();
+    let cos_r = rad.cos();
+    let sin_r = rad.sin();
+
+    let scaled_u = uv[0] * srt.scale_u;
+    let scaled_v = uv[1] * srt.scale_v;
+
+    let rotated_u = scaled_u * cos_r - scaled_v * sin_r;
+    let rotated_v = scaled_u * sin_r + scaled_v * cos_r;
+
+    [rotated_u + srt.translate_u, rotated_v + srt.translate_v]
+}
+
 fn apply_tex_srts(tq: &mut crate::renderer::textured_quad::TexturedQuad) {
     for (i, srt) in tq.tex_srts.iter().enumerate() {
-        let rad = srt.rotate.to_radians();
-        let cos_r = rad.cos();
-        let sin_r = rad.sin();
-
         for v_idx in 0..4 {
-            let [base_u, base_v] = tq.base_uvs[v_idx][i];
-            let centered_u = base_u - 0.5;
-            let centered_v = base_v - 0.5;
-            let scaled_u = centered_u * srt.scale_u;
-            let scaled_v = centered_v * srt.scale_v;
-            let rotated_u = scaled_u * cos_r - scaled_v * sin_r;
-            let rotated_v = scaled_u * sin_r + scaled_v * cos_r;
-
-            tq.uvs[v_idx][i][0] = rotated_u + 0.5 + srt.translate_u;
-            tq.uvs[v_idx][i][1] = rotated_v + 0.5 + srt.translate_v;
+            let base_uv = tq.base_uvs[v_idx][i];
+            tq.uvs[v_idx][i] = transform_uv_srt(srt, base_uv);
         }
     }
 }
