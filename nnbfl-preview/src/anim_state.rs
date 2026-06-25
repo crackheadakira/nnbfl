@@ -609,10 +609,10 @@ fn apply_material_content(
                             tq.tex_srts[layer].rotate = v
                         }
                         TargetIndex::TextureSrt(TextureSrtTarget::ScaleU) => {
-                            tq.tex_srts[layer].scale_u = -v
+                            tq.tex_srts[layer].scale_u = v
                         }
                         TargetIndex::TextureSrt(TextureSrtTarget::ScaleV) => {
-                            tq.tex_srts[layer].scale_v = -v
+                            tq.tex_srts[layer].scale_v = v
                         }
                         _ => {}
                     }

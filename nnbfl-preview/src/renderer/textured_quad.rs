@@ -885,14 +885,26 @@ impl TexturedQuadRenderer {
             let tx = quad.proj_translations[layer_idx][0];
             let ty = quad.proj_translations[layer_idx][1];
 
+            let srt_tu = quad
+                .tex_srts
+                .get(layer_idx)
+                .map(|s| s.translate_u)
+                .unwrap_or(0.0);
+
+            let srt_tv = quad
+                .tex_srts
+                .get(layer_idx)
+                .map(|s| s.translate_v)
+                .unwrap_or(0.0);
+
             let reciprocal_width = 1.0 / quad.width;
             let reciprocal_height = 1.0 / quad.height;
 
             let scale_s = 0.5 / sx;
             let scale_t = 0.5 / sy;
 
-            let trans_s = 0.5 - (tx / sx / base_w);
-            let trans_t = 0.5 - (ty / sy / base_h);
+            let trans_s = 0.5 - (tx / sx / base_w) + srt_tu;
+            let trans_t = 0.5 - (ty / sy / base_h) + srt_tv;
 
             let row0 = [2.0 * reciprocal_width * scale_s, 0.0, 0.0, trans_s];
             let row1 = [0.0, 2.0 * reciprocal_height * scale_t, 0.0, trans_t];
