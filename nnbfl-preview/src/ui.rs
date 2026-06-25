@@ -323,10 +323,18 @@ pub fn draw_ui(
                                             if ui.button(play_toggle).clicked() {
                                                 anim.playing = !anim.playing;
                                             }
+
                                             if ui.button("Stop").clicked() {
                                                 anim.frame = 0.0;
                                                 anim.playing = false;
                                             }
+
+                                            if ui.button("Loop").clicked() {
+                                                anim.set_looping();
+                                                anim.frame = 0.0;
+                                                anim.playing = true;
+                                            }
+
                                             ui.small(format!("Looping: {}", anim.is_looping()));
                                         });
 

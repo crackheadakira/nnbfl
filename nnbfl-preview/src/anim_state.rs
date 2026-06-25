@@ -125,6 +125,14 @@ impl AnimInstance {
         })
     }
 
+    pub fn set_looping(&mut self) {
+        for section in &mut self.bflan.sections {
+            if let BflanSections::PaneAnimInfo(pai) = section {
+                pai.is_looping = !pai.is_looping;
+            }
+        }
+    }
+
     pub fn pane_anim_info(&self) -> Option<&PaneAnimInfo> {
         self.bflan.sections.iter().find_map(|s| {
             if let BflanSections::PaneAnimInfo(pai) = s {
