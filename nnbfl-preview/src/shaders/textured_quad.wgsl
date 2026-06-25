@@ -4,6 +4,7 @@ struct VertexInput {
     @location(2) uv1:      vec2<f32>,
     @location(3) uv2:      vec2<f32>,
     @location(4) tint:     vec4<f32>,
+    @location(5) tex_aspects: vec3<f32>,
 }
 
 struct VertexOutput {
@@ -83,16 +84,30 @@ struct DetailedCombinerMaterial {
 @group(1) @binding(6) var<uniform> u_standard:  StandardMaterial;
 @group(1) @binding(7) var<uniform> u_detailed:  DetailedCombinerMaterial;
 
+fn scale_vertex_uv(uv: vec2<f32>, ratio: f32) -> vec2<f32> {
+    let centered = uv - vec2<f32>(0.5);
+    var scaled = centered;
+
+    if (ratio > 1.0) {
+        scaled.y = centered.y * ratio;
+    } else {
+        scaled.x = centered.x * (1.0 /ratio); 
+    }
+
+    return scaled + vec2<f32>(0.5);
+}
+
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
     out.position = u_projection * vec4<f32>(in.position, 0.0, 1.0);
-    out.uv0  = in.uv0;
-    out.uv1  = in.uv1;
-    out.uv2  = in.uv2;
     out.tint = in.tint;
     out.pos_mesh = in.position;
+
+    out.uv0 = scale_vertex_uv(in.uv0, in.tex_aspects.x);
+    out.uv1 = scale_vertex_uv(in.uv1, in.tex_aspects.y);
+    out.uv2 = scale_vertex_uv(in.uv2, in.tex_aspects.z);
     
     return out;
 }
@@ -111,6 +126,7 @@ const TEV_MODE_DARKEN:              u32 = 10u;
 const TEV_MODE_INDIRECT:            u32 = 11u;
 const TEV_MODE_BLEND_INDIRECT:      u32 = 12u;
 const TEV_MODE_EACH_INDIRECT:       u32 = 13u;
+
 
 fn combine_layer(
     base:             vec4<f32>,

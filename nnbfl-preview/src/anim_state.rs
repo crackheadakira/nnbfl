@@ -326,20 +326,23 @@ fn cascade_translate(view: &mut BflytView, pane_idx: usize, new_trans_x: f32, ne
             p.x = sx;
             p.y = sy;
         }
+
         if let Some(q) = view.quads.get_mut(idx) {
             q.x = sx;
             q.y = sy;
         }
+
         if let Some(tq) = view.textured_quads.iter_mut().find(|tq| tq.pane_idx == idx) {
             tq.x = sx;
             tq.y = sy;
-            // Shift all corners by the same delta, preserving rotation
+
             let base_corners = view
                 .base_textured_quads
                 .iter()
                 .find(|btq| btq.pane_idx == idx)
                 .map(|btq| btq.corners)
                 .unwrap_or(tq.corners);
+
             for (i, bc) in base_corners.iter().enumerate() {
                 tq.corners[i] = [bc[0] + dx, bc[1] + dy];
             }
@@ -360,9 +363,11 @@ fn cascade_visibility(view: &mut BflytView, pane_idx: usize, visible: bool) {
         if let Some(pane) = view.panes.get_mut(idx) {
             pane.visible = visible;
         }
+
         if let Some(q) = view.quads.get_mut(idx) {
             q.color = if visible { colors[i] } else { [0.0; 4] };
         }
+
         if let Some(tq) = view.textured_quads.iter_mut().find(|tq| tq.pane_idx == idx) {
             tq.standard_material.visible = if visible { 1 } else { 0 };
         }
@@ -435,10 +440,12 @@ fn apply_pane_content(content: &AnimContent, frame: f32, pane_idx: usize, view: 
                         p.width = final_w;
                         p.height = final_h;
                     }
+
                     if let Some(q) = view.quads.get_mut(pane_idx) {
                         q.width = final_w;
                         q.height = final_h;
                     }
+
                     if let Some(tq) = view
                         .textured_quads
                         .iter_mut()
@@ -477,6 +484,7 @@ fn apply_pane_content(content: &AnimContent, frame: f32, pane_idx: usize, view: 
                         match &t.target {
                             TargetIndex::VertexColor(VertexColorTarget::PaneAlpha) => {
                                 tq.tint[3] = v;
+
                                 for c in tq.corner_tints.iter_mut() {
                                     c[3] = v;
                                 }
@@ -554,6 +562,7 @@ fn apply_tex_srts(tq: &mut crate::renderer::textured_quad::TexturedQuad) {
             let scaled_v = centered_v * srt.scale_v;
             let rotated_u = scaled_u * cos_r - scaled_v * sin_r;
             let rotated_v = scaled_u * sin_r + scaled_v * cos_r;
+
             tq.uvs[v_idx][i][0] = rotated_u + 0.5 + srt.translate_u;
             tq.uvs[v_idx][i][1] = rotated_v + 0.5 + srt.translate_v;
         }
@@ -581,6 +590,7 @@ fn apply_material_content(
                 else {
                     continue;
                 };
+
                 for t in targets {
                     let v = eval_curve(&t.curve, frame);
                     let layer = t.layer as usize;
@@ -599,10 +609,10 @@ fn apply_material_content(
                             tq.tex_srts[layer].rotate = v
                         }
                         TargetIndex::TextureSrt(TextureSrtTarget::ScaleU) => {
-                            tq.tex_srts[layer].scale_u = v
+                            tq.tex_srts[layer].scale_u = -v
                         }
                         TargetIndex::TextureSrt(TextureSrtTarget::ScaleV) => {
-                            tq.tex_srts[layer].scale_v = v
+                            tq.tex_srts[layer].scale_v = -v
                         }
                         _ => {}
                     }
@@ -651,6 +661,7 @@ fn apply_material_content(
                     let Some(tex_name) = pai.textures.get(file_idx).cloned() else {
                         continue;
                     };
+
                     match t.layer {
                         0 => tq.texture_name = tex_name,
                         1 => tq.texture_name1 = Some(tex_name),
@@ -668,6 +679,7 @@ fn apply_material_content(
                 else {
                     continue;
                 };
+
                 for t in targets {
                     let v = eval_curve(&t.curve, frame) / 255.0;
                     if let TargetIndex::MaterialColor(c) = &t.target {
@@ -702,6 +714,7 @@ fn apply_material_content(
                 else {
                     continue;
                 };
+
                 for t in targets {
                     let v = eval_curve(&t.curve, frame);
                     match &t.target {

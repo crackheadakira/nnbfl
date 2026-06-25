@@ -132,7 +132,7 @@ impl GpuState {
         window: &Window,
         egui_ctx: &egui::Context,
         egui_state: &mut egui_winit::State,
-        bflyt_view: &Option<BflytView>,
+        bflyt_view: &mut Option<BflytView>,
         ui_state: &mut UiState,
         camera: &Camera,
         anim_player: &mut AnimPlayer,
@@ -231,8 +231,7 @@ impl GpuState {
                 );
 
                 tqr.recompute_proj_mtx(
-                    &self.queue,
-                    &bflyt_view.textured_quads,
+                    &mut bflyt_view.textured_quads,
                     &self.texture_cache,
                     bflyt_view.layout_width,
                     bflyt_view.layout_height,
@@ -246,8 +245,13 @@ impl GpuState {
 
                 tqr.update_selection(
                     &self.queue,
-                    &bflyt_view.textured_quads,
+                    &mut bflyt_view.textured_quads,
                     ui_state.selected_pane,
+                );
+
+                tqr.flush_mat_buffers(
+                    &self.queue,
+                    &bflyt_view.textured_quads,
                     &ui_state.hidden_panes,
                 );
             }
@@ -407,7 +411,7 @@ impl App {
         self.bflyt_view = Some(view);
 
         if let Some(gpu) = &mut self.gpu {
-            let view = self.bflyt_view.as_ref().unwrap();
+            let view = self.bflyt_view.as_mut().unwrap();
             gpu.quad_renderer.upload_quads(&gpu.device, &view.quads);
 
             for bntx_bytes in &view.discovered_bntx_buffers {
@@ -419,7 +423,7 @@ impl App {
 
             tgr.upload_quads(
                 &gpu.device,
-                &view.textured_quads,
+                &mut view.textured_quads,
                 &gpu.texture_cache,
                 view.layout_width,
                 view.layout_height,
@@ -746,7 +750,7 @@ impl ApplicationHandler for App {
                         window,
                         &self.egui_ctx,
                         egui_state,
-                        &self.bflyt_view,
+                        &mut self.bflyt_view,
                         &mut self.ui_state,
                         &self.camera,
                         &mut self.anim_player,

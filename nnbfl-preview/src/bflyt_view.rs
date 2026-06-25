@@ -178,7 +178,6 @@ pub fn compute_corners(
         BflytOrigin::RightBottom => -h,
     };
 
-    // Local corners relative to pivot
     let local = [
         [lx, ly],         // TL
         [lx + w, ly],     // TR
@@ -796,7 +795,6 @@ impl<'a> Walker<'a> {
             width: w,
             height: h,
             corners,
-            rotate_z,
             uvs,
             base_uvs,
             tint,
