@@ -190,7 +190,7 @@ pub fn compute_corners(
         return local.map(|[x, y]| [cx + x, cy + y]);
     }
 
-    let rad = rotate_z.to_radians();
+    let rad = -rotate_z.to_radians();
     let (sin_r, cos_r) = rad.sin_cos();
     local.map(|[x, y]| [cx + x * cos_r - y * sin_r, cy + x * sin_r + y * cos_r])
 }

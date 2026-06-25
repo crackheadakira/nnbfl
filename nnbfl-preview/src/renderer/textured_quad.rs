@@ -863,20 +863,12 @@ impl TexturedQuadRenderer {
         let fitting_pane_size = (packed & (1 << 3)) != 0;
         let adjust_sr = (packed & (1 << 4)) != 0;
 
-        let tex_name = match layer_idx {
-            1 => quad.texture_name1.as_deref().unwrap_or(&quad.texture_name),
-            2 => quad.texture_name2.as_deref().unwrap_or(&quad.texture_name),
-            _ => &quad.texture_name,
-        };
-
         let (base_w, base_h) = if fitting_layout_size {
             (layout_w, layout_h)
         } else if fitting_pane_size {
             (quad.width, quad.height)
         } else if adjust_sr {
             (quad.width, quad.height)
-        } else if let Some(t) = texture_cache.get(tex_name) {
-            (t.width as f32, t.height as f32)
         } else {
             (quad.width, quad.height)
         };
