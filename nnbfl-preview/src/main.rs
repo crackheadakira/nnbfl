@@ -247,6 +247,7 @@ impl GpuState {
                     &self.queue,
                     &mut bflyt_view.textured_quads,
                     ui_state.selected_pane,
+                    ui_state.active_debug_stage,
                 );
 
                 tqr.flush_mat_buffers(

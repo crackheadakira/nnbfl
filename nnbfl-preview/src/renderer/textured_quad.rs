@@ -51,6 +51,9 @@ pub struct StandardMaterial {
     pub use_texture_only: u32,
     pub use_thresholding_alpha_interpolation: u32,
 
+    pub debug_stage: u32,
+    pub _padding: [f32; 3],
+
     pub indirect_mtx0: [f32; 4],
     pub indirect_mtx1: [f32; 4],
 
@@ -72,6 +75,8 @@ impl Default for StandardMaterial {
             visible: 1,
             use_texture_only: 0,
             use_thresholding_alpha_interpolation: 0,
+            debug_stage: 0,
+            _padding: [0.0; 3],
             indirect_mtx0: [0.0; 4],
             indirect_mtx1: [0.0; 4],
             proj_mtx0: [[1.0, 0.0, 0.0, 0.5], [0.0, 1.0, 0.0, 0.5]],
@@ -618,8 +623,9 @@ impl TexturedQuadRenderer {
     pub fn update_selection(
         &mut self,
         queue: &wgpu::Queue,
-        quads: &[TexturedQuad],
+        quads: &mut [TexturedQuad],
         selected_idx: Option<usize>,
+        active_debug_stage: u32,
     ) {
         for batch in &mut self.batches {
             for (batch_quad_idx, &pane_idx) in batch.pane_indices.iter().enumerate() {
@@ -627,9 +633,12 @@ impl TexturedQuadRenderer {
                 if base + 3 >= batch.vertices.len() {
                     break;
                 }
-                let Some(q) = quads.iter().find(|q| q.pane_idx == pane_idx) else {
+
+                let Some(q) = quads.iter_mut().find(|q| q.pane_idx == pane_idx) else {
                     continue;
                 };
+
+                q.standard_material.debug_stage = active_debug_stage;
 
                 let tint = if Some(pane_idx) == selected_idx {
                     [
@@ -790,8 +799,8 @@ impl TexturedQuadRenderer {
             };
 
             let mode0 = tq.standard_material.tex_gen_mode & 0x3;
-            let mode1 = (tq.standard_material.tex_gen_mode >> 4) & 0x3;
-            let mode2 = (tq.standard_material.tex_gen_mode >> 8) & 0x3;
+            let mode1 = (tq.standard_material.tex_gen_mode >> 8) & 0x3;
+            let mode2 = (tq.standard_material.tex_gen_mode >> 16) & 0x3;
             if mode0 != 1 && mode1 != 1 && mode2 != 1 {
                 continue;
             }
@@ -860,7 +869,7 @@ impl TexturedQuadRenderer {
             _ => &quad.texture_name,
         };
 
-        let (mut base_w, mut base_h) = if fitting_layout_size {
+        let (base_w, base_h) = if fitting_layout_size {
             (layout_w, layout_h)
         } else if fitting_pane_size {
             (quad.width, quad.height)
@@ -873,14 +882,8 @@ impl TexturedQuadRenderer {
         };
 
         if adjust_sr {
-            let mut sx = quad.proj_scales[layer_idx][0];
-            let mut sy = quad.proj_scales[layer_idx][1];
-
-            if tex_aspect_ratio > 1.0 {
-                sy *= tex_aspect_ratio;
-            } else {
-                sx /= tex_aspect_ratio;
-            }
+            let sx = quad.proj_scales[layer_idx][0];
+            let sy = quad.proj_scales[layer_idx][1];
 
             let tx = quad.proj_translations[layer_idx][0];
             let ty = quad.proj_translations[layer_idx][1];
@@ -900,27 +903,42 @@ impl TexturedQuadRenderer {
             let reciprocal_width = 1.0 / quad.width;
             let reciprocal_height = 1.0 / quad.height;
 
-            let scale_s = 0.5 / sx;
-            let scale_t = 0.5 / sy;
+            let mut scale_s = 0.5 / sx;
+            let mut scale_t = 0.5 / sy;
 
-            let trans_s = 0.5 - (tx / sx / base_w) + srt_tu;
-            let trans_t = 0.5 - (ty / sy / base_h) + srt_tv;
+            let mut trans_s = 0.5 - (tx / sx / base_w) + srt_tu;
+            let mut trans_t = 0.5 - (ty / sy / base_h) + srt_tv;
 
-            let row0 = [2.0 * reciprocal_width * scale_s, 0.0, 0.0, trans_s];
-            let row1 = [0.0, 2.0 * reciprocal_height * scale_t, 0.0, trans_t];
-
-            [row0, row1]
-        } else {
             if tex_aspect_ratio > 1.0 {
-                base_h *= tex_aspect_ratio;
+                scale_t *= tex_aspect_ratio;
+                trans_t = trans_t * tex_aspect_ratio + (0.5 - 0.5 * tex_aspect_ratio);
             } else {
-                base_w /= tex_aspect_ratio;
+                let inv_ratio = 1.0 / tex_aspect_ratio;
+                scale_s *= inv_ratio;
+                trans_s = trans_s * inv_ratio + (0.5 - 0.5 * inv_ratio);
             }
 
             [
-                [1.0 / base_w, 0.0, 0.0, 0.5 - pane_cx / base_w],
-                [0.0, 1.0 / base_h, 0.0, 0.5 - pane_cy / base_h],
+                [2.0 * reciprocal_width * scale_s, 0.0, 0.0, trans_s],
+                [0.0, 2.0 * reciprocal_height * scale_t, 0.0, trans_t],
             ]
+        } else {
+            let mut m_s = 1.0 / base_w;
+            let mut m_t = 1.0 / base_h;
+
+            let mut trans_s = 0.5 - pane_cx / base_w;
+            let mut trans_t = 0.5 - pane_cy / base_h;
+
+            if tex_aspect_ratio > 1.0 {
+                m_t *= tex_aspect_ratio;
+                trans_t = trans_t * tex_aspect_ratio + (0.5 - 0.5 * tex_aspect_ratio);
+            } else {
+                let inv_ratio = 1.0 / tex_aspect_ratio;
+                m_s *= inv_ratio;
+                trans_s = trans_s * inv_ratio + (0.5 - 0.5 * inv_ratio);
+            }
+
+            [[m_s, 0.0, 0.0, trans_s], [0.0, m_t, 0.0, trans_t]]
         }
     }
 

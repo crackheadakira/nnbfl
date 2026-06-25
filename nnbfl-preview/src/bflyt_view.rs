@@ -758,7 +758,13 @@ impl<'a> Walker<'a> {
         let alpha_select = 0;
 
         let (indirect_mtx0, indirect_mtx1) = if let Some(im) = &mat.indirect_matrix {
-            ([im.scale.x, 0.0, 0.0, 0.0], [0.0, im.scale.y, 0.0, 0.0])
+            let rad = im.rotation.to_radians();
+            let cos_r = rad.cos();
+            let sin_r = rad.sin();
+            (
+                [cos_r * im.scale.x, -sin_r * im.scale.x, 0.0, 0.0],
+                [sin_r * im.scale.y, cos_r * im.scale.y, 0.0, 0.0],
+            )
         } else {
             ([0.0f32; 4], [0.0f32; 4])
         };

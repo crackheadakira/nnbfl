@@ -29,6 +29,14 @@ struct StandardMaterial {
     use_texture_only: u32,
     use_thresholding_alpha_interpolation: u32,
 
+    // 0 = 0ff
+    // 1 = tex0
+    // 2 = tex1
+    // 3 = tex2
+    // 4 = post-combine
+    // 5 = final
+    debug_stage: u32,
+
     indirect_mtx0: vec4<f32>,
     indirect_mtx1: vec4<f32>,
     proj_mtx0:     array<vec4<f32>, 2>,
@@ -540,6 +548,10 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
     let sel_a1 = (mat.alpha_select & 1u) != 0u;
     let sel_a2 = (mat.alpha_select & 2u) != 0u;
 
+    if mat.debug_stage == 1u { return t[0]; }
+    if mat.debug_stage == 2u { return t[1]; }
+    if mat.debug_stage == 3u { return t[2]; }
+
     var tex_color: vec4<f32>;
 
     if mat.texture_count == 0u {
@@ -574,6 +586,7 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
+    if mat.debug_stage == 4u { return tex_color; }
 
     var color = mat.interpolate_offset + mat.interpolate_width * tex_color;
     // color       *= in.tint;

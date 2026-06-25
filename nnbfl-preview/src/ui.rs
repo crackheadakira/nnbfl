@@ -38,6 +38,7 @@ pub struct UiState {
     pub anim_names: Vec<String>,
     pub pending_play_anim: Option<String>,
     pub sidebar_tab: SidebarTab,
+    pub active_debug_stage: u32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -329,6 +330,61 @@ pub fn draw_ui(
                                         }
                                     }
                                 });
+                            });
+                        });
+                    }
+
+                    let ui = &mut layout_cols[1];
+                    if view.is_some() {
+                        ui.vertical(|ui| {
+                            ui.heading("Shader Diagnostics");
+                            ui.separator();
+
+                            ui.horizontal(|ui| {
+                                ui.label("Debug Layer:");
+
+                                let current_label = match state.active_debug_stage {
+                                    0 => "Disabled",
+                                    1 => "Layer 0 Raw Texture",
+                                    2 => "Layer 1 Raw Texture",
+                                    3 => "Layer 2 Raw Texture",
+                                    4 => "Post-Texture Combiner Blend",
+                                    _ => "Unknown Stage",
+                                };
+
+                                egui::ComboBox::from_id_salt("shader_debug_combobox")
+                                    .selected_text(current_label)
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut state.active_debug_stage,
+                                            0,
+                                            "Disabled",
+                                        );
+
+                                        ui.selectable_value(
+                                            &mut state.active_debug_stage,
+                                            1,
+                                            "Layer 0 Raw Texture",
+                                        );
+
+                                        ui.selectable_value(
+                                            &mut state.active_debug_stage,
+                                            2,
+                                            "Layer 1 Raw Texture",
+                                        );
+
+                                        ui.selectable_value(
+                                            &mut state.active_debug_stage,
+                                            3,
+                                            "Layer 2 Raw Texture",
+                                        );
+
+                                        ui.selectable_value(
+                                            &mut state.active_debug_stage,
+                                            4,
+                                            "Post-Texture Combiner Blend",
+                                        );
+                                    });
                             });
                         });
                     }
