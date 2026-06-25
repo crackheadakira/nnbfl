@@ -450,11 +450,13 @@ impl App {
         );
     }
 
-    fn extract_buffer_from_sarc(&self, path: &PathBuf) -> Option<(String, ResolvedBlarc)> {
+    fn extract_blarc_from_sarc_bytes(&self, path: &PathBuf) -> Option<(String, ResolvedBlarc)> {
         let mut file_bytes = std::fs::read(path).ok()?;
         let filename = path.file_name()?.to_string_lossy();
 
         file_bytes = decompress_if_needed(file_bytes, &filename);
+
+        let all_files = extract_all_files_recursive(&file_bytes);
 
         let mut bflyt_name = "unnamed.bflyt".to_string();
         let mut resolved = ResolvedBlarc {
@@ -463,7 +465,27 @@ impl App {
             bflan_bytes: Vec::new(),
         };
 
-        unpack_sarc_recursive(&file_bytes, &mut bflyt_name, &mut resolved);
+        for (name, data) in &all_files {
+            let name_lower = name.to_lowercase();
+
+            if name_lower.ends_with(".bflyt") {
+                if resolved.bflyt_bytes.is_empty() {
+                    bflyt_name = name.clone();
+                    resolved.bflyt_bytes = data.clone();
+                }
+            } else if name_lower.ends_with(".bntx") || name_lower.contains("__combined") {
+                if resolved.bntx_bytes.is_none() {
+                    resolved.bntx_bytes = Some(data.clone());
+                }
+            } else if name_lower.ends_with(".bflan") {
+                let anim_name = std::path::Path::new(name)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| name.clone());
+
+                resolved.bflan_bytes.push((anim_name, data.clone()));
+            }
+        }
 
         if resolved.bflyt_bytes.is_empty() {
             return None;
@@ -473,7 +495,14 @@ impl App {
     }
 }
 
-pub fn unpack_sarc_recursive(data: &[u8], bflyt_name: &mut String, resolved: &mut ResolvedBlarc) {
+pub fn extract_all_files_recursive(data: &[u8]) -> Vec<(String, Vec<u8>)> {
+    let mut flat_files = Vec::new();
+    unpack_sarc_internal(data, &mut flat_files);
+
+    flat_files
+}
+
+fn unpack_sarc_internal(data: &[u8], out_files: &mut Vec<(String, Vec<u8>)>) {
     let Ok(sarc) = Sarc::parse(data) else {
         return;
     };
@@ -492,31 +521,15 @@ pub fn unpack_sarc_recursive(data: &[u8], bflyt_name: &mut String, resolved: &mu
             &name_lower
         };
 
-        if clean_name.ends_with(".bflyt") {
-            if resolved.bflyt_bytes.is_empty() {
-                *bflyt_name = name.clone();
-                resolved.bflyt_bytes = file_data;
-            }
-        } else if clean_name.ends_with(".bntx") || clean_name.contains("__combined") {
-            if resolved.bntx_bytes.is_none() {
-                resolved.bntx_bytes = Some(file_data);
-            }
-        } else if name.ends_with(".bflan") {
-            let anim_name = std::path::Path::new(name)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| name.clone());
+        let is_nested_sarc = clean_name.ends_with(".arc")
+            || SUPPORTED_SARC_EXTENSIONS
+                .iter()
+                .any(|ext| clean_name.ends_with(&format!(".{}", ext.to_lowercase())));
 
-            resolved.bflan_bytes.push((anim_name, file.data));
+        if is_nested_sarc {
+            unpack_sarc_internal(&file_data, out_files);
         } else {
-            let is_nested_sarc = clean_name.ends_with(".arc")
-                || SUPPORTED_SARC_EXTENSIONS
-                    .iter()
-                    .any(|ext| clean_name.ends_with(&format!(".{}", ext.to_lowercase())));
-
-            if is_nested_sarc {
-                unpack_sarc_recursive(&file_data, bflyt_name, resolved);
-            }
+            out_files.push((name.clone(), file_data));
         }
     }
 }
@@ -644,7 +657,7 @@ impl ApplicationHandler for App {
                         .any(|ext| path_str.ends_with(&format!(".{}", ext.to_lowercase())));
 
                     if is_sarc {
-                        if let Some((name, data)) = self.extract_buffer_from_sarc(&path) {
+                        if let Some((name, data)) = self.extract_blarc_from_sarc_bytes(&path) {
                             self.load_file_from_buffer(data, name);
                         }
                     } else {
@@ -656,114 +669,179 @@ impl ApplicationHandler for App {
                         w.request_redraw();
                     }
                 }
-            }
-        }
 
-        match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+                UiAction::LoadMal(path) => {
+                    let path_str = path.to_string_lossy().to_lowercase();
 
-            WindowEvent::CursorMoved { position, .. } => {
-                let pos = [position.x as f32, position.y as f32];
-                self.camera.cursor_screen = pos;
+                    let is_sarc = SUPPORTED_SARC_EXTENSIONS
+                        .iter()
+                        .any(|ext| path_str.ends_with(&format!(".{}", ext.to_lowercase())));
 
-                if self.camera.is_panning && !egui_wants_pointer {
-                    self.camera.pan(pos);
-                }
-
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
-            }
-
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Middle,
-                ..
-            } => match state {
-                winit::event::ElementState::Pressed => {
-                    if !egui_wants_pointer {
-                        self.camera.start_pan(self.camera.cursor_screen);
-                    }
-                }
-                winit::event::ElementState::Released => self.camera.end_pan(),
-            },
-
-            WindowEvent::MouseWheel { delta, .. } if !egui_wants_scroll => {
-                let lines = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(p) => p.y as f32 * 0.01,
-                };
-
-                self.camera.zoom_around_cursor(lines);
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
-            }
-
-            WindowEvent::Resized(size) => {
-                if let Some(gpu) = &mut self.gpu {
-                    gpu.resize(size);
-                }
-
-                if let Some(view) = &self.bflyt_view {
-                    self.camera.fit(
-                        view.layout_width,
-                        view.layout_height,
-                        size.width as f32,
-                        size.height as f32,
-                    );
-                }
-            }
-
-            WindowEvent::DroppedFile(path) => {
-                if path.extension().and_then(|s| s.to_str()) == Some("bflyt") {
-                    self.bflyt_path = Some(path);
-                    self.load_file();
-                } else {
-                    self.ui_state.error_message =
-                        Some("Invalid file type. Please drop a .bflyt file".to_string());
-                }
-            }
-
-            WindowEvent::RedrawRequested => {
-                if let (Some(gpu), Some(window), Some(egui_state)) =
-                    (&mut self.gpu, &self.window, &mut self.egui_state)
-                {
-                    if window.has_focus() {
-                        let dt = self.last_tick.elapsed().as_secs_f32();
-                        self.last_tick = Instant::now();
-
-                        if let Some(next) = self.anim_player.tick(dt, 30.0) {
-                            self.anim_player.play(&next.clone());
-                        }
-
-                        if let Some(name) = self.ui_state.pending_play_anim.take() {
-                            self.anim_player.play(&name);
-                        }
-
-                        if let Some(view) = &mut self.bflyt_view {
-                            view.reset_to_base();
-                            self.anim_player.apply(view);
-                        }
+                    if !is_sarc {
+                        return;
                     }
 
-                    gpu.render(
-                        window,
-                        &self.egui_ctx,
-                        egui_state,
-                        &mut self.bflyt_view,
-                        &mut self.ui_state,
-                        &self.camera,
-                        &mut self.anim_player,
-                    );
+                    let Ok(mut bytes) = std::fs::read(path) else {
+                        self.ui_state.error_message = Some("Error reading MAL file.".to_string());
 
-                    if self.anim_player.is_playing() && window.has_focus() {
-                        window.request_redraw();
-                    }
+                        return;
+                    };
+
+                    bytes = decompress_if_needed(bytes, &path_str);
+
+                    let all_files = extract_all_files_recursive(&bytes);
+
+                    let msbp_file = all_files
+                        .iter()
+                        .find(|(name, _)| name.to_lowercase().ends_with("project.msbp"));
+
+                    let Some((_, msbp_data)) = msbp_file else {
+                        log::error!(
+                            "Selected archive is not a valid MAL file (missing project.msbp)"
+                        );
+
+                        self.ui_state.error_message =
+                            Some("Invalid MAL file: missing project.msbp".to_string());
+
+                        return;
+                    };
+
+                    let Ok(msbp) = tomolib::formats::msbp::Msbp::parse(msbp_data) else {
+                        log::error!("Experienced an error parsing project.msbp for registry");
+
+                        self.ui_state.error_message =
+                            Some("MAL file: error parsing project.smbp".to_string());
+
+                        return;
+                    };
+
+                    self.ui_state.localized_strings.clear();
+
+                    // TODO: wait for frenchie to fix MSBT & MSBP api
+                    /*for (name, data) in &all_files {
+                        if name.starts_with("LayoutMsg/") && name.to_lowercase().ends_with(".msbt")
+                        {
+                            let clean_key = name
+                                .strip_prefix("LayoutMsg/")
+                                .and_then(|s| s.strip_suffix(".msbt"))
+                                .unwrap_or(name);
+
+                            if let Ok(msbt) = tomolib::formats::msbt::Msbt::parse(data) {
+                                for msg in &msbt.messages {
+                                    let label = msg.label;
+                                }
+                            }
+                        }
+                    }*/
                 }
             }
 
-            _ => {}
+            match event {
+                WindowEvent::CloseRequested => event_loop.exit(),
+
+                WindowEvent::CursorMoved { position, .. } => {
+                    let pos = [position.x as f32, position.y as f32];
+                    self.camera.cursor_screen = pos;
+
+                    if self.camera.is_panning && !egui_wants_pointer {
+                        self.camera.pan(pos);
+                    }
+
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+
+                WindowEvent::MouseInput {
+                    state,
+                    button: MouseButton::Middle,
+                    ..
+                } => match state {
+                    winit::event::ElementState::Pressed => {
+                        if !egui_wants_pointer {
+                            self.camera.start_pan(self.camera.cursor_screen);
+                        }
+                    }
+                    winit::event::ElementState::Released => self.camera.end_pan(),
+                },
+
+                WindowEvent::MouseWheel { delta, .. } if !egui_wants_scroll => {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => y,
+                        MouseScrollDelta::PixelDelta(p) => p.y as f32 * 0.01,
+                    };
+
+                    self.camera.zoom_around_cursor(lines);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+
+                WindowEvent::Resized(size) => {
+                    if let Some(gpu) = &mut self.gpu {
+                        gpu.resize(size);
+                    }
+
+                    if let Some(view) = &self.bflyt_view {
+                        self.camera.fit(
+                            view.layout_width,
+                            view.layout_height,
+                            size.width as f32,
+                            size.height as f32,
+                        );
+                    }
+                }
+
+                WindowEvent::DroppedFile(path) => {
+                    if path.extension().and_then(|s| s.to_str()) == Some("bflyt") {
+                        self.bflyt_path = Some(path);
+                        self.load_file();
+                    } else {
+                        self.ui_state.error_message =
+                            Some("Invalid file type. Please drop a .bflyt file".to_string());
+                    }
+                }
+
+                WindowEvent::RedrawRequested => {
+                    if let (Some(gpu), Some(window), Some(egui_state)) =
+                        (&mut self.gpu, &self.window, &mut self.egui_state)
+                    {
+                        if window.has_focus() {
+                            let dt = self.last_tick.elapsed().as_secs_f32();
+                            self.last_tick = Instant::now();
+
+                            if let Some(next) = self.anim_player.tick(dt, 30.0) {
+                                self.anim_player.play(&next.clone());
+                            }
+
+                            if let Some(name) = self.ui_state.pending_play_anim.take() {
+                                self.anim_player.play(&name);
+                            }
+
+                            if let Some(view) = &mut self.bflyt_view {
+                                view.reset_to_base();
+                                self.anim_player.apply(view);
+                            }
+                        }
+
+                        gpu.render(
+                            window,
+                            &self.egui_ctx,
+                            egui_state,
+                            &mut self.bflyt_view,
+                            &mut self.ui_state,
+                            &self.camera,
+                            &mut self.anim_player,
+                        );
+
+                        if self.anim_player.is_playing() && window.has_focus() {
+                            window.request_redraw();
+                        }
+                    }
+                }
+
+                _ => {}
+            }
         }
     }
 

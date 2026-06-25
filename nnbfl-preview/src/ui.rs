@@ -1,4 +1,7 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use egui::Ui;
 use nnbfl::{
@@ -39,6 +42,8 @@ pub struct UiState {
     pub pending_play_anim: Option<String>,
     pub sidebar_tab: SidebarTab,
     pub active_debug_stage: u32,
+
+    pub localized_strings: HashMap<String, String>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +57,7 @@ pub enum SidebarTab {
 pub enum UiAction {
     LoadFile(PathBuf),
     SetBlarcDir(PathBuf),
+    LoadMal(PathBuf),
 }
 
 pub fn draw_ui(
@@ -428,6 +434,16 @@ pub fn draw_ui(
                 if ui.button("Set blarc folder...").clicked() {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                         state.pending_action = Some(UiAction::SetBlarcDir(dir));
+                    }
+                    ui.close();
+                }
+
+                if ui.button("Load MALs...").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Supported files", SUPPORTED_SARC_EXTENSIONS)
+                        .pick_file()
+                    {
+                        state.pending_action = Some(UiAction::LoadMal(path));
                     }
                     ui.close();
                 }

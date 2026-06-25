@@ -10,7 +10,7 @@ use nnbfl::{
     core::ReadWriteable,
 };
 
-use crate::{decompress_if_needed, renderer::quad::Quad, unpack_sarc_recursive};
+use crate::{decompress_if_needed, extract_all_files_recursive, renderer::quad::Quad};
 use crate::{
     renderer::textured_quad::{DetailedCombinerMaterial, StandardMaterial, TexturedQuad},
     ui::SUPPORTED_SARC_EXTENSIONS,
@@ -289,14 +289,34 @@ pub fn load_bflyt_from_blarc_dir(blarc_dir: &Path, layout_name: &str) -> Option<
 
     bytes = decompress_if_needed(bytes, &filename);
 
-    let mut bflyt_name = "unnamed.bflyt".to_string();
+    let all_files = extract_all_files_recursive(&bytes);
+
     let mut resolved = ResolvedBlarc {
         bflyt_bytes: Vec::new(),
         bntx_bytes: None,
         bflan_bytes: Vec::new(),
     };
 
-    unpack_sarc_recursive(&bytes, &mut bflyt_name, &mut resolved);
+    for (name, data) in &all_files {
+        let name_lower = name.to_lowercase();
+
+        if name_lower.ends_with(".bflyt") {
+            if resolved.bflyt_bytes.is_empty() {
+                resolved.bflyt_bytes = data.clone();
+            }
+        } else if name_lower.ends_with(".bntx") || name_lower.contains("__combined") {
+            if resolved.bntx_bytes.is_none() {
+                resolved.bntx_bytes = Some(data.clone());
+            }
+        } else if name_lower.ends_with(".bflan") {
+            let anim_name = std::path::Path::new(name)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| name.clone());
+
+            resolved.bflan_bytes.push((anim_name, data.clone()));
+        }
+    }
 
     if resolved.bflyt_bytes.is_empty() {
         return None;
