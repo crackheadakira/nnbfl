@@ -86,8 +86,6 @@ pub fn draw_ui(
                     format!("{}:{pane_label}", view.file_name)
                 };
 
-                // println!("{lookup_key}");
-
                 let default_text = text_box.text.as_deref().unwrap_or("");
                 let display_text = state
                     .localized_strings
@@ -129,8 +127,71 @@ pub fn draw_ui(
         }
     }
 
+    egui::Panel::top("menu_bar").show_inside(ui, |ui| {
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("Load File...").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter(
+                            "Supported files",
+                            &[SUPPORTED_SARC_EXTENSIONS, &["bflyt"]].concat(),
+                        )
+                        .pick_file()
+                    {
+                        state.pending_action = Some(UiAction::LoadFile(path));
+                        state.hidden_panes.clear();
+                        state.selected_pane = None;
+                    }
+                    ui.close();
+                }
+
+                if ui.button("Load MALs...").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Supported files", SUPPORTED_SARC_EXTENSIONS)
+                        .pick_file()
+                    {
+                        state.pending_action = Some(UiAction::LoadMal(path));
+                    }
+                    ui.close();
+                }
+
+                if ui.button("Set blarc folder...").clicked() {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        state.pending_action = Some(UiAction::SetBlarcDir(dir));
+                    }
+                    ui.close();
+                }
+            });
+
+            if view.is_some() {
+                ui.menu_button("Shader Pass", |ui| {
+                    let stages = [
+                        (0, "Disabled"),
+                        (1, "1. Layer 0 Raw Texture"),
+                        (2, "2. Layer 1 Raw Texture"),
+                        (3, "3. Layer 2 Raw Texture"),
+                        (4, "4. Post-Texture Combiner Blend"),
+                        (5, "5. Indirect Raw Vector Offset"),
+                        (6, "6. Indirect Displaced UV Coordinates"),
+                        (7, "7. Indirect Isolated Sample Output"),
+                        (8, "8. Composite Layer Alpha (Grayscale)"),
+                    ];
+
+                    for (stage_idx, label) in stages {
+                        if ui
+                            .radio_value(&mut state.active_debug_stage, stage_idx, label)
+                            .clicked()
+                        {
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        })
+    });
+
     egui::Panel::left("pane_tree")
-        .default_size(220.0)
+        .default_size(240.0)
         .show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut state.sidebar_tab, SidebarTab::Panes, "Pane Tree");
@@ -245,266 +306,133 @@ pub fn draw_ui(
         });
 
     if !state.anim_names.is_empty() || view.is_some() {
-        egui::Panel::bottom("master_bottom_shelf")
-            .default_size(150.0)
+        egui::Panel::right("right_control_panel")
+            .default_size(300.0)
             .resizable(true)
             .show_inside(ui, |ui| {
-                ui.columns(2, |layout_cols| {
-                    let ui = &mut layout_cols[0];
+                ui.vertical(|ui| {
                     if !state.anim_names.is_empty() {
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.heading("Animation Sequences");
-                                ui.add_space(8.0);
+                        ui.heading("Animations");
+                        ui.horizontal(|ui| {
+                            if anim_player.is_playing() {
+                                ui.label(
+                                    egui::RichText::new("Playing")
+                                        .color(egui::Color32::GREEN)
+                                        .strong(),
+                                );
+                            } else if anim_player.active.is_some() {
+                                ui.label(egui::RichText::new("Paused").color(egui::Color32::GOLD));
+                            } else {
+                                ui.label(egui::RichText::new("Idle").color(egui::Color32::GRAY));
+                            }
+                        });
 
-                                if anim_player.is_playing() {
-                                    ui.label(
-                                        egui::RichText::new("Playing")
-                                            .color(egui::Color32::GREEN)
-                                            .strong(),
-                                    );
-                                } else if anim_player.active.is_some() {
-                                    ui.label(
-                                        egui::RichText::new("Paused").color(egui::Color32::GOLD),
-                                    );
-                                } else {
-                                    ui.label(
-                                        egui::RichText::new("Idle").color(egui::Color32::GRAY),
-                                    );
-                                }
-                            });
-                            ui.separator();
+                        ui.separator();
 
-                            ui.columns(2, |anim_sub_cols| {
-                                anim_sub_cols[0].vertical(|ui| {
-                                    egui::ScrollArea::vertical()
-                                        .id_salt("anim_selection_grid")
-                                        .max_height(90.0)
-                                        .show(ui, |ui| {
-                                            ui.horizontal_wrapped(|ui| {
-                                                for (idx, name) in
-                                                    state.anim_names.iter().enumerate()
-                                                {
-                                                    let is_active = anim_player.active == Some(idx);
-
-                                                    if ui
-                                                        .selectable_label(is_active, name)
-                                                        .clicked()
-                                                    {
-                                                        state.pending_play_anim =
-                                                            Some(name.clone());
-                                                    }
-                                                }
-                                            });
-                                        });
-                                });
-
-                                anim_sub_cols[1].vertical(|ui| {
-                                    if let Some(idx) = anim_player.active
-                                        && let Some(anim) = anim_player.anims.get_mut(idx)
-                                    {
-                                        ui.horizontal(|ui| {
-                                            ui.label(egui::RichText::new(&anim.name).strong());
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| {
-                                                    ui.small(format!(
-                                                        "F: {:.1} / {:.0}",
-                                                        anim.frame,
-                                                        anim.frame_count()
-                                                    ));
-                                                },
-                                            );
-                                        });
-
-                                        ui.horizontal(|ui| {
-                                            let play_toggle =
-                                                if anim.playing { "Pause" } else { "Play" };
-                                            if ui.button(play_toggle).clicked() {
-                                                anim.playing = !anim.playing;
-                                            }
-
-                                            if ui.button("Stop").clicked() {
-                                                anim.frame = 0.0;
-                                                anim.playing = false;
-                                            }
-
-                                            if ui.button("Loop").clicked() {
-                                                anim.set_looping();
-                                                anim.frame = 0.0;
-                                                anim.playing = true;
-                                            }
-
-                                            ui.small(format!("Looping: {}", anim.is_looping()));
-                                        });
-
-                                        ui.add_space(4.0);
-
-                                        let max_frame = anim.frame_count();
-                                        let mut temporary_frame = anim.frame;
-
-                                        let slider_res = ui.add(
-                                            egui::Slider::new(
-                                                &mut temporary_frame,
-                                                0.0..=max_frame,
-                                            )
-                                            .show_value(false)
-                                            .trailing_fill(true),
-                                        );
-
-                                        if slider_res.changed() {
-                                            anim.frame = temporary_frame;
-                                            if slider_res.dragged() {
-                                                anim.playing = false;
-                                            }
-                                        }
-                                        if slider_res.drag_stopped() {
-                                            anim.playing = true;
+                        egui::ScrollArea::vertical()
+                            .id_salt("anim_selection_grid")
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    for (idx, name) in state.anim_names.iter().enumerate() {
+                                        let is_active = anim_player.active == Some(idx);
+                                        if ui.selectable_label(is_active, name).clicked() {
+                                            state.pending_play_anim = Some(name.clone());
                                         }
                                     }
                                 });
                             });
-                        });
-                    }
 
-                    let ui = &mut layout_cols[1];
-                    if view.is_some() {
-                        ui.vertical(|ui| {
-                            ui.heading("Shader Diagnostics");
-                            ui.separator();
+                        ui.add_space(8.0);
 
-                            ui.horizontal(|ui| {
-                                ui.label("Debug Layer:");
+                        if let Some(idx) = anim_player.active
+                            && let Some(anim) = anim_player.anims.get_mut(idx)
+                        {
+                            ui.group(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(&anim.name).strong());
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.small(format!(
+                                                "F: {:.1} / {:.0}",
+                                                anim.frame,
+                                                anim.frame_count()
+                                            ));
+                                        },
+                                    );
+                                });
 
-                                let current_label = match state.active_debug_stage {
-                                    0 => "Disabled",
-                                    1 => "1. Layer 0 Raw Texture",
-                                    2 => "2. Layer 1 Raw Texture",
-                                    3 => "3. Layer 2 Raw Texture",
-                                    4 => "4. Post-Texture Combiner Blend",
-                                    5 => "5. Indirect Raw Vector Offset",
-                                    6 => "6. Indirect Displaced UV Coordinates",
-                                    7 => "7. Indirect Isolated Sample Output",
-                                    8 => "8. Composite Layer Alpha (Grayscale)",
-                                    _ => "Unknown Stage",
-                                };
+                                ui.horizontal(|ui| {
+                                    let play_toggle = if anim.playing { "Pause" } else { "Play" };
+                                    if ui.button(play_toggle).clicked() {
+                                        anim.playing = !anim.playing;
+                                    }
 
-                                egui::ComboBox::from_id_salt("shader_debug_combobox")
-                                    .selected_text(current_label)
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(
-                                            &mut state.active_debug_stage,
-                                            0,
-                                            "Disabled",
-                                        );
+                                    if ui.button("Stop").clicked() {
+                                        anim.frame = 0.0;
+                                        anim.playing = false;
+                                    }
 
-                                        ui.selectable_value(
-                                            &mut state.active_debug_stage,
-                                            1,
-                                            "1. Layer 0 Raw Texture",
-                                        );
+                                    if ui.button("Loop").clicked() {
+                                        anim.toggle_looping();
+                                        anim.frame = 0.0;
+                                        anim.playing = true;
+                                    }
+                                });
 
-                                        ui.selectable_value(
-                                            &mut state.active_debug_stage,
-                                            2,
-                                            "2. Layer 1 Raw Texture",
-                                        );
+                                let max_frame = anim.frame_count();
+                                let mut temporary_frame = anim.frame;
+                                let slider_res = ui.add(
+                                    egui::Slider::new(&mut temporary_frame, 0.0..=max_frame)
+                                        .show_value(false)
+                                        .trailing_fill(true),
+                                );
 
-                                        ui.selectable_value(
-                                            &mut state.active_debug_stage,
-                                            3,
-                                            "3. Layer 2 Raw Texture",
-                                        );
+                                if slider_res.changed() {
+                                    anim.frame = temporary_frame;
+                                    if slider_res.dragged() {
+                                        anim.playing = false;
+                                    }
+                                }
+                                if slider_res.drag_stopped() {
+                                    anim.playing = true;
+                                }
+                            });
+                        }
 
-                                        ui.selectable_value(
-                                            &mut state.active_debug_stage,
-                                            4,
-                                            "4. Post-Texture Combiner Blend",
-                                        );
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.heading("Animation Details");
 
-                                        ui.selectable_value(
-                                            &mut state.active_debug_stage,
-                                            5,
-                                            "5. Indirect Raw Vector Offset",
-                                        );
-
-                                        ui.selectable_value(
-                                            &mut state.active_debug_stage,
-                                            6,
-                                            "6. Indirect Displaced UV Coordinates",
-                                        );
-
-                                        ui.selectable_value(
-                                            &mut state.active_debug_stage,
-                                            7,
-                                            "7. Indirect Isolated Sample Output",
-                                        );
-
-                                        ui.selectable_value(
-                                            &mut state.active_debug_stage,
-                                            8,
-                                            "8. Composite Layer Alpha (Grayscale)",
-                                        );
+                        egui::ScrollArea::vertical()
+                            .id_salt("anim_debug_scroll")
+                            .show(ui, |ui| {
+                                egui::Grid::new("anim_tracks_grid")
+                                    .num_columns(2)
+                                    .striped(true)
+                                    .spacing([8.0, 4.0])
+                                    .show(ui, |ui| {
+                                        ui.label("TODO: make this show stuff");
                                     });
                             });
-                        });
                     }
                 });
             });
     }
 
-    // maybe somehow can be done without a clone?
-    if let Some(err) = state.error_message.clone() {
+    if let Some(err) = state.error_message.to_owned() {
         egui::Window::new("Error")
             .collapsible(false)
             .resizable(false)
             .show(ui, |ui| {
-                ui.label(err);
+                ui.colored_label(egui::Color32::LIGHT_RED, err);
 
                 if ui.button("Close").clicked() {
                     state.error_message = None;
                 }
             });
     };
-
-    egui::Panel::top("menu_bar").show_inside(ui, |ui| {
-        egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("Load File...").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter(
-                            "Supported files",
-                            &[SUPPORTED_SARC_EXTENSIONS, &["bflyt"]].concat(),
-                        )
-                        .pick_file()
-                    {
-                        state.pending_action = Some(UiAction::LoadFile(path));
-                        state.hidden_panes.clear();
-                        state.selected_pane = None;
-                    }
-
-                    ui.close();
-                }
-
-                if ui.button("Load MALs...").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Supported files", SUPPORTED_SARC_EXTENSIONS)
-                        .pick_file()
-                    {
-                        state.pending_action = Some(UiAction::LoadMal(path));
-                    }
-                    ui.close();
-                }
-
-                if ui.button("Set blarc folder...").clicked() {
-                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        state.pending_action = Some(UiAction::SetBlarcDir(dir));
-                    }
-                    ui.close();
-                }
-            });
-        })
-    });
 }
 
 fn hide_pane_recursive(idx: usize, view: &BflytView, hidden_set: &mut HashSet<usize>) {
