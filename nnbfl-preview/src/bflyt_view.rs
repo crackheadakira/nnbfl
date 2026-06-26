@@ -356,6 +356,7 @@ impl<'a> Walker<'a> {
         depth: usize,
         parent_visible: bool,
         parent_idx: Option<usize>,
+        has_bntx: bool,
     ) {
         let mut last_rect = (parent_x, parent_y, parent_w, parent_h);
         let mut last_visible = parent_visible;
@@ -373,6 +374,7 @@ impl<'a> Walker<'a> {
                         depth,
                         parent_visible,
                         parent_idx,
+                        has_bntx,
                     );
 
                     if let Some(p) = self.panes.last() {
@@ -394,6 +396,7 @@ impl<'a> Walker<'a> {
                         depth + 1,
                         last_visible,
                         last_pane_idx,
+                        has_bntx,
                     );
 
                     last_rect = (parent_x, parent_y, parent_w, parent_h);
@@ -415,6 +418,7 @@ impl<'a> Walker<'a> {
         depth: usize,
         parent_visible: bool,
         parent_idx: Option<usize>,
+        has_bntx: bool,
     ) {
         match node {
             BflytNode::Section(section) => {
@@ -441,6 +445,7 @@ impl<'a> Walker<'a> {
 
                 let mut has_textured = false;
                 if let BflytSection::PicturePane(pic) = section
+                    && has_bntx
                     && let Some(mat_list) = self.material_list
                     && let Some(tq) = self.make_textured_quad(
                         mat_list,
@@ -490,7 +495,9 @@ impl<'a> Walker<'a> {
                 });
 
                 if let BflytSection::PartsPane(parts) = section {
-                    self.maybe_resolve_parts(parts, x, y, w, h, depth, is_visible, pane_idx);
+                    self.maybe_resolve_parts(
+                        parts, x, y, w, h, depth, is_visible, pane_idx, has_bntx,
+                    );
                 }
             }
             BflytNode::Panes(_) | BflytNode::Groups(_) => {}
@@ -873,6 +880,7 @@ impl<'a> Walker<'a> {
         depth: usize,
         parent_visible: bool,
         parent_idx: usize,
+        has_bntx: bool,
     ) {
         if self.parts_depth >= MAX_PARTS_DEPTH {
             return;
@@ -952,6 +960,7 @@ impl<'a> Walker<'a> {
             &parts_source_label,
             parent_visible,
             Some(parent_idx),
+            has_bntx,
         );
     }
 
@@ -974,6 +983,7 @@ impl<'a> Walker<'a> {
         parts_source: &str,
         parent_visible: bool,
         parent_idx: Option<usize>,
+        has_bntx: bool,
     ) {
         let mut last_rect = (parent_x, parent_y, parent_w, parent_h);
         let mut last_visible = parent_visible;
@@ -999,6 +1009,7 @@ impl<'a> Walker<'a> {
                         parts_source,
                         parent_visible,
                         parent_idx,
+                        has_bntx,
                     );
 
                     if let Some(base) = base_pane(section) {
@@ -1032,6 +1043,7 @@ impl<'a> Walker<'a> {
                         parts_source,
                         last_visible,
                         last_pane_idx,
+                        has_bntx,
                     );
                 }
                 BflytNode::Groups(_) => {}
@@ -1058,6 +1070,7 @@ impl<'a> Walker<'a> {
         parts_source: &str,
         parent_visible: bool,
         parent_idx: Option<usize>,
+        has_bntx: bool,
     ) {
         match node {
             BflytNode::Section(section) => {
@@ -1116,7 +1129,9 @@ impl<'a> Walker<'a> {
                 }
 
                 let mut has_textured = false;
-                if let BflytSection::PicturePane(pic) = effective_section {
+                if let BflytSection::PicturePane(pic) = effective_section
+                    && has_bntx
+                {
                     let was_overridden = overrides.contains_key(&pname);
                     let chosen_mat_list = if was_overridden {
                         root_mat_list
@@ -1175,7 +1190,17 @@ impl<'a> Walker<'a> {
 
                 if let BflytSection::PartsPane(nested_parts) = effective_section {
                     self.parts_depth += 1;
-                    self.maybe_resolve_parts(nested_parts, x, y, w, h, depth, is_visible, pane_idx);
+                    self.maybe_resolve_parts(
+                        nested_parts,
+                        x,
+                        y,
+                        w,
+                        h,
+                        depth,
+                        is_visible,
+                        pane_idx,
+                        has_bntx,
+                    );
                     self.parts_depth -= 1;
                 }
             }
@@ -1184,7 +1209,12 @@ impl<'a> Walker<'a> {
     }
 }
 
-pub fn build_view(file: Bflyt, blarc_dir: Option<&Path>, file_name: String) -> BflytView {
+pub fn build_view(
+    file: Bflyt,
+    blarc_dir: Option<&Path>,
+    file_name: String,
+    has_bntx: bool,
+) -> BflytView {
     let layout_w = file.layout.width;
     let layout_h = file.layout.height;
 
@@ -1207,7 +1237,17 @@ pub fn build_view(file: Bflyt, blarc_dir: Option<&Path>, file_name: String) -> B
         discovered_bntx_buffers: Vec::new(),
     };
 
-    walker.walk_nodes(&file.nodes, 0.0, 0.0, layout_w, layout_h, 0, true, None);
+    walker.walk_nodes(
+        &file.nodes,
+        0.0,
+        0.0,
+        layout_w,
+        layout_h,
+        0,
+        true,
+        None,
+        has_bntx,
+    );
     let discovered_bntx_buffers = walker.discovered_bntx_buffers;
 
     children.resize(panes.len(), Vec::new());

@@ -396,6 +396,7 @@ impl App {
             file,
             self.blarc_dir.as_deref(),
             current_layout_name.to_string(),
+            res.bntx_bytes.is_some(),
         );
 
         if let Some(root_bntx) = res.bntx_bytes {
