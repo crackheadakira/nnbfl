@@ -563,13 +563,19 @@ pub fn transform_uv_srt(srt: &MaterialTextureSrt, uv: [f32; 2]) -> [f32; 2] {
     let cos_r = rad.cos();
     let sin_r = rad.sin();
 
-    let scaled_u = uv[0] * srt.scale_u;
-    let scaled_v = uv[1] * srt.scale_v;
+    let centered_u = uv[0] - 0.5;
+    let centered_v = uv[1] - 0.5;
+
+    let scaled_u = centered_u * srt.scale_u;
+    let scaled_v = centered_v * srt.scale_v;
 
     let rotated_u = scaled_u * cos_r - scaled_v * sin_r;
     let rotated_v = scaled_u * sin_r + scaled_v * cos_r;
 
-    [rotated_u + srt.translate_u, rotated_v + srt.translate_v]
+    [
+        rotated_u + srt.translate_u + 0.5,
+        rotated_v + srt.translate_v + 0.5,
+    ]
 }
 
 fn apply_tex_srts(tq: &mut crate::renderer::textured_quad::TexturedQuad) {

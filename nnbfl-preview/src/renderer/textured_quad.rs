@@ -380,9 +380,9 @@ impl TexturedQuadRenderer {
             let positions = q.corners;
 
             let tex_aspects = [
-                Self::get_layer_aspect(q, texture_cache, 0),
-                Self::get_layer_aspect(q, texture_cache, 1),
-                Self::get_layer_aspect(q, texture_cache, 2),
+                Self::get_layer_aspect(q, texture_cache, layout_w, layout_h, 0),
+                Self::get_layer_aspect(q, texture_cache, layout_w, layout_h, 1),
+                Self::get_layer_aspect(q, texture_cache, layout_w, layout_h, 2),
             ];
 
             let mut match_found = false;
@@ -850,7 +850,8 @@ impl TexturedQuadRenderer {
         pane_cy: f32,
         layer_idx: usize,
     ) -> [[f32; 4]; 2] {
-        let tex_aspect_ratio = Self::get_layer_aspect(quad, texture_cache, layer_idx);
+        let tex_aspect_ratio =
+            Self::get_layer_aspect(quad, texture_cache, layout_w, layout_h, layer_idx);
 
         let shift = layer_idx * 8;
         let packed = quad.standard_material.tex_gen_mode >> shift;
@@ -863,11 +864,14 @@ impl TexturedQuadRenderer {
         let fitting_layout_size = (packed & (1 << 2)) != 0;
         let _fitting_pane_size = (packed & (1 << 3)) != 0;
         let adjust_sr = (packed & (1 << 4)) != 0;
+        let orthogonal = (packed & (1 << 5)) != 0;
 
-        let (base_w, base_h) = if fitting_layout_size {
-            (layout_w, layout_h)
+        let (base_w, base_h, cx, cy) = if orthogonal {
+            (layout_w, layout_h, layout_w * 0.5, layout_h * 0.5)
+        } else if fitting_layout_size {
+            (layout_w, layout_h, pane_cx, pane_cy)
         } else {
-            (quad.width, quad.height)
+            (quad.width, quad.height, pane_cx, pane_cy)
         };
 
         if adjust_sr {
@@ -889,8 +893,14 @@ impl TexturedQuadRenderer {
                 .map(|s| s.translate_v)
                 .unwrap_or(0.0);
 
-            let reciprocal_width = 1.0 / quad.width;
-            let reciprocal_height = 1.0 / quad.height;
+            let (input_w, input_h) = if orthogonal {
+                (layout_w, layout_h)
+            } else {
+                (quad.width, quad.height)
+            };
+
+            let reciprocal_width = 1.0 / input_w;
+            let reciprocal_height = 1.0 / input_h;
 
             let mut scale_s = 0.5 / sx;
             let mut scale_t = 0.5 / sy;
@@ -915,17 +925,29 @@ impl TexturedQuadRenderer {
             let mut m_s = 1.0 / base_w;
             let mut m_t = 1.0 / base_h;
 
-            let mut trans_s = 0.5 - pane_cx / base_w;
-            let mut trans_t = 0.5 - pane_cy / base_h;
-
-            if tex_aspect_ratio > 1.0 {
-                m_t *= tex_aspect_ratio;
-                trans_t = trans_t * tex_aspect_ratio + (0.5 - 0.5 * tex_aspect_ratio);
+            let (scale_s, scale_t) = if tex_aspect_ratio > 1.0 {
+                (1.0, tex_aspect_ratio)
             } else {
-                let inv_ratio = 1.0 / tex_aspect_ratio;
-                m_s *= inv_ratio;
-                trans_s = trans_s * inv_ratio + (0.5 - 0.5 * inv_ratio);
-            }
+                (1.0 / tex_aspect_ratio, 1.0)
+            };
+
+            m_s *= scale_s;
+            m_t *= scale_t;
+
+            let srt_tu = quad
+                .tex_srts
+                .get(layer_idx)
+                .map(|s| s.translate_u)
+                .unwrap_or(0.0);
+
+            let srt_tv = quad
+                .tex_srts
+                .get(layer_idx)
+                .map(|s| s.translate_v)
+                .unwrap_or(0.0);
+
+            let trans_s = 0.5 - (cx * m_s) + srt_tu;
+            let trans_t = 0.5 - (cy * m_t) + srt_tv;
 
             [[m_s, 0.0, 0.0, trans_s], [0.0, m_t, 0.0, trans_t]]
         }
@@ -934,12 +956,26 @@ impl TexturedQuadRenderer {
     fn get_layer_aspect(
         quad: &TexturedQuad,
         texture_cache: &TextureCache,
+        layout_w: f32,
+        layout_h: f32,
         layer_idx: usize,
     ) -> f32 {
-        let pane_aspect = if quad.height > 0.0 {
-            quad.width / quad.height
+        let shift = layer_idx * 8;
+        let packed = quad.standard_material.tex_gen_mode >> shift;
+        let orthogonal = (packed & (1 << 5)) != 0;
+
+        let base_aspect = if orthogonal {
+            if layout_h > 0.0 {
+                layout_w / layout_h
+            } else {
+                1.0
+            }
         } else {
-            1.0
+            if quad.height > 0.0 {
+                quad.width / quad.height
+            } else {
+                1.0
+            }
         };
 
         let tex_name = match layer_idx {
@@ -950,7 +986,7 @@ impl TexturedQuadRenderer {
 
         tex_name
             .and_then(|name| texture_cache.get(name))
-            .map(|t| (t.width as f32 / t.height as f32) / pane_aspect)
+            .map(|t| (t.width as f32 / t.height as f32) / base_aspect)
             .unwrap_or(1.0)
     }
 

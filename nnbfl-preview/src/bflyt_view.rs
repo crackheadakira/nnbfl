@@ -374,6 +374,7 @@ impl<'a> Walker<'a> {
                         parent_visible,
                         parent_idx,
                     );
+
                     if let Some(p) = self.panes.last() {
                         last_rect = (p.x, p.y, p.width, p.height);
                         last_pane_idx = Some(self.panes.len() - 1);
@@ -394,6 +395,10 @@ impl<'a> Walker<'a> {
                         last_visible,
                         last_pane_idx,
                     );
+
+                    last_rect = (parent_x, parent_y, parent_w, parent_h);
+                    last_visible = parent_visible;
+                    last_pane_idx = parent_idx;
                 }
                 BflytNode::Groups(_) => {}
             }
@@ -648,14 +653,19 @@ impl<'a> Walker<'a> {
             .iter_mut()
             .zip(mat.tex_coord_gens.iter().take(texture_count as usize))
         {
-            *flag = match coord_gen.tex_gen_source {
-                TexGenSrc::PaneBasedProjection
-                | TexGenSrc::OrthogonalProjection
-                | TexGenSrc::PerspectiveProjection
-                | TexGenSrc::PaneBasedPerspectiveProjection => 1,
-                TexGenSrc::BrickRepeat => 2,
-                _ => 0,
+            let (mode, is_ortho) = match coord_gen.tex_gen_source {
+                TexGenSrc::PaneBasedProjection | TexGenSrc::PaneBasedPerspectiveProjection => {
+                    (1, false)
+                }
+                TexGenSrc::OrthogonalProjection | TexGenSrc::PerspectiveProjection => (1, true),
+                TexGenSrc::BrickRepeat => (2, false),
+                _ => (0, false),
             };
+
+            *flag = mode;
+            if is_ortho {
+                *flag |= 1 << 5;
+            }
         }
 
         let mut proj_scales = [[1.0f32; 2]; 3];
@@ -663,7 +673,7 @@ impl<'a> Walker<'a> {
 
         let mut target_layer = 0;
         for tex_gen in mat.projection_tex_gens.iter().take(texture_count as usize) {
-            while target_layer < 3 && tex_gen_flags[target_layer] != 1 {
+            while target_layer < 3 && (tex_gen_flags[target_layer] & 0x3) != 1 {
                 target_layer += 1;
             }
 
