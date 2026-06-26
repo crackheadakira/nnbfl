@@ -355,42 +355,42 @@ impl ReadWriteable for Bflyt {
         let mut writer = Writer::new();
 
         writer.mark("File header");
-        writer.write_u32(self.magic);
-        writer.write_u16(self.endianness);
-        writer.write_u16(self.header_size);
-        writer.write_u16(self.micro_version);
-        writer.write_u8(self.minor_version);
-        writer.write_u8(self.major_version);
+        writer.write_u32(this.magic);
+        writer.write_u16(this.endianness);
+        writer.write_u16(this.header_size);
+        writer.write_u16(this.micro_version);
+        writer.write_u8(this.minor_version);
+        writer.write_u8(this.major_version);
 
         let file_size_pos = writer.write_placeholder_u32();
         let mut total_sections = this.nodes.iter().map(|n| n.section_count()).sum();
         total_sections += 1;
-        total_sections += self.user_data.is_some() as u32;
-        total_sections += self.texture_list.is_some() as u32;
-        total_sections += self.font_list.is_some() as u32;
-        total_sections += self.material_list.is_some() as u32;
+        total_sections += this.user_data.is_some() as u32;
+        total_sections += this.texture_list.is_some() as u32;
+        total_sections += this.font_list.is_some() as u32;
+        total_sections += this.material_list.is_some() as u32;
 
         writer.write_u32(total_sections);
 
-        while writer.pos() < self.header_size as usize {
+        while writer.pos() < this.header_size as usize {
             writer.write_u8(0);
         }
 
-        BflytSection::Layout(self.layout.clone()).serialize(&mut writer);
+        BflytSection::Layout(this.layout.clone()).serialize(&mut writer);
 
-        if let Some(usd) = &self.user_data {
+        if let Some(usd) = &this.user_data {
             BflytSection::UserData(usd.clone()).serialize(&mut writer);
         }
 
-        if let Some(t) = &self.texture_list {
+        if let Some(t) = &this.texture_list {
             BflytSection::TextureList(t.clone()).serialize(&mut writer);
         }
 
-        if let Some(f) = &self.font_list {
+        if let Some(f) = &this.font_list {
             BflytSection::FontList(f.clone()).serialize(&mut writer);
         }
 
-        if let Some(m) = &self.material_list {
+        if let Some(m) = &this.material_list {
             BflytSection::MaterialList(m.clone()).serialize(&mut writer);
         }
 
