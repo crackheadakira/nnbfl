@@ -874,24 +874,24 @@ impl TexturedQuadRenderer {
             (quad.width, quad.height, pane_cx, pane_cy)
         };
 
+        let srt_tu = quad
+            .tex_srts
+            .get(layer_idx)
+            .map(|s| s.translate_u)
+            .unwrap_or(0.0);
+
+        let srt_tv = quad
+            .tex_srts
+            .get(layer_idx)
+            .map(|s| s.translate_v)
+            .unwrap_or(0.0);
+
         if adjust_sr {
             let sx = quad.proj_scales[layer_idx][0];
             let sy = quad.proj_scales[layer_idx][1];
 
             let tx = quad.proj_translations[layer_idx][0];
             let ty = quad.proj_translations[layer_idx][1];
-
-            let srt_tu = quad
-                .tex_srts
-                .get(layer_idx)
-                .map(|s| s.translate_u)
-                .unwrap_or(0.0);
-
-            let srt_tv = quad
-                .tex_srts
-                .get(layer_idx)
-                .map(|s| s.translate_v)
-                .unwrap_or(0.0);
 
             let (input_w, input_h) = if orthogonal {
                 (layout_w, layout_h)
@@ -933,18 +933,6 @@ impl TexturedQuadRenderer {
 
             m_s *= scale_s;
             m_t *= scale_t;
-
-            let srt_tu = quad
-                .tex_srts
-                .get(layer_idx)
-                .map(|s| s.translate_u)
-                .unwrap_or(0.0);
-
-            let srt_tv = quad
-                .tex_srts
-                .get(layer_idx)
-                .map(|s| s.translate_v)
-                .unwrap_or(0.0);
 
             let trans_s = 0.5 - (cx * m_s) + srt_tu;
             let trans_t = 0.5 - (cy * m_t) + srt_tv;

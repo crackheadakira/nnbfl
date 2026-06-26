@@ -570,13 +570,30 @@ impl ApplicationHandler for App {
             "No file loaded".into()
         };
 
+        let icon_bytes = include_bytes!("../assets/icon.rgba");
+        let (width, height) = (64, 64);
+
+        let icon = winit::window::Icon::from_rgba(icon_bytes.to_vec(), width, height).ok();
+
+        let mut window_attributes = winit::window::WindowAttributes::default()
+            .with_title(format!("nnbfl-preview - {title_path}"))
+            .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32))
+            .with_window_icon(icon);
+
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        ))]
+        {
+            use winit::platform::wayland::WindowAttributesExtWayland;
+            window_attributes = window_attributes.with_name("nnbfl-preview", "nnbfl-preview");
+        }
+
         let window = Arc::new(
             event_loop
-                .create_window(
-                    winit::window::WindowAttributes::default()
-                        .with_title(format!("nnbfl-preview - {title_path}"))
-                        .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32)),
-                )
+                .create_window(window_attributes)
                 .expect("create window"),
         );
 
