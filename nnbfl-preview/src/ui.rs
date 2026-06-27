@@ -41,6 +41,7 @@ pub struct UiState {
     pub anim_names: Vec<String>,
     pub pending_play_anim: Option<String>,
     pub sidebar_tab: SidebarTab,
+    pub right_sidebar_tab: SidebarRightTab,
     pub active_debug_stage: u32,
 
     pub localized_strings: HashMap<String, String>,
@@ -51,7 +52,13 @@ pub enum SidebarTab {
     #[default]
     Panes,
     Materials,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarRightTab {
+    #[default]
     Properties,
+    Animations,
 }
 
 pub enum UiAction {
@@ -196,7 +203,6 @@ pub fn draw_ui(
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut state.sidebar_tab, SidebarTab::Panes, "Pane Tree");
                 ui.selectable_value(&mut state.sidebar_tab, SidebarTab::Materials, "Materials");
-                ui.selectable_value(&mut state.sidebar_tab, SidebarTab::Properties, "Properties");
             });
             ui.separator();
 
@@ -285,142 +291,168 @@ pub fn draw_ui(
                         ui.label("No .bflyt file loaded");
                     }
                 }
-                SidebarTab::Properties => {
-                    if let Some(view) = view {
-                        ui.vertical(|ui| {
-                            if let Some(idx) = state.selected_pane {
-                                if let Some(pane) = view.panes.get(idx) {
-                                    draw_pane_properties(ui, pane);
-                                }
-                            } else {
-                                ui.centered_and_justified(|ui| {
-                                    ui.label("Select a pane in the tree to inspect it.");
-                                });
-                            }
-                        });
-                    } else {
-                        ui.label("No .bflyt file loaded");
-                    }
-                }
             }
         });
 
-    if !state.anim_names.is_empty() || view.is_some() {
+    if view.is_some() {
         egui::Panel::right("right_control_panel")
             .default_size(300.0)
             .resizable(true)
             .show_inside(ui, |ui| {
-                ui.vertical(|ui| {
-                    if !state.anim_names.is_empty() {
-                        ui.heading("Animations");
-                        ui.horizontal(|ui| {
-                            if anim_player.is_playing() {
-                                ui.label(
-                                    egui::RichText::new("Playing")
-                                        .color(egui::Color32::GREEN)
-                                        .strong(),
-                                );
-                            } else if anim_player.active.is_some() {
-                                ui.label(egui::RichText::new("Paused").color(egui::Color32::GOLD));
-                            } else {
-                                ui.label(egui::RichText::new("Idle").color(egui::Color32::GRAY));
-                            }
-                        });
+                ui.horizontal(|ui| {
+                    ui.selectable_value(
+                        &mut state.right_sidebar_tab,
+                        SidebarRightTab::Properties,
+                        "Properties",
+                    );
 
-                        ui.separator();
+                    ui.selectable_value(
+                        &mut state.right_sidebar_tab,
+                        SidebarRightTab::Animations,
+                        "Animations",
+                    );
+                });
+                ui.separator();
 
-                        egui::ScrollArea::vertical()
-                            .id_salt("anim_selection_grid")
-                            .max_height(120.0)
-                            .show(ui, |ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    for (idx, name) in state.anim_names.iter().enumerate() {
-                                        let is_active = anim_player.active == Some(idx);
-                                        if ui.selectable_label(is_active, name).clicked() {
-                                            state.pending_play_anim = Some(name.clone());
-                                        }
+                match state.right_sidebar_tab {
+                    SidebarRightTab::Properties => {
+                        if let Some(view) = view {
+                            ui.vertical(|ui| {
+                                if let Some(idx) = state.selected_pane {
+                                    if let Some(pane) = view.panes.get(idx) {
+                                        draw_pane_properties(ui, pane);
                                     }
-                                });
+                                } else {
+                                    ui.centered_and_justified(|ui| {
+                                        ui.label("Select a pane in the tree to inspect it.");
+                                    });
+                                }
+                            });
+                        } else {
+                            ui.label("No .bflyt file loaded");
+                        }
+                    }
+                    SidebarRightTab::Animations => {
+                        ui.vertical(|ui| {
+                            ui.heading("Animations");
+                            ui.horizontal(|ui| {
+                                if anim_player.is_playing() {
+                                    ui.label(
+                                        egui::RichText::new("Playing")
+                                            .color(egui::Color32::GREEN)
+                                            .strong(),
+                                    );
+                                } else if anim_player.active.is_some() {
+                                    ui.label(
+                                        egui::RichText::new("Paused").color(egui::Color32::GOLD),
+                                    );
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new("Idle").color(egui::Color32::GRAY),
+                                    );
+                                }
                             });
 
-                        ui.add_space(8.0);
+                            ui.separator();
 
-                        if let Some(idx) = anim_player.active
-                            && let Some(anim) = anim_player.anims.get_mut(idx)
-                        {
-                            ui.group(|ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(&anim.name).strong());
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            ui.small(format!(
-                                                "F: {:.1} / {:.0}",
-                                                anim.frame,
-                                                anim.frame_count()
-                                            ));
-                                        },
-                                    );
+                            egui::ScrollArea::vertical()
+                                .id_salt("anim_selection_grid")
+                                .max_height(120.0)
+                                .show(ui, |ui| {
+                                    if !state.anim_names.is_empty() {
+                                        ui.horizontal_wrapped(|ui| {
+                                            for (idx, name) in state.anim_names.iter().enumerate() {
+                                                let is_active = anim_player.active == Some(idx);
+                                                if ui.selectable_label(is_active, name).clicked() {
+                                                    state.pending_play_anim = Some(name.clone());
+                                                }
+                                            }
+                                        });
+                                    } else {
+                                        ui.label("No animations found.");
+                                    }
                                 });
 
-                                ui.horizontal(|ui| {
-                                    let play_toggle = if anim.playing { "Pause" } else { "Play" };
-                                    if ui.button(play_toggle).clicked() {
-                                        anim.playing = !anim.playing;
-                                        anim.autoplay = !anim.autoplay;
+                            ui.add_space(8.0);
+
+                            if let Some(idx) = anim_player.active
+                                && let Some(anim) = anim_player.anims.get_mut(idx)
+                            {
+                                ui.group(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(&anim.name).strong());
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.small(format!(
+                                                    "F: {:.1} / {:.0}",
+                                                    anim.frame,
+                                                    anim.frame_count()
+                                                ));
+                                            },
+                                        );
+                                    });
+
+                                    ui.horizontal(|ui| {
+                                        let play_toggle =
+                                            if anim.playing { "Pause" } else { "Play" };
+                                        if ui.button(play_toggle).clicked() {
+                                            anim.playing = !anim.playing;
+                                            anim.autoplay = !anim.autoplay;
+                                        }
+
+                                        if ui.button("Stop").clicked() {
+                                            anim.frame = 0.0;
+                                            anim.playing = false;
+                                            anim.autoplay = false;
+                                        }
+
+                                        if ui.button("Loop").clicked() {
+                                            anim.toggle_looping();
+                                            anim.frame = 0.0;
+                                            anim.playing = true;
+                                        }
+                                    });
+
+                                    let max_frame = anim.frame_count();
+                                    let mut temporary_frame = anim.frame;
+                                    let slider_res = ui.add(
+                                        egui::Slider::new(&mut temporary_frame, 0.0..=max_frame)
+                                            .show_value(false)
+                                            .trailing_fill(true),
+                                    );
+
+                                    if slider_res.changed() {
+                                        anim.frame = temporary_frame;
+                                        if slider_res.dragged() {
+                                            anim.playing = false;
+                                        }
                                     }
 
-                                    if ui.button("Stop").clicked() {
-                                        anim.frame = 0.0;
-                                        anim.playing = false;
-                                        anim.autoplay = false;
-                                    }
-
-                                    if ui.button("Loop").clicked() {
-                                        anim.toggle_looping();
-                                        anim.frame = 0.0;
+                                    if slider_res.drag_stopped() && anim.autoplay {
                                         anim.playing = true;
                                     }
                                 });
+                            }
 
-                                let max_frame = anim.frame_count();
-                                let mut temporary_frame = anim.frame;
-                                let slider_res = ui.add(
-                                    egui::Slider::new(&mut temporary_frame, 0.0..=max_frame)
-                                        .show_value(false)
-                                        .trailing_fill(true),
-                                );
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.heading("Animation Details");
 
-                                if slider_res.changed() {
-                                    anim.frame = temporary_frame;
-                                    if slider_res.dragged() {
-                                        anim.playing = false;
-                                    }
-                                }
-
-                                if slider_res.drag_stopped() && anim.autoplay {
-                                    anim.playing = true;
-                                }
-                            });
-                        }
-
-                        ui.add_space(8.0);
-                        ui.separator();
-                        ui.heading("Animation Details");
-
-                        egui::ScrollArea::vertical()
-                            .id_salt("anim_debug_scroll")
-                            .show(ui, |ui| {
-                                egui::Grid::new("anim_tracks_grid")
-                                    .num_columns(2)
-                                    .striped(true)
-                                    .spacing([8.0, 4.0])
-                                    .show(ui, |ui| {
-                                        ui.label("TODO: make this show stuff");
-                                    });
-                            });
+                            egui::ScrollArea::vertical()
+                                .id_salt("anim_debug_scroll")
+                                .show(ui, |ui| {
+                                    egui::Grid::new("anim_tracks_grid")
+                                        .num_columns(2)
+                                        .striped(true)
+                                        .spacing([8.0, 4.0])
+                                        .show(ui, |ui| {
+                                            ui.label("TODO: make this show stuff");
+                                        });
+                                });
+                        });
                     }
-                });
+                }
             });
     }
 
