@@ -367,11 +367,13 @@ pub fn draw_ui(
                                     let play_toggle = if anim.playing { "Pause" } else { "Play" };
                                     if ui.button(play_toggle).clicked() {
                                         anim.playing = !anim.playing;
+                                        anim.autoplay = !anim.autoplay;
                                     }
 
                                     if ui.button("Stop").clicked() {
                                         anim.frame = 0.0;
                                         anim.playing = false;
+                                        anim.autoplay = false;
                                     }
 
                                     if ui.button("Loop").clicked() {
@@ -395,7 +397,8 @@ pub fn draw_ui(
                                         anim.playing = false;
                                     }
                                 }
-                                if slider_res.drag_stopped() {
+
+                                if slider_res.drag_stopped() && anim.autoplay {
                                     anim.playing = true;
                                 }
                             });

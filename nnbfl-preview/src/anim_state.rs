@@ -75,6 +75,7 @@ pub struct AnimInstance {
     pub name: String,
     pub frame: f32,
     pub playing: bool,
+    pub autoplay: bool,
     pub next_anim: Option<String>,
 }
 
@@ -92,11 +93,13 @@ impl AnimInstance {
                 }
             })
             .unwrap_or(file_name);
+
         Self {
             bflan,
             name,
             frame: 0.0,
             playing: false,
+            autoplay: false,
             next_anim,
         }
     }
@@ -189,6 +192,7 @@ impl AnimPlayer {
 
             self.anims[idx].frame = 0.0;
             self.anims[idx].playing = true;
+            self.anims[idx].autoplay = true;
             self.active = Some(idx);
         }
     }

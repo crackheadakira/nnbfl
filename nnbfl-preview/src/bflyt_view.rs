@@ -204,6 +204,8 @@ fn resolve_rect(
     parent_y: f32,
     parent_w: f32,
     parent_h: f32,
+    parent_scale_x: f32,
+    parent_scale_y: f32,
 ) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
     let anchor_x = match pane.origin.parent_origin_x {
         BflytParentOrigin::None => parent_x + parent_w * 0.5,
@@ -216,8 +218,8 @@ fn resolve_rect(
         BflytParentOrigin::RightBottom => parent_y + parent_h,
     };
 
-    let cx = anchor_x + pane.translation.x;
-    let cy = anchor_y - pane.translation.y;
+    let cx = anchor_x + pane.translation.x * parent_scale_x;
+    let cy = anchor_y - pane.translation.y * parent_scale_y;
 
     let w = pane.size.x * pane.scale.x;
     let h = pane.size.y * pane.scale.y;
@@ -256,7 +258,8 @@ fn resolve_rect_in_parts(
     parts_scale_x: f32,
     parts_scale_y: f32,
 ) -> (f32, f32, f32, f32) {
-    let (lx, ly, lw, lh, _, _, _, _) = resolve_rect(pane, parent_x, parent_y, parent_w, parent_h);
+    let (lx, ly, lw, lh, _, _, _, _) =
+        resolve_rect(pane, parent_x, parent_y, parent_w, parent_h, 1.0, 1.0);
 
     let x = parts_center_x + lx * parts_scale_x;
     let y = parts_center_y + ly * parts_scale_y;
@@ -356,11 +359,14 @@ impl<'a> Walker<'a> {
         depth: usize,
         parent_visible: bool,
         parent_idx: Option<usize>,
+        parent_scale_x: f32,
+        parent_scale_y: f32,
         has_bntx: bool,
     ) {
         let mut last_rect = (parent_x, parent_y, parent_w, parent_h);
         let mut last_visible = parent_visible;
         let mut last_pane_idx = parent_idx;
+        let mut last_scale = (parent_scale_x, parent_scale_y);
 
         for node in nodes {
             match node {
@@ -374,6 +380,8 @@ impl<'a> Walker<'a> {
                         depth,
                         parent_visible,
                         parent_idx,
+                        parent_scale_x,
+                        parent_scale_y,
                         has_bntx,
                     );
 
@@ -382,11 +390,14 @@ impl<'a> Walker<'a> {
                         last_pane_idx = Some(self.panes.len() - 1);
                         if let Some(base) = base_pane(section) {
                             last_visible = parent_visible && base.pane_flags.is_visible;
+                            last_scale =
+                                (base.scale.x * parent_scale_x, base.scale.y * parent_scale_y);
                         }
                     }
                 }
                 BflytNode::Panes(children) => {
                     let (px, py, pw, ph) = last_rect;
+                    let (sx, sy) = last_scale;
                     self.walk_nodes(
                         children,
                         px,
@@ -396,12 +407,15 @@ impl<'a> Walker<'a> {
                         depth + 1,
                         last_visible,
                         last_pane_idx,
+                        sx,
+                        sy,
                         has_bntx,
                     );
 
                     last_rect = (parent_x, parent_y, parent_w, parent_h);
                     last_visible = parent_visible;
                     last_pane_idx = parent_idx;
+                    last_scale = (parent_scale_x, parent_scale_y);
                 }
                 BflytNode::Groups(_) => {}
             }
@@ -418,6 +432,8 @@ impl<'a> Walker<'a> {
         depth: usize,
         parent_visible: bool,
         parent_idx: Option<usize>,
+        parent_scale_x: f32,
+        parent_scale_y: f32,
         has_bntx: bool,
     ) {
         match node {
@@ -427,8 +443,15 @@ impl<'a> Walker<'a> {
                 };
 
                 let is_visible = parent_visible && base.pane_flags.is_visible;
-                let (x, y, w, h, anchor_x, anchor_y, cx, cy) =
-                    resolve_rect(base, parent_x, parent_y, parent_w, parent_h);
+                let (x, y, w, h, anchor_x, anchor_y, cx, cy) = resolve_rect(
+                    base,
+                    parent_x,
+                    parent_y,
+                    parent_w,
+                    parent_h,
+                    parent_scale_x,
+                    parent_scale_y,
+                );
                 let label = pane_name(section);
                 let kind = section_kind_name(section).to_string();
                 let pane_idx = self.panes.len();
@@ -1017,8 +1040,15 @@ impl<'a> Walker<'a> {
                         let effective_section = overrides.get(&pname).copied().unwrap_or(section);
                         let effective_base = base_pane(effective_section).unwrap_or(base);
 
-                        let (rx, ry, rw, rh, _, _, _, _) =
-                            resolve_rect(effective_base, parent_x, parent_y, parent_w, parent_h);
+                        let (rx, ry, rw, rh, _, _, _, _) = resolve_rect(
+                            effective_base,
+                            parent_x,
+                            parent_y,
+                            parent_w,
+                            parent_h,
+                            1.0,
+                            1.0,
+                        );
                         last_rect = (rx, ry, rw, rh);
                         last_visible = parent_visible && effective_base.pane_flags.is_visible;
                         last_pane_idx = Some(self.panes.len() - 1);
@@ -1097,8 +1127,15 @@ impl<'a> Walker<'a> {
                     parts_scale_y,
                 );
 
-                let (_, _, _, _, raw_anchor_x, raw_anchor_y, _, _) =
-                    resolve_rect(effective_base, parent_x, parent_y, parent_w, parent_h);
+                let (_, _, _, _, raw_anchor_x, raw_anchor_y, _, _) = resolve_rect(
+                    effective_base,
+                    parent_x,
+                    parent_y,
+                    parent_w,
+                    parent_h,
+                    1.0,
+                    1.0,
+                );
 
                 let anchor_x = parts_origin_x + raw_anchor_x * parts_scale_x;
                 let anchor_y = parts_origin_y + raw_anchor_y * parts_scale_y;
@@ -1246,6 +1283,8 @@ pub fn build_view(
         0,
         true,
         None,
+        1.0,
+        1.0,
         has_bntx,
     );
     let discovered_bntx_buffers = walker.discovered_bntx_buffers;
