@@ -202,7 +202,7 @@ fn sample_indirect(
     m0:  vec4<f32>, m1: vec4<f32>,
     t:   texture_2d<f32>, s: sampler,
 ) -> vec4<f32> {
-    let iv  = vec4<f32>(ic.xyz, 1.0);
+    let iv  = vec4<f32>(ic.xy - 0.25, 0.0, 1.0);
     let offset = vec2<f32>(dot(iv, m0), dot(iv, m1));
     
     var c = textureSample(t, s, uv + offset);
@@ -223,8 +223,8 @@ fn sample_double_indirect(
 ) -> vec4<f32> {
     let alpha = ic0.a * ic1.a;
 
-    var color0 = vec4<f32>((ic0.rgb - 0.5) * 2.0, 1.0);
-    let color1 = vec4<f32>((ic1.rgb - 0.5) * 2.0, 1.0);
+    var color0 = vec4<f32>(ic0.rgb - 0.25, 1.0);
+    let color1 = vec4<f32>(ic1.rgb - 0.25, 1.0);
 
     color0 = combine_layer(color0, color1, combine_mode2, true);
 
@@ -552,11 +552,31 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
     if mat.debug_stage == 2u { return t[1]; }
     if mat.debug_stage == 3u { return t[2]; }
 
+    let byte0 = mat.tex_gen_mode & 0xFFu;
+    let byte1 = (mat.tex_gen_mode >> 8u) & 0xFFu;
+    let pos4  = vec4<f32>(in.pos_mesh, 0.0, 1.0);
+
+    let is_proj0    = (byte0 & 0x3u) != 0u;
+    let adjust_sr0  = (byte0 & (1u << 4u)) != 0u;
+    let uv0_indirect = select(
+        in.uv0,
+        vec2<f32>(dot(pos4, mat.proj_mtx0[0]), dot(pos4, mat.proj_mtx0[1])),
+        is_proj0 && !adjust_sr0,
+    );
+
+    let is_proj1    = (byte1 & 0x3u) != 0u;
+    let adjust_sr1  = (byte1 & (1u << 4u)) != 0u;
+    let uv1_indirect = select(
+        in.uv1,
+        vec2<f32>(dot(pos4, mat.proj_mtx1[0]), dot(pos4, mat.proj_mtx1[1])),
+        is_proj1 && !adjust_sr1,
+    );
+
     let iv = vec4<f32>(t[1].xyz, 1.0);
     let offset = vec2<f32>(dot(iv, mat.indirect_mtx0), dot(iv, mat.indirect_mtx1));
 
     if mat.debug_stage == 5u { return vec4<f32>(offset, 0.0, 1.0); }
-    if mat.debug_stage == 6u { return vec4<f32>(in.uv0 + offset, 0.0, 1.0); }
+    if mat.debug_stage == 6u { return vec4<f32>(uv0_indirect + offset, 0.0, 1.0); }
 
     let sel_a1 = (mat.alpha_select & 1u) != 0u;
     let sel_a2 = (mat.alpha_select & 2u) != 0u;
@@ -569,29 +589,29 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
         tex_color = t[0];
     } else if mat.texture_count == 2u {
         if mat.combine_mode == TEV_MODE_INDIRECT {
-            tex_color = sample_indirect(t[1], in.uv0,
+            tex_color = sample_indirect(t[1], uv0_indirect,
                 mat.indirect_mtx0, mat.indirect_mtx1, t_texture0, s_sampler0);
-            
+
             if mat.debug_stage == 7u { return tex_color; }
         } else if mat.combine_mode == TEV_MODE_BLEND_INDIRECT || mat.combine_mode == TEV_MODE_EACH_INDIRECT {
-            tex_color = sample_double_indirect(t[1], t[1], in.uv0,
+            tex_color = sample_double_indirect(t[1], t[1], uv0_indirect,
                 mat.indirect_mtx0, mat.indirect_mtx1, t_texture0, s_sampler0, mat.combine_mode2);
         } else {
             tex_color = combine_layer(t[0], t[1], mat.combine_mode, sel_a1);
         }
     } else {
         if mat.combine_mode == TEV_MODE_INDIRECT {
-            let ai = sample_indirect(t[1], in.uv0,
+            let ai = sample_indirect(t[1], uv0_indirect,
                 mat.indirect_mtx0, mat.indirect_mtx1, t_texture0, s_sampler0);
-            
+
             if mat.debug_stage == 7u { return ai; }
             tex_color = combine_layer(ai, t[2], mat.combine_mode2, sel_a2);
         } else if mat.combine_mode2 == TEV_MODE_INDIRECT {
-            let ai = sample_indirect(t[2], in.uv1,
+            let ai = sample_indirect(t[2], uv1_indirect,
                 mat.indirect_mtx0, mat.indirect_mtx1, t_texture1, s_sampler1);
             tex_color = combine_layer(t[0], ai, mat.combine_mode, sel_a1);
         } else if mat.combine_mode == TEV_MODE_BLEND_INDIRECT || mat.combine_mode == TEV_MODE_EACH_INDIRECT {
-            tex_color = sample_double_indirect(t[1], t[2], in.uv0,
+            tex_color = sample_double_indirect(t[1], t[2], uv0_indirect,
                 mat.indirect_mtx0, mat.indirect_mtx1, t_texture0, s_sampler0, mat.combine_mode2);
         } else {
             let l1 = combine_layer(t[0], t[1], mat.combine_mode,  sel_a1);
