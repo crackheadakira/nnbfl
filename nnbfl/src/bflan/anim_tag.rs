@@ -6,7 +6,7 @@ use crate::{
     ui2d::userdata::ResUi2dUserDataSection,
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResBflanPaneAnimTag {
     pub tag_order: u16,
     pub start_frame: u16,
@@ -116,7 +116,7 @@ impl ResBflanPaneAnimTag {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ResBflanGroup {
     pub group_name: String,
     pub flag: u8,

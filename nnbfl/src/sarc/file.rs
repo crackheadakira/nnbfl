@@ -239,6 +239,44 @@ pub struct SarcFile {
     pub data: Vec<u8>,
 }
 
+pub enum MagicFiles {
+    Bflyt(Vec<u8>),
+    Bflan(Vec<u8>),
+    Bntx(Vec<u8>),
+    Msbp(Vec<u8>),
+    Msbt(Vec<u8>),
+    Sarc(Vec<u8>),
+    Yaz0(Vec<u8>),
+    Zstd(Vec<u8>),
+    Unknown(Vec<u8>),
+}
+
+impl SarcFile {
+    pub fn match_by_magic(self) -> MagicFiles {
+        if self.data.len() < 4 {
+            return MagicFiles::Unknown(self.data);
+        };
+
+        if self.data.len() >= 8 {
+            match &self.data[0..8] {
+                b"MsgPrjBn" => return MagicFiles::Msbp(self.data),
+                b"MsgStdBn" => return MagicFiles::Msbt(self.data),
+                _ => {}
+            }
+        }
+
+        match &self.data[0..4] {
+            b"FLYT" => MagicFiles::Bflyt(self.data),
+            b"FLAN" => MagicFiles::Bflan(self.data),
+            b"BNTX" => MagicFiles::Bntx(self.data),
+            b"SARC" => MagicFiles::Sarc(self.data),
+            b"Yaz0" => MagicFiles::Yaz0(self.data),
+            [0x28, 0xB5, 0x2F, 0xFD] => MagicFiles::Zstd(self.data),
+            _ => MagicFiles::Unknown(self.data),
+        }
+    }
+}
+
 struct FatEntry {
     name_hash: u32,
     name_table_offset: u32,

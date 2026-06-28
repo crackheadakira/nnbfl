@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
+use std::{collections::HashSet, path::PathBuf};
 
 use egui::Ui;
 use nnbfl::{
@@ -43,8 +40,6 @@ pub struct UiState {
     pub sidebar_tab: SidebarTab,
     pub right_sidebar_tab: SidebarRightTab,
     pub active_debug_stage: u32,
-
-    pub localized_strings: HashMap<String, String>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +59,6 @@ pub enum SidebarRightTab {
 pub enum UiAction {
     LoadFile(PathBuf),
     SetBlarcDir(PathBuf),
-    LoadMal(PathBuf),
 }
 
 pub fn draw_ui(
@@ -86,23 +80,7 @@ pub fn draw_ui(
                 && !state.hidden_panes.contains(&i)
                 && pane.visible
             {
-                let pane_label = pane.label.trim_end_matches('\0');
-                let lookup_key = if let Some(source) = &pane.parts_source {
-                    format!("{}:{source}-{pane_label}", view.file_name)
-                } else {
-                    format!("{}:{pane_label}", view.file_name)
-                };
-
-                let default_text = text_box.text.as_deref().unwrap_or("");
-                let display_text = state
-                    .localized_strings
-                    .get(&lookup_key)
-                    .map(|s| s.as_str())
-                    .unwrap_or(default_text);
-
-                if display_text.is_empty() {
-                    continue;
-                }
+                let display_text = text_box.text.as_deref().unwrap_or("");
 
                 let center_x = quad.x + (quad.width * 0.5);
                 let center_y = quad.y + (quad.height * 0.5);
@@ -148,16 +126,6 @@ pub fn draw_ui(
                         state.pending_action = Some(UiAction::LoadFile(path));
                         state.hidden_panes.clear();
                         state.selected_pane = None;
-                    }
-                    ui.close();
-                }
-
-                if ui.button("Load MALs...").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Supported files", SUPPORTED_SARC_EXTENSIONS)
-                        .pick_file()
-                    {
-                        state.pending_action = Some(UiAction::LoadMal(path));
                     }
                     ui.close();
                 }

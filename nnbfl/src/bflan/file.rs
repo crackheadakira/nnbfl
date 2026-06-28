@@ -1,5 +1,3 @@
-use serde::{Deserialize, Serialize};
-
 use crate::{
     bflan::{anim_info::PaneAnimInfo, anim_tag::ResBflanPaneAnimTag, constants::*},
     bflyt::constants::*,
@@ -7,7 +5,7 @@ use crate::{
     ui2d::userdata::ResUi2dUserDataSection,
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bflan {
     pub magic: u32,
     pub endianness: u16,
@@ -16,7 +14,9 @@ pub struct Bflan {
     pub minor_version: u8,
     pub major_version: u8,
 
-    pub sections: Vec<BflanSections>,
+    pub anim_tag: ResBflanPaneAnimTag,
+    pub anim_info: PaneAnimInfo,
+    pub user_data: Option<ResUi2dUserDataSection>,
 }
 
 impl ReadWriteable for Bflan {
@@ -49,16 +49,39 @@ impl ReadWriteable for Bflan {
             });
         }
 
-        let sections = BflanSections::parse(&mut cursor, section_count)?;
+        let mut anim_tag = None;
+        let mut anim_info = None;
+        let mut user_data = None;
+
+        for _ in 0..section_count {
+            let section = BflanSections::parse(&mut cursor)?;
+
+            match section {
+                BflanSections::PaneAnimTag(t) => anim_tag = Some(t),
+                BflanSections::PaneAnimInfo(i) => anim_info = Some(i),
+                BflanSections::UserData(usd) => user_data = Some(usd),
+                _ => {}
+            }
+        }
+
+        if anim_tag.is_none() {
+            return Err(FormatError::MissingLayout);
+        }
+
+        if anim_info.is_none() {
+            return Err(FormatError::MissingLayout);
+        }
 
         Ok(Self {
             magic,
+            anim_tag: anim_tag.unwrap(),
+            anim_info: anim_info.unwrap(),
+            user_data,
             endianness,
             header_size,
             micro_version,
             minor_version,
             major_version,
-            sections,
         })
     }
 
@@ -74,10 +97,16 @@ impl ReadWriteable for Bflan {
         writer.write_u8(self.major_version);
 
         let file_size_pos = writer.write_placeholder_u32();
-        writer.write_u32(self.sections.len() as u32);
+        let mut section_count = 2;
+        section_count += self.user_data.is_some() as u32;
+        writer.write_u32(section_count);
 
-        for section in &self.sections {
-            section.serialize(&mut writer);
+        BflanSectionsRef::PaneAnimTag(&self.anim_tag).serialize(&mut writer);
+        BflanSectionsRef::PaneAnimInfo(&self.anim_info).serialize(&mut writer);
+
+        // TODO: is user data here, or earlier?
+        if let Some(user_data) = &self.user_data {
+            BflanSectionsRef::UserData(user_data).serialize(&mut writer);
         }
 
         let total_size = writer.pos() as u32;
@@ -87,7 +116,7 @@ impl ReadWriteable for Bflan {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum BflanSections {
     UserData(ResUi2dUserDataSection),
     PaneAnimTag(ResBflanPaneAnimTag),
@@ -96,72 +125,34 @@ pub enum BflanSections {
 }
 
 impl BflanSections {
-    pub fn parse(cursor: &mut Cursor, count: u32) -> Result<Vec<Self>, FormatError> {
-        let mut sections = Vec::new();
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        let section_start = cursor.pos;
 
-        for i in 0..count {
-            let section_start = cursor.pos;
-
-            let header =
-                SectionHeader::parse(cursor).map_err(|e| FormatError::SectionCountMismatch {
-                    expected: count,
-                    actual: i,
-                    source: Box::new(e),
-                })?;
-
-            if header.size < 8 {
-                return Err(FormatError::SectionCountMismatch {
-                    expected: count,
-                    actual: i,
-                    source: Box::new(FormatError::MalformedSection {
-                        section_type: format!("Header(0x{:08X})", header.magic),
-                        offset: section_start,
-                        reason: format!(
-                            "Declared section size ({}) is smaller than minimum header size of 8 bytes",
-                            header.size
-                        ),
-                    }),
-                });
+        let header = SectionHeader::parse(cursor)?;
+        let section = match header.magic {
+            MAGIC_USERDATA => Self::UserData(ResUi2dUserDataSection::parse(cursor, false)?),
+            MAGIC_ANIMTAG => Self::PaneAnimTag(ResBflanPaneAnimTag::parse(cursor, section_start)?),
+            MAGIC_ANIMINFO => Self::PaneAnimInfo(PaneAnimInfo::parse(cursor, section_start)?),
+            _ => {
+                let remaining_payload = (header.size - 8) as usize;
+                let data = cursor.read_bytes(remaining_payload)?.to_vec();
+                Self::Unknown(header, data)
             }
+        };
 
-            let parse_body = |cursor: &mut Cursor| -> Result<Self, FormatError> {
-                let section_variant = match header.magic {
-                    MAGIC_USERDATA => Self::UserData(ResUi2dUserDataSection::parse(cursor, false)?),
-                    MAGIC_ANIMTAG => {
-                        Self::PaneAnimTag(ResBflanPaneAnimTag::parse(cursor, section_start)?)
-                    }
-                    MAGIC_ANIMINFO => {
-                        Self::PaneAnimInfo(PaneAnimInfo::parse(cursor, section_start)?)
-                    }
-                    _ => {
-                        let remaining_payload = (header.size - 8) as usize;
-                        let data = cursor.read_bytes(remaining_payload)?.to_vec();
-                        Self::Unknown(header, data)
-                    }
-                };
-                Ok(section_variant)
-            };
+        cursor.seek(section_start + header.size as usize)?;
 
-            let section = parse_body(cursor).map_err(|e| FormatError::SectionCountMismatch {
-                expected: count,
-                actual: i,
-                source: Box::new(e),
-            })?;
-
-            sections.push(section);
-
-            cursor
-                .seek(section_start + header.size as usize)
-                .map_err(|e| FormatError::SectionCountMismatch {
-                    expected: count,
-                    actual: i,
-                    source: Box::new(e),
-                })?;
-        }
-
-        Ok(sections)
+        Ok(section)
     }
+}
 
+enum BflanSectionsRef<'a> {
+    UserData(&'a ResUi2dUserDataSection),
+    PaneAnimTag(&'a ResBflanPaneAnimTag),
+    PaneAnimInfo(&'a PaneAnimInfo),
+}
+
+impl<'a> BflanSectionsRef<'a> {
     pub fn serialize(&self, writer: &mut Writer) {
         let section_start = writer.pos();
 
@@ -170,7 +161,6 @@ impl BflanSections {
             Self::UserData(_) => writer.write_u32(MAGIC_USERDATA),
             Self::PaneAnimTag(_) => writer.write_u32(MAGIC_ANIMTAG),
             Self::PaneAnimInfo(_) => writer.write_u32(MAGIC_ANIMINFO),
-            Self::Unknown(header, _) => writer.write_u32(header.magic),
         }
 
         let size_pos = writer.write_placeholder_u32();
@@ -180,9 +170,6 @@ impl BflanSections {
             Self::UserData(data) => data.serialize(writer),
             Self::PaneAnimTag(tag) => tag.serialize(writer, section_start),
             Self::PaneAnimInfo(info) => info.serialize(writer, section_start),
-            Self::Unknown(_, raw_data) => {
-                writer.write_bytes(raw_data);
-            }
         }
 
         writer.align(4);

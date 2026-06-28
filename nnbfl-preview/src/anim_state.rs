@@ -6,7 +6,7 @@ use nnbfl::{
     bflan::{
         anim_info::{AnimContent, AnimInfo, AnimInfoType, AnimType, PaneAnimInfo},
         curves::Curve,
-        file::{Bflan, BflanSections},
+        file::Bflan,
         targets::{
             IndirectSrtTarget, PaneSrtTarget, TargetIndex, TextureSrtTarget, VertexColorTarget,
         },
@@ -80,19 +80,9 @@ pub struct AnimInstance {
 }
 
 impl AnimInstance {
-    pub fn new(file_name: String, bflan: Bflan) -> Self {
+    pub fn new(bflan: Bflan) -> Self {
         let next_anim = find_next_anim(&bflan);
-        let name = bflan
-            .sections
-            .iter()
-            .find_map(|s| {
-                if let BflanSections::PaneAnimTag(tag) = s {
-                    Some(tag.o_name.clone())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(file_name);
+        let name = bflan.anim_tag.o_name.clone();
 
         Self {
             bflan,
@@ -105,59 +95,25 @@ impl AnimInstance {
     }
 
     pub fn frame_count(&self) -> f32 {
-        self.bflan
-            .sections
-            .iter()
-            .find_map(|s| {
-                if let BflanSections::PaneAnimInfo(pai) = s {
-                    Some(pai.frame_count as f32)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(1.0)
+        self.bflan.anim_info.frame_count as f32
     }
 
     pub fn is_looping(&self) -> bool {
-        self.bflan.sections.iter().any(|s| {
-            if let BflanSections::PaneAnimInfo(pai) = s {
-                pai.is_looping
-            } else {
-                false
-            }
-        })
+        self.bflan.anim_info.is_looping
     }
 
     pub fn toggle_looping(&mut self) {
-        for section in &mut self.bflan.sections {
-            if let BflanSections::PaneAnimInfo(pai) = section {
-                pai.is_looping = !pai.is_looping;
-            }
-        }
-    }
-
-    pub fn pane_anim_info(&self) -> Option<&PaneAnimInfo> {
-        self.bflan.sections.iter().find_map(|s| {
-            if let BflanSections::PaneAnimInfo(pai) = s {
-                Some(pai)
-            } else {
-                None
-            }
-        })
+        self.bflan.anim_info.is_looping = !self.bflan.anim_info.is_looping
     }
 }
 
 fn find_next_anim(bflan: &Bflan) -> Option<String> {
-    for section in &bflan.sections {
-        if let BflanSections::PaneAnimTag(tag) = section
-            && let Some(ud) = &tag.user_data
-        {
-            for entry in &ud.user_data {
-                if entry.o_name == "CommandPlayEnd_Play"
-                    && let Some(ResUi2dUserDataInner::String(value)) = entry.data_array.first()
-                {
-                    return Some(value.clone());
-                }
+    if let Some(ud) = &bflan.anim_tag.user_data {
+        for entry in &ud.user_data {
+            if entry.o_name == "CommandPlayEnd_Play"
+                && let Some(ResUi2dUserDataInner::String(value)) = entry.data_array.first()
+            {
+                return Some(value.clone());
             }
         }
     }
@@ -178,8 +134,8 @@ impl AnimPlayer {
         }
     }
 
-    pub fn load(&mut self, name: String, bflan: Bflan) {
-        self.anims.push(AnimInstance::new(name, bflan));
+    pub fn load(&mut self, bflan: Bflan) {
+        self.anims.push(AnimInstance::new(bflan));
     }
 
     pub fn play(&mut self, name: &str) {
@@ -221,10 +177,7 @@ impl AnimPlayer {
     pub fn apply(&self, view: &mut BflytView) {
         let Some(idx) = self.active else { return };
         let anim = &self.anims[idx];
-        let Some(pai) = anim.pane_anim_info() else {
-            return;
-        };
-        apply_anim(pai, anim.frame, view);
+        apply_anim(&anim.bflan.anim_info, anim.frame, view);
     }
 
     pub fn is_playing(&self) -> bool {

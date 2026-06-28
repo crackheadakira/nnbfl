@@ -8,6 +8,7 @@ use nnbfl::{
         pane::{BflytPane, BflytPicturePane, Color4u8},
     },
     core::ReadWriteable,
+    sarc::file::MagicFiles,
 };
 
 use crate::{
@@ -268,13 +269,7 @@ fn resolve_rect_in_parts(
     (x, y, w, h)
 }
 
-pub struct ResolvedBlarc {
-    pub bflyt_bytes: Vec<u8>,
-    pub bntx_bytes: Option<Vec<u8>>,
-    pub bflan_bytes: Vec<(String, Vec<u8>)>,
-}
-
-pub fn load_bflyt_from_blarc_dir(blarc_dir: &Path, layout_name: &str) -> Option<ResolvedBlarc> {
+pub fn load_bflyt_from_blarc_dir(blarc_dir: &Path, layout_name: &str) -> Option<Vec<MagicFiles>> {
     let entry_path = std::fs::read_dir(blarc_dir).ok()?.find_map(|e| {
         let e = e.ok()?;
         let path = e.path();
@@ -296,40 +291,15 @@ pub fn load_bflyt_from_blarc_dir(blarc_dir: &Path, layout_name: &str) -> Option<
 
     bytes = decompress_if_needed(bytes, &filename);
 
-    let all_files = extract_all_files_recursive(&bytes);
+    let mut all_files = Vec::new();
+    extract_all_files_recursive(bytes, &mut all_files);
 
-    let mut resolved = ResolvedBlarc {
-        bflyt_bytes: Vec::new(),
-        bntx_bytes: None,
-        bflan_bytes: Vec::new(),
-    };
-
-    for (name, data) in &all_files {
-        let name_lower = name.to_lowercase();
-
-        if name_lower.ends_with(".bflyt") {
-            if resolved.bflyt_bytes.is_empty() {
-                resolved.bflyt_bytes = data.clone();
-            }
-        } else if name_lower.ends_with(".bntx") || name_lower.contains("__combined") {
-            if resolved.bntx_bytes.is_none() {
-                resolved.bntx_bytes = Some(data.clone());
-            }
-        } else if name_lower.ends_with(".bflan") {
-            let anim_name = std::path::Path::new(name)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| name.clone());
-
-            resolved.bflan_bytes.push((anim_name, data.clone()));
-        }
-    }
-
-    if resolved.bflyt_bytes.is_empty() {
+    let has_bflyt = all_files.iter().any(|f| matches!(f, MagicFiles::Bflyt(_)));
+    if !has_bflyt {
         return None;
     }
 
-    Some(resolved)
+    Some(all_files)
 }
 
 struct Walker<'a> {
@@ -918,16 +888,27 @@ impl<'a> Walker<'a> {
             return;
         }
 
-        if !self.blarc_cache.contains_key(layout_name)
-            && let Some(assets) = load_bflyt_from_blarc_dir(blarc_dir, layout_name)
-            && let Ok(sub_bflyt) = Bflyt::parse(&assets.bflyt_bytes)
-        {
-            if let Some(bntx_data) = assets.bntx_bytes {
-                self.discovered_bntx_buffers.push(bntx_data);
-            }
+        if !self.blarc_cache.contains_key(layout_name) {
+            if let Some(assets) = load_bflyt_from_blarc_dir(blarc_dir, layout_name) {
+                let bflyt_res = assets.iter().find_map(|f| {
+                    if let MagicFiles::Bflyt(bytes) = f {
+                        Bflyt::parse(bytes).ok()
+                    } else {
+                        None
+                    }
+                });
 
-            self.blarc_cache
-                .insert(layout_name.to_string(), Some(sub_bflyt));
+                if let Some(sub_bflyt) = bflyt_res {
+                    for asset in assets {
+                        if let MagicFiles::Bntx(bntx_data) = asset {
+                            self.discovered_bntx_buffers.push(bntx_data);
+                        }
+                    }
+
+                    self.blarc_cache
+                        .insert(layout_name.to_string(), Some(sub_bflyt));
+                }
+            }
         }
 
         let Some(Some(sub_bflyt)) = self.blarc_cache.get(layout_name) else {

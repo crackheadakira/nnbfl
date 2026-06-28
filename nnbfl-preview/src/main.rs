@@ -9,7 +9,12 @@ use std::{path::PathBuf, sync::Arc, time::Instant};
 use camera::Camera;
 use egui_chinese_font::{FontError, setup_chinese_fonts};
 use egui_wgpu::{RendererOptions, ScreenDescriptor};
-use nnbfl::{bflan::file::Bflan, bflyt::file::Bflyt, core::ReadWriteable, sarc::file::Sarc};
+use nnbfl::{
+    bflan::file::Bflan,
+    bflyt::file::Bflyt,
+    core::ReadWriteable,
+    sarc::file::{MagicFiles, Sarc, SarcFile},
+};
 use pollster::FutureExt;
 use renderer::quad::QuadRenderer;
 use renderer::texture::TextureCache;
@@ -27,7 +32,6 @@ use ui::{UiState, draw_ui};
 
 use crate::{
     anim_state::AnimPlayer,
-    bflyt_view::ResolvedBlarc,
     ui::{SUPPORTED_SARC_EXTENSIONS, UiAction},
 };
 
@@ -373,41 +377,40 @@ impl App {
         };
 
         let bytes = std::fs::read(bflyt_path).expect("read bflyt file");
-        let title_path = bflyt_path.file_name().unwrap().to_string_lossy();
 
-        let res = ResolvedBlarc {
-            bflyt_bytes: bytes,
-            bntx_bytes: None,
-            bflan_bytes: Vec::new(),
-        };
-
-        self.load_file_from_buffer(res, title_path.to_string());
+        self.load_file_from_buffer(vec![MagicFiles::Bflyt(bytes)]);
     }
 
-    fn load_file_from_buffer(&mut self, res: ResolvedBlarc, file_name: String) {
-        let file = Bflyt::parse(&res.bflyt_bytes).expect("parse bflyt file");
+    fn load_file_from_buffer(&mut self, all_files: Vec<MagicFiles>) {
+        let bflyt = all_files
+            .iter()
+            .find_map(|file| {
+                if let MagicFiles::Bflyt(bytes) = file {
+                    Some(Bflyt::parse(bytes).expect("parse bflyt file"))
+                } else {
+                    None
+                }
+            })
+            .expect("No BFLYT file found in data payload");
 
-        let current_layout_name = file_name
-            .strip_prefix("blyt/")
-            .and_then(|s| s.strip_suffix(".bflyt"))
-            .unwrap_or(&file_name);
+        let has_textures = all_files.iter().any(|f| matches!(f, MagicFiles::Bntx(_)));
 
-        let mut view = build_view(
-            file,
-            self.blarc_dir.as_deref(),
-            current_layout_name.to_string(),
-            res.bntx_bytes.is_some(),
-        );
-
-        if let Some(root_bntx) = res.bntx_bytes {
-            view.discovered_bntx_buffers.push(root_bntx);
-        }
+        let layout_name = bflyt.layout.name.clone();
+        let mut view = build_view(bflyt, self.blarc_dir.as_deref(), layout_name, has_textures);
 
         self.anim_player = AnimPlayer::new();
 
-        for (name, bytes) in res.bflan_bytes {
-            if let Ok(bflan) = Bflan::parse(&bytes) {
-                self.anim_player.load(name, bflan);
+        for magic_file in all_files {
+            match magic_file {
+                MagicFiles::Bntx(bytes) => {
+                    view.discovered_bntx_buffers.push(bytes);
+                }
+                MagicFiles::Bflan(bytes) => {
+                    if let Ok(bflan) = Bflan::parse(&bytes) {
+                        self.anim_player.load(bflan);
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -451,66 +454,76 @@ impl App {
                     size.height as f32,
                 );
 
-                window.set_title(&format!("nnbfl-preview - {current_layout_name}"));
+                window.set_title(&format!("nnbfl-preview - {}", &view.file_name));
             }
         }
 
         log::info!(
-            "Loaded {} panes from {current_layout_name:?}",
+            "Loaded {} panes from {:?}",
             self.bflyt_view.as_ref().unwrap().panes.len(),
+            self.bflyt_view.as_ref().unwrap().file_name
         );
     }
 
-    fn extract_blarc_from_sarc_bytes(&self, path: &PathBuf) -> Option<(String, ResolvedBlarc)> {
+    fn extract_blarc_from_sarc_bytes(&self, path: &PathBuf) -> Option<Vec<MagicFiles>> {
         let mut file_bytes = std::fs::read(path).ok()?;
         let filename = path.file_name()?.to_string_lossy();
 
         file_bytes = decompress_if_needed(file_bytes, &filename);
 
-        let all_files = extract_all_files_recursive(&file_bytes);
+        let mut all_files = Vec::new();
+        extract_all_files_recursive(file_bytes, &mut all_files);
 
-        let mut bflyt_name = "unnamed.bflyt".to_string();
-        let mut resolved = ResolvedBlarc {
-            bflyt_bytes: Vec::new(),
-            bntx_bytes: None,
-            bflan_bytes: Vec::new(),
-        };
-
-        for (name, data) in &all_files {
-            let name_lower = name.to_lowercase();
-
-            if name_lower.ends_with(".bflyt") {
-                if resolved.bflyt_bytes.is_empty() {
-                    bflyt_name = name.clone();
-                    resolved.bflyt_bytes = data.clone();
-                }
-            } else if name_lower.ends_with(".bntx") || name_lower.contains("__combined") {
-                if resolved.bntx_bytes.is_none() {
-                    resolved.bntx_bytes = Some(data.clone());
-                }
-            } else if name_lower.ends_with(".bflan") {
-                let anim_name = std::path::Path::new(name)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| name.clone());
-
-                resolved.bflan_bytes.push((anim_name, data.clone()));
-            }
-        }
-
-        if resolved.bflyt_bytes.is_empty() {
+        let has_bflyt = all_files.iter().any(|f| matches!(f, MagicFiles::Bflyt(_)));
+        if !has_bflyt {
             return None;
         }
 
-        Some((bflyt_name, resolved))
+        Some(all_files)
     }
 }
 
-pub fn extract_all_files_recursive(data: &[u8]) -> Vec<(String, Vec<u8>)> {
-    let mut flat_files = Vec::new();
-    unpack_sarc_internal(data, &mut flat_files);
+pub fn extract_all_files_recursive(data: Vec<u8>, out_files: &mut Vec<MagicFiles>) {
+    let current_file = SarcFile {
+        name: None,
+        hash: 0,
+        data,
+    };
 
-    flat_files
+    match current_file.match_by_magic() {
+        MagicFiles::Zstd(compressed_data) => {
+            let mut decompressed = Vec::new();
+
+            if tomolib::formats::zs::decompress(&compressed_data[..], &mut decompressed).is_ok() {
+                extract_all_files_recursive(decompressed, out_files);
+            } else {
+                log::error!("Failed to decompress Zstd data.");
+                out_files.push(MagicFiles::Unknown(compressed_data));
+            }
+        }
+
+        MagicFiles::Yaz0(compressed_data) => out_files.push(MagicFiles::Yaz0(compressed_data)),
+
+        MagicFiles::Sarc(sarc_bytes) => {
+            if let Ok(sarc) = Sarc::parse(&sarc_bytes) {
+                for file in sarc.files {
+                    extract_all_files_recursive(file.data, out_files);
+                }
+            } else {
+                out_files.push(MagicFiles::Sarc(sarc_bytes));
+            }
+        }
+
+        MagicFiles::Bflyt(bytes) => out_files.push(MagicFiles::Bflyt(bytes)),
+        MagicFiles::Bflan(bytes) => out_files.push(MagicFiles::Bflan(bytes)),
+        MagicFiles::Bntx(bytes) => out_files.push(MagicFiles::Bntx(bytes)),
+        MagicFiles::Msbt(bytes) => out_files.push(MagicFiles::Msbt(bytes)),
+        MagicFiles::Msbp(bytes) => out_files.push(MagicFiles::Msbp(bytes)),
+
+        MagicFiles::Unknown(bytes) => {
+            out_files.push(MagicFiles::Unknown(bytes));
+        }
+    }
 }
 
 fn unpack_sarc_internal(data: &[u8], out_files: &mut Vec<(String, Vec<u8>)>) {
@@ -546,7 +559,7 @@ fn unpack_sarc_internal(data: &[u8], out_files: &mut Vec<(String, Vec<u8>)>) {
 }
 
 fn decompress_if_needed(data: Vec<u8>, filename: &str) -> Vec<u8> {
-    if filename.to_lowercase().ends_with(".zs") {
+    if data.len() >= 4 && &data[0..4] == [0x28, 0xB5, 0x2F, 0xFD] {
         let mut decompressed = Vec::new();
 
         if tomolib::formats::zs::decompress(&data[..], &mut decompressed).is_ok() {
@@ -660,16 +673,9 @@ impl ApplicationHandler for App {
                     self.blarc_textures_loaded = false;
                     if let Some(path) = self.bflyt_path.clone() {
                         let bytes = std::fs::read(&path).ok();
+
                         if let Some(bytes) = bytes {
-                            let name = path.file_name().unwrap().to_string_lossy().to_string();
-
-                            let res = ResolvedBlarc {
-                                bflyt_bytes: bytes,
-                                bntx_bytes: None,
-                                bflan_bytes: Vec::new(),
-                            };
-
-                            self.load_file_from_buffer(res, name);
+                            self.load_file_from_buffer(vec![MagicFiles::Bflyt(bytes)]);
                         }
                     }
                     if let Some(w) = &self.window {
@@ -685,8 +691,8 @@ impl ApplicationHandler for App {
                         .any(|ext| path_str.ends_with(&format!(".{}", ext.to_lowercase())));
 
                     if is_sarc {
-                        if let Some((name, data)) = self.extract_blarc_from_sarc_bytes(&path) {
-                            self.load_file_from_buffer(data, name);
+                        if let Some(all_files) = self.extract_blarc_from_sarc_bytes(&path) {
+                            self.load_file_from_buffer(all_files);
                         }
                     } else {
                         self.bflyt_path = Some(path);
@@ -696,70 +702,6 @@ impl ApplicationHandler for App {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                }
-
-                UiAction::LoadMal(path) => {
-                    let path_str = path.to_string_lossy().to_lowercase();
-
-                    let is_sarc = SUPPORTED_SARC_EXTENSIONS
-                        .iter()
-                        .any(|ext| path_str.ends_with(&format!(".{}", ext.to_lowercase())));
-
-                    if !is_sarc {
-                        return;
-                    }
-
-                    let Ok(mut bytes) = std::fs::read(path) else {
-                        self.ui_state.error_message = Some("Error reading MAL file.".to_string());
-
-                        return;
-                    };
-
-                    bytes = decompress_if_needed(bytes, &path_str);
-
-                    let all_files = extract_all_files_recursive(&bytes);
-
-                    let msbp_file = all_files
-                        .iter()
-                        .find(|(name, _)| name.to_lowercase().ends_with("project.msbp"));
-
-                    let Some((_, _)) = msbp_file else {
-                        log::error!(
-                            "Selected archive is not a valid MAL file (missing project.msbp)"
-                        );
-
-                        self.ui_state.error_message =
-                            Some("Invalid MAL file: missing project.msbp".to_string());
-
-                        return;
-                    };
-
-                    self.ui_state.localized_strings.clear();
-
-                    let mut total_files_loaded = 0;
-                    for (name, data) in &all_files {
-                        if name.starts_with("LayoutMsg/") && name.to_lowercase().ends_with(".msbt")
-                        {
-                            let clean_key = name
-                                .strip_prefix("LayoutMsg/")
-                                .and_then(|s| s.strip_suffix(".msbt"))
-                                .unwrap_or(name);
-
-                            if let Ok(msbt) = tomolib::formats::msbt::Msbt::parse(data) {
-                                for msg in &msbt.messages {
-                                    let label = msg.label();
-                                    let text = msg.text_lossy();
-
-                                    let full_key = format!("{}:{}", clean_key, label);
-                                    self.ui_state.localized_strings.insert(full_key, text);
-                                }
-
-                                total_files_loaded += msbt.messages.len();
-                            }
-                        }
-                    }
-
-                    log::info!("Loaded {total_files_loaded} MSBTs from MAL file");
                 }
             }
         }
