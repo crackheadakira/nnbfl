@@ -23,3 +23,4 @@ rfd = "0.17"
 tomolib = "1.6"
 
 egui-chinese-font = { git = "https://github.com/szjerrywang/egui-chinese-font", branch = "egui-0.34" }
+szs = "0.3.7"

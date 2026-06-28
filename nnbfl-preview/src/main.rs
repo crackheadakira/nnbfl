@@ -502,7 +502,15 @@ pub fn extract_all_files_recursive(data: Vec<u8>, out_files: &mut Vec<MagicFiles
             }
         }
 
-        MagicFiles::Yaz0(compressed_data) => out_files.push(MagicFiles::Yaz0(compressed_data)),
+        MagicFiles::Yaz0(compressed_data) => match szs::decode(&compressed_data) {
+            Ok(decompressed) => {
+                extract_all_files_recursive(decompressed, out_files);
+            }
+            Err(err) => {
+                log::error!("Failed to decompress Yaz0 data: {err}");
+                out_files.push(MagicFiles::Unknown(compressed_data));
+            }
+        },
 
         MagicFiles::Sarc(sarc_bytes) => {
             if let Ok(sarc) = Sarc::parse(&sarc_bytes) {
@@ -522,38 +530,6 @@ pub fn extract_all_files_recursive(data: Vec<u8>, out_files: &mut Vec<MagicFiles
 
         MagicFiles::Unknown(bytes) => {
             out_files.push(MagicFiles::Unknown(bytes));
-        }
-    }
-}
-
-fn unpack_sarc_internal(data: &[u8], out_files: &mut Vec<(String, Vec<u8>)>) {
-    let Ok(sarc) = Sarc::parse(data) else {
-        return;
-    };
-
-    for file in sarc.files {
-        let Some(name) = &file.name else {
-            continue;
-        };
-
-        let file_data = decompress_if_needed(file.data.clone(), name);
-        let name_lower = name.to_lowercase();
-
-        let clean_name = if name_lower.ends_with(".zs") {
-            &name_lower[..name_lower.len() - 3]
-        } else {
-            &name_lower
-        };
-
-        let is_nested_sarc = clean_name.ends_with(".arc")
-            || SUPPORTED_SARC_EXTENSIONS
-                .iter()
-                .any(|ext| clean_name.ends_with(&format!(".{}", ext.to_lowercase())));
-
-        if is_nested_sarc {
-            unpack_sarc_internal(&file_data, out_files);
-        } else {
-            out_files.push((name.clone(), file_data));
         }
     }
 }

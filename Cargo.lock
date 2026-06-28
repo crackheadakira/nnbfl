@@ -1624,6 +1624,7 @@ dependencies = [
  "nnbfl",
  "pollster",
  "rfd",
+ "szs",
  "tomolib",
  "wgpu",
  "winit",
@@ -2731,6 +2732,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "szs"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bfe1c62478219492094a4ef4d7c0df268848be33551ae8d7ff1a8d0cfa9ad3f"
+dependencies = [
+ "cc",
+ "libc",
+ "memchr",
 ]
 
 [[package]]
