@@ -12,7 +12,9 @@ use crate::{
             BflytWindowPane,
         },
     },
-    core::{Cursor, FormatError, ReadWriteable, SectionHeader, Writer, tchar_code32},
+    core::{
+        Cursor, FormatError, ReadWriteable, SectionHeader, VersionFormat, Writer, tchar_code32,
+    },
     ui2d::userdata::ResUi2dUserDataSection,
 };
 
@@ -203,9 +205,7 @@ pub struct Bflyt {
     pub magic: u32,
     pub endianness: u16,
     pub header_size: u16,
-    pub micro_version: u16,
-    pub minor_version: u8,
-    pub major_version: u8,
+    pub version: VersionFormat,
 
     pub layout: BflytLayout,
     pub user_data: Option<ResUi2dUserDataSection>,
@@ -220,7 +220,11 @@ impl ReadWriteable for Bflyt {
     const EXTENSION: &'static str = "bflyt";
 
     fn parse(file: &[u8]) -> Result<Self, FormatError> {
-        let mut cursor = Cursor { data: file, pos: 0 };
+        let mut cursor = Cursor {
+            data: file,
+            pos: 0,
+            ..Default::default()
+        };
 
         let magic = cursor.read_u32()?;
         if magic != tchar_code32(b"FLYT") {
@@ -233,9 +237,9 @@ impl ReadWriteable for Bflyt {
 
         let endianness = cursor.read_u16()?;
         let header_size = cursor.read_u16()?;
-        let micro_version = cursor.read_u16()?;
-        let minor_version = cursor.read_u8()?;
-        let major_version = cursor.read_u8()?;
+        let version = VersionFormat::parse(&mut cursor)?;
+        cursor.version = version;
+
         let _file_size = cursor.read_u32()?;
         let section_count = cursor.read_u32()?;
 
@@ -333,9 +337,7 @@ impl ReadWriteable for Bflyt {
             magic,
             endianness,
             header_size,
-            micro_version,
-            minor_version,
-            major_version,
+            version,
             layout: layout.unwrap(),
             user_data,
             texture_list,
@@ -353,14 +355,13 @@ impl ReadWriteable for Bflyt {
         this.rebuild_indices();
 
         let mut writer = Writer::new();
+        writer.version = this.version;
 
         writer.mark("File header");
         writer.write_u32(this.magic);
         writer.write_u16(this.endianness);
         writer.write_u16(this.header_size);
-        writer.write_u16(this.micro_version);
-        writer.write_u8(this.minor_version);
-        writer.write_u8(this.major_version);
+        this.version.serialize(&mut writer);
 
         let file_size_pos = writer.write_placeholder_u32();
         let mut total_sections = this.nodes.iter().map(|n| n.section_count()).sum();

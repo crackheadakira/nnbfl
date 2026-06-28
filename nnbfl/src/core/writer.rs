@@ -1,6 +1,9 @@
+use crate::core::VersionFormat;
+
 pub struct Writer {
     pub buffer: Vec<u8>,
     pub breadcrumbs: Vec<(usize, String)>,
+    pub version: VersionFormat,
 }
 
 impl Writer {
@@ -8,6 +11,7 @@ impl Writer {
         Self {
             buffer: Vec::new(),
             breadcrumbs: Vec::new(),
+            version: VersionFormat::default(),
         }
     }
 

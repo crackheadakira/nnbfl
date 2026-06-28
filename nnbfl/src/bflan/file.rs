@@ -1,7 +1,9 @@
 use crate::{
     bflan::{anim_info::PaneAnimInfo, anim_tag::ResBflanPaneAnimTag, constants::*},
     bflyt::constants::*,
-    core::{Cursor, FormatError, ReadWriteable, SectionHeader, Writer, tchar_code32},
+    core::{
+        Cursor, FormatError, ReadWriteable, SectionHeader, VersionFormat, Writer, tchar_code32,
+    },
     ui2d::userdata::ResUi2dUserDataSection,
 };
 
@@ -10,10 +12,7 @@ pub struct Bflan {
     pub magic: u32,
     pub endianness: u16,
     pub header_size: u16,
-    pub micro_version: u16,
-    pub minor_version: u8,
-    pub major_version: u8,
-
+    pub version: VersionFormat,
     pub anim_tag: ResBflanPaneAnimTag,
     pub anim_info: PaneAnimInfo,
     pub user_data: Option<ResUi2dUserDataSection>,
@@ -23,7 +22,11 @@ impl ReadWriteable for Bflan {
     const EXTENSION: &'static str = "bflan";
 
     fn parse(file: &[u8]) -> Result<Self, FormatError> {
-        let mut cursor = Cursor { data: file, pos: 0 };
+        let mut cursor = Cursor {
+            data: file,
+            pos: 0,
+            ..Default::default()
+        };
 
         let magic = cursor.read_u32()?;
         if magic != tchar_code32(b"FLAN") {
@@ -36,9 +39,8 @@ impl ReadWriteable for Bflan {
 
         let endianness = cursor.read_u16()?;
         let header_size = cursor.read_u16()?;
-        let micro_version = cursor.read_u16()?;
-        let minor_version = cursor.read_u8()?;
-        let major_version = cursor.read_u8()?;
+        let version = VersionFormat::parse(&mut cursor)?;
+        cursor.version = version;
         let _file_size = cursor.read_u32()?;
         let section_count = cursor.read_u32()?;
 
@@ -79,22 +81,19 @@ impl ReadWriteable for Bflan {
             user_data,
             endianness,
             header_size,
-            micro_version,
-            minor_version,
-            major_version,
+            version,
         })
     }
 
     fn write(&self) -> Writer {
         let mut writer = Writer::new();
+        writer.version = self.version;
 
         writer.mark("File header");
         writer.write_u32(self.magic);
         writer.write_u16(self.endianness);
         writer.write_u16(self.header_size);
-        writer.write_u16(self.micro_version);
-        writer.write_u8(self.minor_version);
-        writer.write_u8(self.major_version);
+        self.version.serialize(&mut writer);
 
         let file_size_pos = writer.write_placeholder_u32();
         let mut section_count = 2;

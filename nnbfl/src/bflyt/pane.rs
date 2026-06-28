@@ -225,11 +225,18 @@ impl PerCharacterTransform {
         let origin_v = cursor.read_u8()?.into();
         let has_anim_info = cursor.read_u8()?;
         let _reserve0 = cursor.read_u8()?;
-        let origin_v_offset = cursor.read_f32()?;
-        let fix_space_width = cursor.read_f32()?;
-        let horizontal_position = cursor.read_u8()?.into();
 
-        cursor.seek_relative(11);
+        let mut origin_v_offset = 0.0;
+        let mut fix_space_width = 0.0;
+        let mut horizontal_position = HorizontalPosition::Left;
+
+        if cursor.version.major == 9 {
+            origin_v_offset = cursor.read_f32()?;
+            fix_space_width = cursor.read_f32()?;
+            horizontal_position = cursor.read_u8()?.into();
+
+            cursor.seek_relative(11);
+        }
 
         let mut transform = Self {
             eval_time_offset,
@@ -258,12 +265,15 @@ impl PerCharacterTransform {
         writer.write_u8(self.origin_v.into());
         writer.write_u8(self.has_anim_info);
         writer.write_u8(0);
-        writer.write_f32(self.origin_v_offset);
-        writer.write_f32(self.fix_space_width);
-        writer.write_u8(self.horizontal_position.into());
 
-        for _ in 0..11 {
-            writer.write_u8(0);
+        if writer.version.major == 9 {
+            writer.write_f32(self.origin_v_offset);
+            writer.write_f32(self.fix_space_width);
+            writer.write_u8(self.horizontal_position.into());
+
+            for _ in 0..11 {
+                writer.write_u8(0);
+            }
         }
 
         if let Some(anim_info) = &self.anim_info {

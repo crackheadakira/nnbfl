@@ -19,3 +19,26 @@ pub trait ReadWriteable: Sized + serde::Serialize + serde::de::DeserializeOwned 
     fn parse(file: &[u8]) -> Result<Self, FormatError>;
     fn write(&self) -> writer::Writer;
 }
+
+#[derive(serde::Deserialize, serde::Serialize, Default, Debug, Clone, Copy)]
+pub struct VersionFormat {
+    pub major: u8,
+    pub minor: u8,
+    pub micro: u16,
+}
+
+impl VersionFormat {
+    pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(VersionFormat {
+            micro: cursor.read_u16()?,
+            minor: cursor.read_u8()?,
+            major: cursor.read_u8()?,
+        })
+    }
+
+    pub fn serialize(&self, writer: &mut Writer) {
+        writer.write_u16(self.micro);
+        writer.write_u8(self.minor);
+        writer.write_u8(self.major);
+    }
+}

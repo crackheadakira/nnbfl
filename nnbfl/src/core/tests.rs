@@ -3,7 +3,11 @@ mod cursor_tests {
     use crate::core::{Cursor, FormatError};
 
     fn cur(data: &[u8]) -> Cursor<'_> {
-        Cursor { data, pos: 0 }
+        Cursor {
+            data,
+            pos: 0,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -343,6 +347,7 @@ mod bflyt_roundtrip_tests {
         let mut c = Cursor {
             data: &w.buffer,
             pos: 0,
+            ..Default::default()
         };
         BflytLayout::parse(&mut c).unwrap()
     }
@@ -400,6 +405,7 @@ mod bflyt_roundtrip_tests {
         let mut c = Cursor {
             data: &w.buffer,
             pos: 0,
+            ..Default::default()
         };
 
         BflytTextureList::parse(&mut c).unwrap()
@@ -444,6 +450,7 @@ mod bflyt_roundtrip_tests {
         let mut c = Cursor {
             data: &w.buffer,
             pos: 0,
+            ..Default::default()
         };
         BflytFontList::parse(&mut c).unwrap()
     }
@@ -504,6 +511,7 @@ mod bflyt_roundtrip_tests {
         let mut c = Cursor {
             data: &w.buffer,
             pos: 0,
+            ..Default::default()
         };
         BflytPane::parse(&mut c).unwrap()
     }
@@ -645,6 +653,7 @@ mod bflan_curve_tests {
         let mut c = Cursor {
             data: &w.buffer,
             pos: 0,
+            ..Default::default()
         };
         Curve::parse(&mut c, curve_type, frame_count).unwrap()
     }

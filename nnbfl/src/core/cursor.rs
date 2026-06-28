@@ -1,8 +1,10 @@
-use crate::core::FormatError;
+use crate::core::{FormatError, VersionFormat};
 
+#[derive(Default)]
 pub struct Cursor<'a> {
     pub data: &'a [u8],
     pub pos: usize,
+    pub version: VersionFormat,
 }
 
 impl<'a> Cursor<'a> {

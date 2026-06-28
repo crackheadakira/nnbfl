@@ -16,7 +16,11 @@ impl ReadWriteable for Sarc {
     const EXTENSION: &'static str = "blarc";
 
     fn parse(file: &[u8]) -> Result<Self, FormatError> {
-        let mut cursor = Cursor { data: file, pos: 0 };
+        let mut cursor = Cursor {
+            data: file,
+            pos: 0,
+            ..Default::default()
+        };
 
         let magic = cursor.read_u32()?;
         if magic != tchar_code32(b"SARC") {

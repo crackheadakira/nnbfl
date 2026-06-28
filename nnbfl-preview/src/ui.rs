@@ -429,7 +429,7 @@ pub fn draw_ui(
             .collapsible(false)
             .resizable(false)
             .show(ui, |ui| {
-                ui.colored_label(egui::Color32::LIGHT_RED, err);
+                ui.colored_label(egui::Color32::RED, err);
 
                 if ui.button("Close").clicked() {
                     state.error_message = None;

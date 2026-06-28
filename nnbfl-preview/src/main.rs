@@ -377,21 +377,38 @@ impl App {
         };
 
         let bytes = std::fs::read(bflyt_path).expect("read bflyt file");
+        let mut detected_files = Vec::new();
+        extract_all_files_recursive(bytes, &mut detected_files);
 
-        self.load_file_from_buffer(vec![MagicFiles::Bflyt(bytes)]);
+        self.load_file_from_buffer(detected_files);
     }
 
     fn load_file_from_buffer(&mut self, all_files: Vec<MagicFiles>) {
-        let bflyt = all_files
-            .iter()
-            .find_map(|file| {
-                if let MagicFiles::Bflyt(bytes) = file {
-                    Some(Bflyt::parse(bytes).expect("parse bflyt file"))
-                } else {
-                    None
-                }
-            })
-            .expect("No BFLYT file found in data payload");
+        let bflyt_result = all_files.iter().find_map(|file| {
+            if let MagicFiles::Bflyt(bytes) = file {
+                Some(Bflyt::parse(bytes))
+            } else {
+                None
+            }
+        });
+
+        let bflyt = match bflyt_result {
+            Some(Ok(parsed_bflyt)) => parsed_bflyt,
+            Some(Err(err)) => {
+                self.ui_state.error_message =
+                    Some(format!("Failed to parse BFLYT layout: {err:?}"));
+                log::error!("BFLYT parsing error: {err:?}");
+                return;
+            }
+            None => {
+                self.ui_state.error_message =
+                    Some("No BFLYT file found in data payload.".to_string());
+                log::error!("No BFLYT file found in container.");
+                return;
+            }
+        };
+
+        self.ui_state.error_message = None;
 
         let has_textures = all_files.iter().any(|f| matches!(f, MagicFiles::Bntx(_)));
 
