@@ -31,6 +31,7 @@ impl Vertex {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Quad {
     pub x: f32,
     pub y: f32,

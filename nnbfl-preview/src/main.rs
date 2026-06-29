@@ -1,7 +1,9 @@
 mod anim_state;
 mod bflyt_view;
 mod camera;
+mod pane_tree;
 mod renderer;
+mod traits;
 mod ui;
 
 use std::{path::PathBuf, sync::Arc, time::Instant};
@@ -212,36 +214,33 @@ impl GpuState {
         egui_state.handle_platform_output(window, full_output.platform_output.clone());
 
         if let Some(bflyt_view) = bflyt_view {
+            let plain_quads = bflyt_view.tree.collect_plain_quads();
+            let plain_quads: Vec<_> = plain_quads.iter().map(|q| *q).cloned().collect();
+
             self.quad_renderer.update_anim(
                 &self.queue,
-                &bflyt_view.quads,
+                &plain_quads,
                 &ui_state.hidden_panes,
                 ui_state.quad_for_textured,
             );
 
             self.quad_renderer.update_selection(
                 &self.queue,
-                &bflyt_view.quads,
+                &plain_quads,
                 ui_state.selected_pane,
                 &ui_state.hidden_panes,
                 ui_state.quad_for_textured,
             );
 
             if let Some(tqr) = &mut self.textured_quad_renderer {
-                tqr.update_anim(
-                    &self.queue,
-                    &bflyt_view.textured_quads,
-                    &ui_state.hidden_panes,
-                );
+                let mut tqs = bflyt_view.tree.collect_textured_quads_mut();
 
-                tqr.update_texture_pattern(
-                    &self.device,
-                    &bflyt_view.textured_quads,
-                    &self.texture_cache,
-                );
+                tqr.update_anim(&self.queue, &tqs, &ui_state.hidden_panes);
+
+                tqr.update_texture_pattern(&self.device, &tqs, &self.texture_cache);
 
                 tqr.recompute_proj_mtx(
-                    &mut bflyt_view.textured_quads,
+                    &mut tqs,
                     &self.texture_cache,
                     bflyt_view.layout_width,
                     bflyt_view.layout_height,
@@ -249,16 +248,12 @@ impl GpuState {
 
                 tqr.update_selection(
                     &self.queue,
-                    &mut bflyt_view.textured_quads,
+                    &mut tqs,
                     ui_state.selected_pane,
                     ui_state.active_debug_stage,
                 );
 
-                tqr.flush_mat_buffers(
-                    &self.queue,
-                    &bflyt_view.textured_quads,
-                    &ui_state.hidden_panes,
-                );
+                tqr.flush_mat_buffers(&self.queue, &tqs, &ui_state.hidden_panes);
             }
         }
 
@@ -413,14 +408,19 @@ impl App {
         let has_textures = all_files.iter().any(|f| matches!(f, MagicFiles::Bntx(_)));
 
         let layout_name = bflyt.layout.name.clone();
-        let mut view = build_view(bflyt, self.blarc_dir.as_deref(), layout_name, has_textures);
+        let mut view = build_view(
+            bflyt,
+            self.blarc_dir.as_deref(),
+            layout_name.clone(),
+            has_textures,
+        );
 
         self.anim_player = AnimPlayer::new();
 
         for magic_file in all_files {
             match magic_file {
                 MagicFiles::Bntx(bytes) => {
-                    view.discovered_bntx_buffers.push(bytes);
+                    view.tree.discovered_bntx_buffers.push(bytes);
                 }
                 MagicFiles::Bflan(bytes) => {
                     if let Ok(bflan) = Bflan::parse(&bytes) {
@@ -444,18 +444,27 @@ impl App {
 
         if let Some(gpu) = &mut self.gpu {
             let view = self.bflyt_view.as_mut().unwrap();
-            gpu.quad_renderer.upload_quads(&gpu.device, &view.quads);
 
-            for bntx_bytes in &view.discovered_bntx_buffers {
+            let plain_quads: Vec<_> = view
+                .tree
+                .collect_plain_quads()
+                .into_iter()
+                .cloned()
+                .collect();
+
+            gpu.quad_renderer.upload_quads(&gpu.device, &plain_quads);
+
+            for bntx_bytes in &view.tree.discovered_bntx_buffers {
                 gpu.texture_cache
                     .load_from_bntx_bytes(&gpu.device, &gpu.queue, bntx_bytes);
             }
 
             let mut tgr = TexturedQuadRenderer::new(&gpu.device, gpu.config.format);
+            let mut tqs = view.tree.collect_textured_quads_mut();
 
             tgr.upload_quads(
                 &gpu.device,
-                &mut view.textured_quads,
+                &mut tqs,
                 &gpu.texture_cache,
                 view.layout_width,
                 view.layout_height,
@@ -476,9 +485,8 @@ impl App {
         }
 
         log::info!(
-            "Loaded {} panes from {:?}",
-            self.bflyt_view.as_ref().unwrap().panes.len(),
-            self.bflyt_view.as_ref().unwrap().file_name
+            "Loaded {} panes from {layout_name}",
+            self.bflyt_view.as_ref().unwrap().tree.iter().count(),
         );
     }
 

@@ -38,6 +38,32 @@ pub struct Vector2f {
 }
 
 impl Vector2f {
+    pub fn new(x: f32, y: f32) -> Self {
+        Vector2f { x, y }
+    }
+
+    pub fn empty() -> Self {
+        Vector2f { x: 0.0, y: 0.0 }
+    }
+
+    pub fn max() -> Self {
+        Vector2f { x: 1.0, y: 1.0 }
+    }
+
+    pub fn add(self, operand: Self) -> Self {
+        Self {
+            x: self.x + operand.x,
+            y: self.y + operand.y,
+        }
+    }
+
+    pub fn multiply(self, operand: Self) -> Self {
+        Self {
+            x: self.x * operand.x,
+            y: self.y * operand.y,
+        }
+    }
+
     pub fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
         Ok(Self {
             x: cursor.read_f32()?,

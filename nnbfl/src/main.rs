@@ -10,7 +10,6 @@ use crate::core::{NnbflError, ReadWriteable, Writer};
 
 mod bflan;
 mod bflyt;
-mod cli;
 mod core;
 mod sarc;
 mod ui2d;
@@ -274,11 +273,8 @@ fn compare_files(
         if verbose && !quiet {
             println!("Ok {file_name:?}");
         }
-        return true;
-    }
 
-    if quiet {
-        return false;
+        return true;
     }
 
     println!("{file_name:?}");

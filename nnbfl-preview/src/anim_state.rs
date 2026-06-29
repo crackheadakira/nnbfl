@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-
+use nnbfl::bflyt::flags::BflytOrigin;
 use nnbfl::bflyt::list::MaterialTextureSrt;
 use nnbfl::ui2d::userdata::ResUi2dUserDataInner;
 use nnbfl::{
@@ -11,21 +10,26 @@ use nnbfl::{
             IndirectSrtTarget, PaneSrtTarget, TargetIndex, TextureSrtTarget, VertexColorTarget,
         },
     },
-    bflyt::{file::BflytSection, flags::BflytOrigin},
+    ui2d::types::Vector2f,
 };
 
 use crate::bflyt_view::BflytView;
+use crate::pane_tree::DirtyFlags;
+use crate::traits::Displaying;
 
 fn eval_hermite(keys: &[nnbfl::bflan::curves::HermiteKey], frame: f32) -> f32 {
     if keys.is_empty() {
         return 0.0;
     }
+
     if frame <= keys[0].frame {
         return keys[0].value;
     }
+
     if frame >= keys[keys.len() - 1].frame {
         return keys[keys.len() - 1].value;
     }
+
     let idx = keys.partition_point(|k| k.frame <= frame) - 1;
     let k0 = &keys[idx];
     let k1 = &keys[idx + 1];
@@ -185,13 +189,146 @@ impl AnimPlayer {
     }
 }
 
+#[inline]
+pub fn transform_uv_srt(srt: &MaterialTextureSrt, uv: [f32; 2]) -> [f32; 2] {
+    let rad = srt.rotate.to_radians();
+    let cos_r = rad.cos();
+    let sin_r = rad.sin();
+
+    let centered_u = uv[0] - 0.5;
+    let centered_v = uv[1] - 0.5;
+
+    let scaled_u = centered_u * srt.scale_u;
+    let scaled_v = centered_v * srt.scale_v;
+
+    let rotated_u = scaled_u * cos_r - scaled_v * sin_r;
+    let rotated_v = scaled_u * sin_r + scaled_v * cos_r;
+
+    [
+        rotated_u + srt.translate_u + 0.5,
+        rotated_v + srt.translate_v + 0.5,
+    ]
+}
+
+fn apply_tex_srts(tq: &mut crate::renderer::textured_quad::TexturedQuad) {
+    for (i, srt) in tq.tex_srts.iter().enumerate() {
+        for v_idx in 0..4 {
+            let base_uv = tq.base_uvs[v_idx][i];
+            tq.uvs[v_idx][i] = transform_uv_srt(srt, base_uv);
+        }
+    }
+}
+
+fn node_screen_pos(node: &crate::pane_tree::PaneNode, trans_x: f32, trans_y: f32) -> (f32, f32) {
+    let base = node.section.get_base_pane();
+    let (ox, oy, w, h) = base
+        .map(|b| {
+            (
+                b.origin.origin_x,
+                b.origin.origin_y,
+                b.size.x * b.scale.x,
+                b.size.y * b.scale.y,
+            )
+        })
+        .unwrap_or((
+            BflytOrigin::Center,
+            BflytOrigin::Center,
+            node.world_size.x,
+            node.world_size.y,
+        ));
+
+    let cx = node.parent_anchor.x + trans_x;
+    let cy = node.parent_anchor.y - trans_y;
+
+    let tl_x = match ox {
+        BflytOrigin::Center => cx - w * 0.5,
+        BflytOrigin::LeftTop => cx,
+        BflytOrigin::RightBottom => cx - w,
+    };
+    let tl_y = match oy {
+        BflytOrigin::Center => cy - h * 0.5,
+        BflytOrigin::LeftTop => cy,
+        BflytOrigin::RightBottom => cy - h,
+    };
+
+    (tl_x, tl_y)
+}
+
+fn cascade_translate(view: &mut BflytView, pane_idx: usize, new_trans_x: f32, new_trans_y: f32) {
+    let idx_map = view.tree.build_idx_map();
+    let Some(&node_ptr) = idx_map.get(&pane_idx) else {
+        return;
+    };
+    let base_node = unsafe { &*node_ptr };
+
+    let Some(base) = base_node.section.get_base_pane() else {
+        return;
+    };
+
+    let (base_tx, base_ty) = (base.translation.x, base.translation.y);
+
+    let (new_x, new_y) = node_screen_pos(base_node, new_trans_x, new_trans_y);
+    let (base_x, base_y) = node_screen_pos(base_node, base_tx, base_ty);
+    let dx = new_x - base_x;
+    let dy = new_y - base_y;
+
+    let mut affected = vec![pane_idx];
+    affected.extend(view.tree.descendants(pane_idx));
+
+    for idx in affected {
+        let Some(&node_ptr) = idx_map.get(&idx) else {
+            continue;
+        };
+        let node = unsafe { &mut *node_ptr };
+
+        node.world_pos.x += dx;
+        node.world_pos.y += dy;
+        node.plain_quad.x = node.world_pos.x;
+        node.plain_quad.y = node.world_pos.y;
+
+        if let Some(tq) = &mut node.textured_quad {
+            tq.x = node.world_pos.x;
+            tq.y = node.world_pos.y;
+            for corner in &mut tq.corners {
+                corner[0] += dx;
+                corner[1] += dy;
+            }
+        }
+
+        node.world_corners.translate(Vector2f::new(dx, dy));
+
+        node.dirty.insert(DirtyFlags::VERTICES);
+    }
+}
+
+fn cascade_visibility(view: &mut BflytView, pane_idx: usize, visible: bool) {
+    let idx_map = view.tree.build_idx_map();
+    let mut affected = vec![pane_idx];
+    affected.extend(view.tree.descendants(pane_idx));
+
+    for idx in affected {
+        let Some(&node_ptr) = idx_map.get(&idx) else {
+            continue;
+        };
+        let node = unsafe { &mut *node_ptr };
+        node.visible = visible;
+
+        node.plain_quad.color = if visible {
+            node.section.section_color()
+        } else {
+            [0.0; 4]
+        };
+
+        if let Some(tq) = &mut node.textured_quad {
+            tq.standard_material.visible = visible as u32;
+        }
+        node.dirty
+            .insert(DirtyFlags::MATERIAL | DirtyFlags::VERTICES);
+    }
+}
+
 fn apply_anim(pai: &PaneAnimInfo, frame: f32, view: &mut BflytView) {
-    let pane_by_name: HashMap<String, usize> = view
-        .panes
-        .iter()
-        .enumerate()
-        .map(|(i, p)| (p.label.trim_end_matches('\0').to_string(), i))
-        .collect();
+    let pane_by_name = view.tree.label_to_idx();
 
     for content in &pai.contents {
         let name = content.name.trim_end_matches('\0');
@@ -211,136 +348,9 @@ fn apply_anim(pai: &PaneAnimInfo, frame: f32, view: &mut BflytView) {
     }
 }
 
-fn pane_screen_pos(
-    pane_info: &crate::bflyt_view::PaneInfo,
-    trans_x: f32,
-    trans_y: f32,
-) -> (f32, f32) {
-    let base = match &pane_info.section {
-        BflytSection::Pane(p) => Some(p),
-        BflytSection::PicturePane(p) => Some(&p.base),
-        BflytSection::TextBoxPane(p) => Some(&p.base),
-        BflytSection::PartsPane(p) => Some(&p.base),
-        BflytSection::WindowPane(p) => Some(&p.base),
-        BflytSection::AlignmentPane(p) => Some(&p.base),
-        _ => None,
-    };
-
-    let (ox, oy, w, h) = base
-        .map(|b| {
-            (
-                b.origin.origin_x,
-                b.origin.origin_y,
-                b.size.x * b.scale.x,
-                b.size.y * b.scale.y,
-            )
-        })
-        .unwrap_or((
-            BflytOrigin::Center,
-            BflytOrigin::Center,
-            pane_info.width,
-            pane_info.height,
-        ));
-
-    let cx = pane_info.parent_anchor_x + trans_x;
-    let cy = pane_info.parent_anchor_y - trans_y;
-
-    let tl_x = match ox {
-        BflytOrigin::Center => cx - w * 0.5,
-        BflytOrigin::LeftTop => cx,
-        BflytOrigin::RightBottom => cx - w,
-    };
-    let tl_y = match oy {
-        BflytOrigin::Center => cy - h * 0.5,
-        BflytOrigin::LeftTop => cy,
-        BflytOrigin::RightBottom => cy - h,
-    };
-
-    (tl_x, tl_y)
-}
-
-fn cascade_translate(view: &mut BflytView, pane_idx: usize, new_trans_x: f32, new_trans_y: f32) {
-    let base_info = view.base_panes.get(pane_idx).cloned();
-    let Some(base_info) = base_info else { return };
-
-    let base_trans = match &base_info.section {
-        BflytSection::Pane(p) => (p.translation.x, p.translation.y),
-        BflytSection::PicturePane(p) => (p.base.translation.x, p.base.translation.y),
-        BflytSection::TextBoxPane(p) => (p.base.translation.x, p.base.translation.y),
-        BflytSection::PartsPane(p) => (p.base.translation.x, p.base.translation.y),
-        BflytSection::WindowPane(p) => (p.base.translation.x, p.base.translation.y),
-        BflytSection::AlignmentPane(p) => (p.base.translation.x, p.base.translation.y),
-        _ => return,
-    };
-
-    let (new_x, new_y) = pane_screen_pos(&base_info, new_trans_x, new_trans_y);
-    let (base_x, base_y) = pane_screen_pos(&base_info, base_trans.0, base_trans.1);
-    let dx = new_x - base_x;
-    let dy = new_y - base_y;
-
-    let mut affected = vec![pane_idx];
-    affected.extend(view.descendants(pane_idx));
-
-    for idx in affected {
-        let base_screen_x = view.base_panes.get(idx).map(|p| p.x).unwrap_or(0.0);
-        let base_screen_y = view.base_panes.get(idx).map(|p| p.y).unwrap_or(0.0);
-
-        let sx = base_screen_x + dx;
-        let sy = base_screen_y + dy;
-
-        if let Some(p) = view.panes.get_mut(idx) {
-            p.x = sx;
-            p.y = sy;
-        }
-
-        if let Some(q) = view.quads.get_mut(idx) {
-            q.x = sx;
-            q.y = sy;
-        }
-
-        if let Some(tq) = view.textured_quads.iter_mut().find(|tq| tq.pane_idx == idx) {
-            tq.x = sx;
-            tq.y = sy;
-
-            let base_corners = view
-                .base_textured_quads
-                .iter()
-                .find(|btq| btq.pane_idx == idx)
-                .map(|btq| btq.corners)
-                .unwrap_or(tq.corners);
-
-            for (i, bc) in base_corners.iter().enumerate() {
-                tq.corners[i] = [bc[0] + dx, bc[1] + dy];
-            }
-        }
-    }
-}
-
-fn cascade_visibility(view: &mut BflytView, pane_idx: usize, visible: bool) {
-    let mut affected = vec![pane_idx];
-    affected.extend(view.descendants(pane_idx));
-
-    let colors: Vec<[f32; 4]> = affected
-        .iter()
-        .map(|&idx| crate::bflyt_view::section_color_for_pane(idx, view))
-        .collect();
-
-    for (i, &idx) in affected.iter().enumerate() {
-        if let Some(pane) = view.panes.get_mut(idx) {
-            pane.visible = visible;
-        }
-
-        if let Some(q) = view.quads.get_mut(idx) {
-            q.color = if visible { colors[i] } else { [0.0; 4] };
-        }
-
-        if let Some(tq) = view.textured_quads.iter_mut().find(|tq| tq.pane_idx == idx) {
-            tq.standard_material.visible = if visible { 1 } else { 0 };
-        }
-    }
-}
-
 fn apply_pane_content(content: &AnimContent, frame: f32, pane_idx: usize, view: &mut BflytView) {
+    let idx_map = view.tree.build_idx_map();
+
     for info in &content.infos {
         let AnimInfo::Standard { anim_type, targets } = info else {
             continue;
@@ -348,32 +358,29 @@ fn apply_pane_content(content: &AnimContent, frame: f32, pane_idx: usize, view: 
 
         match anim_type {
             AnimInfoType::PaneSrtAnim => {
-                let base = view.base_panes.get(pane_idx).cloned();
-                let base_w = base.as_ref().map(|p| p.width).unwrap_or(0.0);
-                let base_h = base.as_ref().map(|p| p.height).unwrap_or(0.0);
+                let (base_tx, base_ty, base_w, base_h) = {
+                    let Some(&ptr) = idx_map.get(&pane_idx) else {
+                        continue;
+                    };
+                    let node = unsafe { &*ptr };
 
-                let (base_tx, base_ty) = base
-                    .as_ref()
-                    .and_then(|p| match &p.section {
-                        BflytSection::Pane(b) => Some((b.translation.x, b.translation.y)),
-                        BflytSection::PicturePane(b) => {
-                            Some((b.base.translation.x, b.base.translation.y))
-                        }
-                        BflytSection::TextBoxPane(b) => {
-                            Some((b.base.translation.x, b.base.translation.y))
-                        }
-                        BflytSection::PartsPane(b) => {
-                            Some((b.base.translation.x, b.base.translation.y))
-                        }
-                        BflytSection::WindowPane(b) => {
-                            Some((b.base.translation.x, b.base.translation.y))
-                        }
-                        BflytSection::AlignmentPane(b) => {
-                            Some((b.base.translation.x, b.base.translation.y))
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or((0.0, 0.0));
+                    let (tx, ty) = node
+                        .section
+                        .get_base_pane()
+                        .map(|base| (base.translation.x, base.translation.y))
+                        .unwrap_or((0.0, 0.0));
+
+                    let base = node.section.get_base_pane();
+                    let w = base
+                        .map(|b| b.size.x * b.scale.x)
+                        .unwrap_or(node.world_size.x);
+
+                    let h = base
+                        .map(|b| b.size.y * b.scale.y)
+                        .unwrap_or(node.world_size.y);
+
+                    (tx, ty, w, h)
+                };
 
                 let mut new_tx = base_tx;
                 let mut new_ty = base_ty;
@@ -402,23 +409,17 @@ fn apply_pane_content(content: &AnimContent, frame: f32, pane_idx: usize, view: 
                 if (final_w - base_w).abs() > f32::EPSILON
                     || (final_h - base_h).abs() > f32::EPSILON
                 {
-                    if let Some(p) = view.panes.get_mut(pane_idx) {
-                        p.width = final_w;
-                        p.height = final_h;
-                    }
-
-                    if let Some(q) = view.quads.get_mut(pane_idx) {
-                        q.width = final_w;
-                        q.height = final_h;
-                    }
-
-                    if let Some(tq) = view
-                        .textured_quads
-                        .iter_mut()
-                        .find(|tq| tq.pane_idx == pane_idx)
-                    {
-                        tq.width = final_w;
-                        tq.height = final_h;
+                    if let Some(&ptr) = idx_map.get(&pane_idx) {
+                        let node = unsafe { &mut *ptr };
+                        node.world_size.x = final_w;
+                        node.world_size.y = final_h;
+                        node.plain_quad.width = final_w;
+                        node.plain_quad.height = final_h;
+                        if let Some(tq) = &mut node.textured_quad {
+                            tq.width = final_w;
+                            tq.height = final_h;
+                        }
+                        node.dirty.insert(DirtyFlags::VERTICES);
                     }
                 }
             }
@@ -431,26 +432,33 @@ fn apply_pane_content(content: &AnimContent, frame: f32, pane_idx: usize, view: 
             }
 
             AnimInfoType::VertexColorAnim => {
-                let has_own_tq = view.textured_quads.iter().any(|tq| tq.pane_idx == pane_idx);
+                let has_own_tq = idx_map
+                    .get(&pane_idx)
+                    .map(|&ptr| unsafe { (*ptr).textured_quad.is_some() })
+                    .unwrap_or(false);
+
                 let apply_to: Vec<usize> = if has_own_tq {
                     vec![pane_idx]
                 } else {
                     let mut v = vec![pane_idx];
-                    v.extend(view.descendants(pane_idx));
+                    v.extend(view.tree.descendants(pane_idx));
                     v
                 };
 
                 for t in targets {
                     let v = eval_curve(&t.curve, frame) / 255.0;
                     for &idx in &apply_to {
-                        let Some(tq) = view.textured_quads.iter_mut().find(|tq| tq.pane_idx == idx)
-                        else {
+                        let Some(&ptr) = idx_map.get(&idx) else {
                             continue;
                         };
+                        let node = unsafe { &mut *ptr };
+                        let Some(tq) = &mut node.textured_quad else {
+                            continue;
+                        };
+
                         match &t.target {
                             TargetIndex::VertexColor(VertexColorTarget::PaneAlpha) => {
                                 tq.tint[3] = v;
-
                                 for c in tq.corner_tints.iter_mut() {
                                     c[3] = v;
                                 }
@@ -514,36 +522,6 @@ fn apply_pane_content(content: &AnimContent, frame: f32, pane_idx: usize, view: 
     }
 }
 
-#[inline]
-pub fn transform_uv_srt(srt: &MaterialTextureSrt, uv: [f32; 2]) -> [f32; 2] {
-    let rad = srt.rotate.to_radians();
-    let cos_r = rad.cos();
-    let sin_r = rad.sin();
-
-    let centered_u = uv[0] - 0.5;
-    let centered_v = uv[1] - 0.5;
-
-    let scaled_u = centered_u * srt.scale_u;
-    let scaled_v = centered_v * srt.scale_v;
-
-    let rotated_u = scaled_u * cos_r - scaled_v * sin_r;
-    let rotated_v = scaled_u * sin_r + scaled_v * cos_r;
-
-    [
-        rotated_u + srt.translate_u + 0.5,
-        rotated_v + srt.translate_v + 0.5,
-    ]
-}
-
-fn apply_tex_srts(tq: &mut crate::renderer::textured_quad::TexturedQuad) {
-    for (i, srt) in tq.tex_srts.iter().enumerate() {
-        for v_idx in 0..4 {
-            let base_uv = tq.base_uvs[v_idx][i];
-            tq.uvs[v_idx][i] = transform_uv_srt(srt, base_uv);
-        }
-    }
-}
-
 fn apply_material_content(
     content: &AnimContent,
     frame: f32,
@@ -551,28 +529,33 @@ fn apply_material_content(
     view: &mut BflytView,
     pai: &PaneAnimInfo,
 ) {
+    let idx_map = view.tree.build_idx_map();
+
     for info in &content.infos {
         let AnimInfo::Standard { anim_type, targets } = info else {
             continue;
         };
 
+        let tq = {
+            let Some(&ptr) = idx_map.get(&pane_idx) else {
+                continue;
+            };
+            let node = unsafe { &mut *ptr };
+            let Some(tq) = &mut node.textured_quad else {
+                continue;
+            };
+            tq as *mut _
+        };
+        let tq: &mut crate::renderer::textured_quad::TexturedQuad = unsafe { &mut *tq };
+
         match anim_type {
             AnimInfoType::TextureSrtAnim => {
-                let Some(tq) = view
-                    .textured_quads
-                    .iter_mut()
-                    .find(|tq| tq.pane_idx == pane_idx)
-                else {
-                    continue;
-                };
-
                 for t in targets {
                     let v = eval_curve(&t.curve, frame);
                     let layer = t.layer as usize;
                     if layer >= tq.tex_srts.len() {
                         continue;
                     }
-
                     match &t.target {
                         TargetIndex::TextureSrt(TextureSrtTarget::TranslateU) => {
                             tq.tex_srts[layer].translate_u = v
@@ -596,16 +579,8 @@ fn apply_material_content(
             }
 
             AnimInfoType::IndirectSrtAnim => {
-                let Some(tq) = view
-                    .textured_quads
-                    .iter_mut()
-                    .find(|tq| tq.pane_idx == pane_idx)
-                else {
-                    continue;
-                };
                 for t in targets {
                     let v = eval_curve(&t.curve, frame);
-
                     match &t.target {
                         TargetIndex::IndirectSrt(IndirectSrtTarget::Rotate) => {
                             let rad = v.to_radians();
@@ -624,19 +599,11 @@ fn apply_material_content(
             }
 
             AnimInfoType::TexturePatternAnim => {
-                let Some(tq) = view
-                    .textured_quads
-                    .iter_mut()
-                    .find(|tq| tq.pane_idx == pane_idx)
-                else {
-                    continue;
-                };
                 for t in targets {
                     let file_idx = eval_curve_step_u16(&t.curve, frame) as usize;
                     let Some(tex_name) = pai.textures.get(file_idx).cloned() else {
                         continue;
                     };
-
                     match t.layer {
                         0 => tq.texture_name = tex_name,
                         1 => tq.texture_name1 = Some(tex_name),
@@ -647,14 +614,6 @@ fn apply_material_content(
             }
 
             AnimInfoType::MaterialColorAnim => {
-                let Some(tq) = view
-                    .textured_quads
-                    .iter_mut()
-                    .find(|tq| tq.pane_idx == pane_idx)
-                else {
-                    continue;
-                };
-
                 for t in targets {
                     let v = eval_curve(&t.curve, frame) / 255.0;
                     if let TargetIndex::MaterialColor(c) = &t.target {
@@ -682,14 +641,6 @@ fn apply_material_content(
             }
 
             AnimInfoType::VertexColorAnim => {
-                let Some(tq) = view
-                    .textured_quads
-                    .iter_mut()
-                    .find(|tq| tq.pane_idx == pane_idx)
-                else {
-                    continue;
-                };
-
                 for t in targets {
                     let v = eval_curve(&t.curve, frame);
                     match &t.target {

@@ -113,7 +113,7 @@ impl Default for DetailedCombinerMaterial {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TexturedQuad {
     pub pane_idx: usize,
     pub x: f32,
@@ -347,7 +347,7 @@ impl TexturedQuadRenderer {
     pub fn upload_quads(
         &mut self,
         device: &wgpu::Device,
-        quads: &mut [TexturedQuad],
+        quads: &mut [&mut TexturedQuad],
         texture_cache: &TextureCache,
         layout_w: f32,
         layout_h: f32,
@@ -623,7 +623,7 @@ impl TexturedQuadRenderer {
     pub fn update_selection(
         &mut self,
         queue: &wgpu::Queue,
-        quads: &mut [TexturedQuad],
+        quads: &mut [&mut TexturedQuad],
         selected_idx: Option<usize>,
         active_debug_stage: u32,
     ) {
@@ -671,7 +671,7 @@ impl TexturedQuadRenderer {
     pub fn update_texture_pattern(
         &mut self,
         device: &wgpu::Device,
-        quads: &[TexturedQuad],
+        quads: &[&mut TexturedQuad],
         texture_cache: &TextureCache,
     ) {
         for batch in &mut self.batches {
@@ -785,7 +785,7 @@ impl TexturedQuadRenderer {
 
     pub fn recompute_proj_mtx(
         &mut self,
-        quads: &mut [TexturedQuad],
+        quads: &mut [&mut TexturedQuad],
         texture_cache: &TextureCache,
         layout_w: f32,
         layout_h: f32,
@@ -981,7 +981,7 @@ impl TexturedQuadRenderer {
     pub fn update_anim(
         &mut self,
         queue: &wgpu::Queue,
-        quads: &[TexturedQuad],
+        quads: &[&mut TexturedQuad],
         hidden_panes: &HashSet<usize>,
     ) {
         for batch in &mut self.batches {
@@ -1048,7 +1048,7 @@ impl TexturedQuadRenderer {
     pub fn flush_mat_buffers(
         &self,
         queue: &wgpu::Queue,
-        quads: &[TexturedQuad],
+        quads: &[&mut TexturedQuad],
         hidden_panes: &HashSet<usize>,
     ) {
         for batch in &self.batches {

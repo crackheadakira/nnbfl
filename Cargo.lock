@@ -1614,6 +1614,7 @@ dependencies = [
 name = "nnbfl-preview"
 version = "0.1.0"
 dependencies = [
+ "bitflags 2.13.0",
  "bytemuck",
  "egui",
  "egui-chinese-font",

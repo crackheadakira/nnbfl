@@ -10,11 +10,7 @@ use nnbfl::{
     ui2d::types::{Vector2f, Vector3f},
 };
 
-use crate::{
-    anim_state::AnimPlayer,
-    bflyt_view::{BflytView, PaneInfo},
-    camera::Camera,
-};
+use crate::{anim_state::AnimPlayer, bflyt_view::BflytView, camera::Camera, pane_tree::PaneNode};
 
 pub const SUPPORTED_SARC_EXTENSIONS: &[&str] = &[
     "blarc",
@@ -74,16 +70,17 @@ pub fn draw_ui(
         let viewport_rect = ui.content_rect();
         let painter = ui.painter().with_clip_rect(viewport_rect);
 
-        for (i, pane) in view.panes.iter().enumerate() {
-            if let BflytSection::TextBoxPane(text_box) = &pane.section
-                && let Some(quad) = view.quads.get(i)
+        for node in view.tree.iter() {
+            let i = node.pane_idx;
+
+            if let BflytSection::TextBoxPane(text_box) = &node.section
                 && !state.hidden_panes.contains(&i)
-                && pane.visible
+                && node.visible
             {
                 let display_text = text_box.text.as_deref().unwrap_or("");
 
-                let center_x = quad.x + (quad.width * 0.5);
-                let center_y = quad.y + (quad.height * 0.5);
+                let center_x = node.plain_quad.x + (node.plain_quad.width * 0.5);
+                let center_y = node.plain_quad.y + (node.plain_quad.height * 0.5);
                 let screen_pos = camera.world_to_screen([center_x, center_y], screen_w, screen_h);
 
                 let font_size = (32.0 * camera.zoom).clamp(8.0, 128.0);
@@ -190,15 +187,17 @@ pub fn draw_ui(
                         .auto_shrink(false)
                         .show(ui, |ui| {
                             if let Some(view) = view {
-                                for (i, pane) in view.panes.iter().enumerate() {
-                                    let indent = pane.depth as f32 * 12.0;
+                                for node in view.tree.iter() {
+                                    let i = node.pane_idx;
+
+                                    let indent = node.depth as f32 * 12.0;
                                     ui.horizontal(|ui| {
                                         ui.add_space(indent);
 
                                         let selected = state.selected_pane == Some(i);
                                         let label = egui::RichText::new(format!(
                                             "[{}] {}",
-                                            pane.kind, pane.label
+                                            node.kind, node.label
                                         ));
 
                                         let is_hidden = state.hidden_panes.contains(&i);
@@ -250,7 +249,7 @@ pub fn draw_ui(
                     ui.separator();
 
                     if let Some(view) = view {
-                        if let Some(material_list) = &view.material_list {
+                        if let Some(material_list) = &view.tree.material_list {
                             draw_material_list(ui, material_list);
                         } else {
                             ui.label("Bflyt file has no material list");
@@ -287,8 +286,9 @@ pub fn draw_ui(
                         if let Some(view) = view {
                             ui.vertical(|ui| {
                                 if let Some(idx) = state.selected_pane {
-                                    if let Some(pane) = view.panes.get(idx) {
-                                        draw_pane_properties(ui, pane);
+                                    if let Some(node) = view.tree.iter().find(|n| n.pane_idx == idx)
+                                    {
+                                        draw_pane_properties(ui, node);
                                     }
                                 } else {
                                     ui.centered_and_justified(|ui| {
@@ -452,7 +452,7 @@ fn show_pane_recursive(idx: usize, view: &BflytView, hidden_set: &mut HashSet<us
     }
 }
 
-fn draw_pane_properties(ui: &mut Ui, pane: &PaneInfo) {
+fn draw_pane_properties(ui: &mut Ui, node: &PaneNode) {
     egui::ScrollArea::vertical()
         .id_salt("pane_properties_scroll")
         .auto_shrink(false)
@@ -465,22 +465,18 @@ fn draw_pane_properties(ui: &mut Ui, pane: &PaneInfo) {
                 .striped(true)
                 .spacing([12.0, 4.0])
                 .show(ui, |ui| {
-                    draw_string(ui, "Name", &pane.label);
-                    draw_string(ui, "Kind", &pane.kind);
+                    draw_string(ui, "Name", &node.label);
+                    draw_string(ui, "Kind", &node.kind);
 
-                    draw_prop_f32(ui, "X", pane.x);
-                    draw_prop_f32(ui, "Y", pane.y);
-                    draw_prop_f32(ui, "Width", pane.width);
-                    draw_prop_f32(ui, "Height", pane.height);
-                    draw_prop(ui, "Depth", pane.depth);
-                    draw_prop(ui, "Visible", pane.visible);
+                    draw_prop_f32(ui, "X", node.world_pos.x);
+                    draw_prop_f32(ui, "Y", node.world_pos.y);
+                    draw_prop_f32(ui, "Width", node.world_size.x);
+                    draw_prop_f32(ui, "Height", node.world_size.y);
+                    draw_prop(ui, "Depth", node.depth);
+                    draw_prop(ui, "Visible", node.visible);
 
-                    if let Some(source) = &pane.parts_source {
+                    if let Some(source) = &node.parts_source {
                         draw_string(ui, "Parts Source", source);
-                    }
-
-                    if let Some(parent_idx) = &pane.parent_idx {
-                        draw_prop(ui, "Parent Index", parent_idx);
                     }
                 });
 
@@ -491,7 +487,7 @@ fn draw_pane_properties(ui: &mut Ui, pane: &PaneInfo) {
             ui.heading("Section Details");
             ui.add_space(4.0);
 
-            match &pane.section {
+            match &node.section {
                 BflytSection::Layout(layout) => {
                     egui::Grid::new("bflyt_layout_grid")
                         .num_columns(2)
@@ -849,19 +845,167 @@ fn draw_material_list(ui: &mut Ui, list: &BflytMaterialList) {
                                 });
                         }
 
-                        // TODO: add
-                        /*if let Some(dc) = &material.detailed_combiner {
+                        if let Some(dc) = &material.detailed_combiner {
                             egui::CollapsingHeader::new("Detailed Combiner")
-                                .id_salt("dt_comb")
+                                .id_salt("dc_comb")
                                 .show(ui, |ui| {
-                                    egui::Grid::new(ui.id().with("dt_comb_grid"))
+                                    egui::Grid::new(ui.id().with("dc_comb_grid"))
                                         .striped(true)
                                         .show(ui, |ui| {
                                             draw_prop(ui, "Stage Flags", dc.stage_flags);
-                                            draw_prop(ui, "Stage Flags", dc.);
+
+                                            draw_prop(ui, &format!("Color 1, Red"), dc.color1.r);
+                                            draw_prop(ui, &format!("Color 1, Green"), dc.color1.g);
+                                            draw_prop(ui, &format!("Color 1, Blue"), dc.color1.b);
+                                            draw_prop(ui, &format!("Color 1, Alpha"), dc.color1.a);
+                                            draw_prop(ui, &format!("Color 2, Red"), dc.color2.r);
+                                            draw_prop(ui, &format!("Color 2, Green"), dc.color2.g);
+                                            draw_prop(ui, &format!("Color 2, Blue"), dc.color2.b);
+                                            draw_prop(ui, &format!("Color 2, Alpha"), dc.color2.a);
+
+                                            draw_prop(ui, &format!("Color 3, Red"), dc.color3.r);
+                                            draw_prop(ui, &format!("Color 3, Green"), dc.color3.g);
+                                            draw_prop(ui, &format!("Color 3, Blue"), dc.color3.b);
+                                            draw_prop(ui, &format!("Color 3, Alpha"), dc.color3.a);
+                                            draw_prop(ui, &format!("Color 4, Red"), dc.color4.r);
+                                            draw_prop(ui, &format!("Color 4, Green"), dc.color4.g);
+                                            draw_prop(ui, &format!("Color 4, Blue"), dc.color4.b);
+                                            draw_prop(ui, &format!("Color 4, Alpha"), dc.color4.a);
+
+                                            draw_prop(ui, &format!("Color 5, Red"), dc.color5.r);
+                                            draw_prop(ui, &format!("Color 5, Green"), dc.color5.g);
+                                            draw_prop(ui, &format!("Color 5, Blue"), dc.color5.b);
+                                            draw_prop(ui, &format!("Color 5, Alpha"), dc.color5.a);
+
+                                            draw_vec_grid(
+                                                ui,
+                                                "dc_entries",
+                                                &dc.entries,
+                                                |ui, i, entry| {
+                                                    draw_prop(
+                                                        ui,
+                                                        &format!("[{i}] Alpha Config Copy Reg"),
+                                                        entry.alpha_config.copy_reg,
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Alpha Config Konst Sel"),
+                                                        entry.alpha_config.konst_sel,
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Alpha Config Mode"),
+                                                        entry.alpha_config.mode,
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Alpha Config Scale"),
+                                                        entry.alpha_config.scale,
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Alpha Config Operand 1"),
+                                                        entry.alpha_config.operands[0],
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Alpha Config Operand 2"),
+                                                        entry.alpha_config.operands[1],
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Alpha Config Operand 3"),
+                                                        entry.alpha_config.operands[2],
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Alpha Config Source 1"),
+                                                        entry.alpha_config.sources[0],
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Alpha Config Source 2"),
+                                                        entry.alpha_config.sources[1],
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Alpha Config Source 3"),
+                                                        entry.alpha_config.sources[2],
+                                                    );
+
+                                                    draw_prop(
+                                                        ui,
+                                                        &format!("[{i}] Color Config Copy Reg"),
+                                                        entry.color_config.copy_reg,
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Color Config Konst Sel"),
+                                                        entry.color_config.konst_sel,
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Color Config Mode"),
+                                                        entry.color_config.mode,
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Color Config Scale"),
+                                                        entry.color_config.scale,
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Color Config Operand 1"),
+                                                        entry.color_config.operands[0],
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Color Config Operand 2"),
+                                                        entry.color_config.operands[1],
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Color Config Operand 3"),
+                                                        entry.color_config.operands[2],
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Color Config Source 1"),
+                                                        entry.color_config.sources[0],
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Color Config Source 2"),
+                                                        entry.color_config.sources[1],
+                                                    );
+
+                                                    draw_prop_debug(
+                                                        ui,
+                                                        &format!("[{i}] Color Config Source 3"),
+                                                        entry.color_config.sources[2],
+                                                    );
+                                                },
+                                            );
                                         });
                                 });
-                        }*/
+                        }
                     });
             }
         });
