@@ -677,7 +677,7 @@ impl<'a> Builder<'a> {
                 for node in nodes.iter_mut() {
                     if node.label.trim_end_matches('\0') == prop_name {
                         if let BflytSection::PicturePane(pic) = override_section {
-                            node.textured_quad = builder.build_textured_quad(
+                            let tq = builder.build_textured_quad(
                                 pic,
                                 node.world_pos,
                                 node.world_size,
@@ -689,12 +689,17 @@ impl<'a> Builder<'a> {
                                 node.visible,
                                 node.pane_idx,
                             );
+
+                            node.textured_quad = tq.clone();
+                            node.base_textured_quad = tq;
                         }
                         return;
                     }
+
                     apply_override(&mut node.children, prop_name, override_section, builder);
                 }
             }
+
             apply_override(&mut sub_children, prop_name, override_section, self);
         }
 
