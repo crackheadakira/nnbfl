@@ -10,7 +10,10 @@ use nnbfl::{
     ui2d::types::{Vector2f, Vector3f},
 };
 
-use crate::{anim_state::AnimPlayer, bflyt_view::BflytView, camera::Camera, pane_tree::PaneNode};
+use crate::{
+    anim_state::AnimPlayer, bflyt_view::BflytView, camera::Camera, pane_tree::PaneNode,
+    traits::Displaying,
+};
 
 pub const SUPPORTED_SARC_EXTENSIONS: &[&str] = &[
     "blarc",
@@ -59,7 +62,7 @@ pub enum UiAction {
 
 pub fn draw_ui(
     ui: &mut Ui,
-    view: &Option<BflytView>,
+    view: &mut Option<BflytView>,
     state: &mut UiState,
     camera: &Camera,
     anim_player: &mut AnimPlayer,
@@ -286,9 +289,27 @@ pub fn draw_ui(
                         if let Some(view) = view {
                             ui.vertical(|ui| {
                                 if let Some(idx) = state.selected_pane {
-                                    if let Some(node) = view.tree.iter().find(|n| n.pane_idx == idx)
-                                    {
-                                        draw_pane_properties(ui, node);
+                                    let changed = {
+                                        let node_ptr = view
+                                            .tree
+                                            .iter_mut()
+                                            .find(|n| n.pane_idx == idx)
+                                            .map(|n| n as *mut _);
+                                        if let Some(ptr) = node_ptr {
+                                            let node = unsafe { &mut *ptr };
+                                            draw_pane_properties(ui, node)
+                                        } else {
+                                            false
+                                        }
+                                    };
+
+                                    if changed {
+                                        if let Some(node) =
+                                            view.tree.iter_mut().find(|n| n.pane_idx == idx)
+                                        {
+                                            node.mark_transform_dirty();
+                                        }
+                                        view.tree.recompute_dirty();
                                     }
                                 } else {
                                     ui.centered_and_justified(|ui| {
@@ -452,7 +473,8 @@ fn show_pane_recursive(idx: usize, view: &BflytView, hidden_set: &mut HashSet<us
     }
 }
 
-fn draw_pane_properties(ui: &mut Ui, node: &PaneNode) {
+fn draw_pane_properties(ui: &mut Ui, pane: &mut crate::pane_tree::PaneNode) -> bool {
+    let mut changed = false;
     egui::ScrollArea::vertical()
         .id_salt("pane_properties_scroll")
         .auto_shrink(false)
@@ -465,29 +487,113 @@ fn draw_pane_properties(ui: &mut Ui, node: &PaneNode) {
                 .striped(true)
                 .spacing([12.0, 4.0])
                 .show(ui, |ui| {
-                    draw_string(ui, "Name", &node.label);
-                    draw_string(ui, "Kind", &node.kind);
-
-                    draw_prop_f32(ui, "X", node.world_pos.x);
-                    draw_prop_f32(ui, "Y", node.world_pos.y);
-                    draw_prop_f32(ui, "Width", node.world_size.x);
-                    draw_prop_f32(ui, "Height", node.world_size.y);
-                    draw_prop(ui, "Depth", node.depth);
-                    draw_prop(ui, "Visible", node.visible);
-
-                    if let Some(source) = &node.parts_source {
+                    draw_string(ui, "Name", &pane.label);
+                    draw_string(ui, "Kind", &pane.kind);
+                    draw_prop_f32(ui, "World X", pane.world_pos.x);
+                    draw_prop_f32(ui, "World Y", pane.world_pos.y);
+                    draw_prop_f32(ui, "Width", pane.world_size.x);
+                    draw_prop_f32(ui, "Height", pane.world_size.y);
+                    draw_prop(ui, "Depth", pane.depth);
+                    draw_prop(ui, "Visible", pane.visible);
+                    draw_prop(ui, "Pane Index", pane.pane_idx);
+                    if let Some(source) = &pane.parts_source {
                         draw_string(ui, "Parts Source", source);
                     }
                 });
 
             ui.add_space(8.0);
             ui.separator();
-            ui.add_space(8.0);
+            ui.add_space(4.0);
+            ui.heading("Transform");
+            ui.add_space(4.0);
 
+            if let Some(base) = pane.section.get_base_pane_mut() {
+                egui::Grid::new("pane_transform_grid")
+                    .num_columns(2)
+                    .striped(true)
+                    .spacing([12.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Translate X");
+                        if ui
+                            .add(egui::DragValue::new(&mut base.translation.x).speed(0.5))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Translate Y");
+                        if ui
+                            .add(egui::DragValue::new(&mut base.translation.y).speed(0.5))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Translate Z");
+                        if ui
+                            .add(egui::DragValue::new(&mut base.translation.z).speed(0.5))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Rotate Z");
+                        if ui
+                            .add(egui::DragValue::new(&mut base.rotation.z).speed(0.1))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Scale X");
+                        if ui
+                            .add(egui::DragValue::new(&mut base.scale.x).speed(0.01))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Scale Y");
+                        if ui
+                            .add(egui::DragValue::new(&mut base.scale.y).speed(0.01))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Size X");
+                        if ui
+                            .add(egui::DragValue::new(&mut base.size.x).speed(0.5))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label("Size Y");
+                        if ui
+                            .add(egui::DragValue::new(&mut base.size.y).speed(0.5))
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        ui.end_row();
+                    });
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
             ui.heading("Section Details");
             ui.add_space(4.0);
 
-            match &node.section {
+            match &pane.section {
                 BflytSection::Layout(layout) => {
                     egui::Grid::new("bflyt_layout_grid")
                         .num_columns(2)
@@ -507,10 +613,11 @@ fn draw_pane_properties(ui: &mut Ui, node: &PaneNode) {
                         });
                 }
                 _ => {
-                    ui.weak("Unimplemented section metadata type");
+                    ui.weak("Section details not yet editable for this type.");
                 }
             }
         });
+    changed
 }
 
 fn draw_layout_section(ui: &mut Ui, layout: &BflytLayout) {

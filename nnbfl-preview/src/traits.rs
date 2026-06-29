@@ -4,6 +4,7 @@ pub trait Displaying {
     fn section_color(&self) -> [f32; 4];
     fn kind_name(&self) -> &'static str;
     fn get_base_pane(&self) -> Option<&BflytPane>;
+    fn get_base_pane_mut(&mut self) -> Option<&mut BflytPane>;
     fn pane_name(&self) -> String;
 }
 
@@ -61,6 +62,21 @@ impl Displaying for BflytSection {
             BflytSection::WindowPane(p) => Some(&p.base),
             BflytSection::PartsPane(p) => Some(&p.base),
             BflytSection::AlignmentPane(p) => Some(&p.base),
+            BflytSection::CapturePane(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    fn get_base_pane_mut(&mut self) -> Option<&mut BflytPane> {
+        match self {
+            BflytSection::Pane(p)
+            | BflytSection::BoundingPane(p)
+            | BflytSection::ScissorPane(p) => Some(p),
+            BflytSection::PicturePane(p) => Some(&mut p.base),
+            BflytSection::TextBoxPane(p) => Some(&mut p.base),
+            BflytSection::WindowPane(p) => Some(&mut p.base),
+            BflytSection::PartsPane(p) => Some(&mut p.base),
+            BflytSection::AlignmentPane(p) => Some(&mut p.base),
             BflytSection::CapturePane(p) => Some(p),
             _ => None,
         }

@@ -159,6 +159,15 @@ impl PaneNode {
         PaneIter { stack: vec![self] }
     }
 
+    pub fn mark_transform_dirty(&mut self) {
+        self.dirty
+            .insert(DirtyFlags::TRANSFORM | DirtyFlags::VERTICES);
+
+        for child in &mut self.children {
+            child.mark_transform_dirty();
+        }
+    }
+
     pub fn recompute(
         &mut self,
         parent_pos: Vector2f,
