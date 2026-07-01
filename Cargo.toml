@@ -6,3 +6,8 @@ resolver = "2"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false

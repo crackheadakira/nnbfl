@@ -514,6 +514,7 @@ impl<'a> Builder<'a> {
         depth: usize,
     ) -> Option<PaneNode> {
         let base = section.get_base_pane()?;
+
         let is_visible = parent_visible && base.pane_flags.is_visible;
         let (pos, size, anchor, center) = resolve_rect(base, parent_pos, parent_size, parent_scale);
 
@@ -551,6 +552,8 @@ impl<'a> Builder<'a> {
             [0.0; 4]
         };
 
+        let is_parts_root = base.pane_name == "RootPane" && self.parts_source.is_some();
+
         let plain_quad = Quad {
             x: pos.x,
             y: pos.y,
@@ -558,6 +561,7 @@ impl<'a> Builder<'a> {
             height: size.y,
             color,
             has_textured: matches!(section, BflytSection::PicturePane(_)),
+            is_parts_root,
         };
 
         let mut node = PaneNode {

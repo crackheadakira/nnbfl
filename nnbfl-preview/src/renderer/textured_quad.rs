@@ -458,40 +458,16 @@ impl TexturedQuadRenderer {
 
             let gpu_tex0 = texture_cache.get(&batch.key.texture_name).unwrap();
 
-            let pane_cx = rep_quad.x + rep_quad.width * 0.5;
-            let pane_cy = rep_quad.y + rep_quad.height * 0.5;
-
             let mut final_mat = rep_quad.standard_material;
 
-            final_mat.proj_mtx0 = Self::calculate_projection_matrix(
-                rep_quad,
-                texture_cache,
-                layout_w,
-                layout_h,
-                pane_cx,
-                pane_cy,
-                0,
-            );
+            final_mat.proj_mtx0 =
+                Self::calculate_projection_matrix(rep_quad, texture_cache, layout_w, layout_h, 0);
 
-            final_mat.proj_mtx1 = Self::calculate_projection_matrix(
-                rep_quad,
-                texture_cache,
-                layout_w,
-                layout_h,
-                pane_cx,
-                pane_cy,
-                1,
-            );
+            final_mat.proj_mtx1 =
+                Self::calculate_projection_matrix(rep_quad, texture_cache, layout_w, layout_h, 1);
 
-            final_mat.proj_mtx2 = Self::calculate_projection_matrix(
-                rep_quad,
-                texture_cache,
-                layout_w,
-                layout_h,
-                pane_cx,
-                pane_cy,
-                2,
-            );
+            final_mat.proj_mtx2 =
+                Self::calculate_projection_matrix(rep_quad, texture_cache, layout_w, layout_h, 2);
 
             let mat_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("tq_standard_mat_buf"),
@@ -806,38 +782,14 @@ impl TexturedQuadRenderer {
                 continue;
             }
 
-            let pane_cx = tq.x + tq.width * 0.5;
-            let pane_cy = tq.y + tq.height * 0.5;
+            tq.standard_material.proj_mtx0 =
+                Self::calculate_projection_matrix(tq, texture_cache, layout_w, layout_h, 0);
 
-            tq.standard_material.proj_mtx0 = Self::calculate_projection_matrix(
-                tq,
-                texture_cache,
-                layout_w,
-                layout_h,
-                pane_cx,
-                pane_cy,
-                0,
-            );
+            tq.standard_material.proj_mtx1 =
+                Self::calculate_projection_matrix(tq, texture_cache, layout_w, layout_h, 1);
 
-            tq.standard_material.proj_mtx1 = Self::calculate_projection_matrix(
-                tq,
-                texture_cache,
-                layout_w,
-                layout_h,
-                pane_cx,
-                pane_cy,
-                1,
-            );
-
-            tq.standard_material.proj_mtx2 = Self::calculate_projection_matrix(
-                tq,
-                texture_cache,
-                layout_w,
-                layout_h,
-                pane_cx,
-                pane_cy,
-                2,
-            );
+            tq.standard_material.proj_mtx2 =
+                Self::calculate_projection_matrix(tq, texture_cache, layout_w, layout_h, 2);
         }
     }
 
@@ -846,12 +798,13 @@ impl TexturedQuadRenderer {
         texture_cache: &TextureCache,
         layout_w: f32,
         layout_h: f32,
-        pane_cx: f32,
-        pane_cy: f32,
         layer_idx: usize,
     ) -> [[f32; 4]; 2] {
         let tex_aspect_ratio =
             Self::get_layer_aspect(quad, texture_cache, layout_w, layout_h, layer_idx);
+
+        let pane_cx = quad.x + quad.width * 0.5;
+        let pane_cy = quad.y + quad.height * 0.5;
 
         let shift = layer_idx * 8;
         let packed = quad.standard_material.tex_gen_mode >> shift;

@@ -37,6 +37,7 @@ pub struct Quad {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    pub is_parts_root: bool,
 
     pub color: [f32; 4],
     pub has_textured: bool,
@@ -139,9 +140,9 @@ impl QuadRenderer {
         let uvs = [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
 
         for (i, q) in quads.iter().enumerate() {
-            /*if q.has_textured {
+            if q.is_parts_root {
                 continue;
-            }*/
+            };
 
             let base = (i * 4) as u32;
             let x0 = q.x;

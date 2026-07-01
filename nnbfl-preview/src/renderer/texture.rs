@@ -7,7 +7,7 @@ use tomolib::formats::bntx::{
 use wgpu::util::DeviceExt;
 
 pub struct GpuTexture {
-    pub _texture: wgpu::Texture,
+    pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
@@ -81,7 +81,7 @@ fn upload_rgba(
     height: u32,
     label: &str,
 ) -> GpuTexture {
-    let _texture = device.create_texture_with_data(
+    let texture = device.create_texture_with_data(
         queue,
         &wgpu::TextureDescriptor {
             label: Some(label),
@@ -101,10 +101,10 @@ fn upload_rgba(
         data,
     );
 
-    let view = _texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
     GpuTexture {
-        _texture,
+        texture,
         view,
         width,
         height,

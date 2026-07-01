@@ -99,4 +99,11 @@ impl Camera {
 
         egui::pos2(screen_x, screen_y)
     }
+
+    pub fn screen_to_world(&self, screen_pos: [f32; 2]) -> [f32; 2] {
+        [
+            (screen_pos[0] - self.offset[0]) / self.zoom,
+            (screen_pos[1] - self.offset[1]) / self.zoom,
+        ]
+    }
 }

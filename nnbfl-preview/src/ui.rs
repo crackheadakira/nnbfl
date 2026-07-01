@@ -11,7 +11,7 @@ use nnbfl::{
 };
 
 use crate::{
-    anim_state::AnimPlayer, bflyt_view::BflytView, camera::Camera, pane_tree::PaneNode,
+    anim_state::AnimPlayer, bflyt_view::BflytView, camera::Camera, renderer::selection::Handle,
     traits::Displaying,
 };
 
@@ -39,6 +39,7 @@ pub struct UiState {
     pub sidebar_tab: SidebarTab,
     pub right_sidebar_tab: SidebarRightTab,
     pub active_debug_stage: u32,
+    pub active_handle: Option<Handle>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

@@ -34,6 +34,8 @@ use ui::{UiState, draw_ui};
 
 use crate::{
     anim_state::AnimPlayer,
+    renderer::selection::{Handle, SelectionRenderer, point_in_quad},
+    traits::Displaying,
     ui::{SUPPORTED_SARC_EXTENSIONS, UiAction},
 };
 
@@ -44,6 +46,8 @@ struct GpuState {
     config: wgpu::SurfaceConfiguration,
     quad_renderer: QuadRenderer,
     textured_quad_renderer: Option<TexturedQuadRenderer>,
+    selection_renderer: SelectionRenderer,
+
     texture_cache: TextureCache,
     egui_renderer: egui_wgpu::Renderer,
 }
@@ -106,6 +110,8 @@ impl GpuState {
         let mut quad_renderer = QuadRenderer::new(&device, surface_format);
         quad_renderer.upload_quads(&device, &[]);
 
+        let selection_renderer = SelectionRenderer::new(&device, surface_format);
+
         let texture_cache = TextureCache::new();
 
         let egui_renderer =
@@ -121,6 +127,7 @@ impl GpuState {
             textured_quad_renderer,
             texture_cache,
             egui_renderer,
+            selection_renderer,
         }
     }
 
@@ -128,6 +135,7 @@ impl GpuState {
         if new_size.width == 0 || new_size.height == 0 {
             return;
         }
+
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
@@ -145,10 +153,14 @@ impl GpuState {
     ) {
         self.quad_renderer
             .update_projection(&self.queue, camera, &self.config);
+
         let matrix = camera.build_matrix(self.config.width as f32, self.config.height as f32);
         if let Some(tqr) = &self.textured_quad_renderer {
             tqr.update_projection(&self.queue, matrix);
         }
+
+        self.selection_renderer
+            .update_projection(&self.queue, matrix);
 
         let mut scissor_rect = None;
         if let Some(view) = bflyt_view
@@ -214,6 +226,16 @@ impl GpuState {
         egui_state.handle_platform_output(window, full_output.platform_output.clone());
 
         if let Some(bflyt_view) = bflyt_view {
+            match ui_state
+                .selected_pane
+                .and_then(|idx| bflyt_view.tree.iter().find(|n| n.pane_idx == idx))
+            {
+                Some(node) => self
+                    .selection_renderer
+                    .update(&self.device, &node.world_corners),
+                None => self.selection_renderer.clear(),
+            }
+
             let plain_quads = bflyt_view.tree.collect_plain_quads();
             let plain_quads: Vec<_> = plain_quads.iter().map(|q| *q).cloned().collect();
 
@@ -319,6 +341,8 @@ impl GpuState {
                 tqr.render(&mut rpass);
             }
 
+            self.selection_renderer.render(&mut rpass);
+
             if scissor_rect.is_some() {
                 rpass.set_scissor_rect(0, 0, self.config.width, self.config.height);
             }
@@ -331,6 +355,15 @@ impl GpuState {
         self.queue.submit(std::iter::once(render_encoder.finish()));
         output.present();
     }
+}
+
+struct DragState {
+    pane_idx: usize,
+    handle: Handle,
+    start_world: [f32; 2],
+    start_translation: (f32, f32),
+    start_size: (f32, f32),
+    rotate_z: f32,
 }
 
 struct App {
@@ -346,6 +379,7 @@ struct App {
     window: Option<Arc<Window>>,
     anim_player: AnimPlayer,
     last_tick: Instant,
+    drag_state: Option<DragState>,
 }
 
 impl App {
@@ -363,7 +397,157 @@ impl App {
             window: None,
             anim_player: AnimPlayer::new(),
             last_tick: Instant::now(),
+            drag_state: None,
         }
+    }
+
+    fn try_start_drag(&mut self, screen_pos: [f32; 2]) -> bool {
+        let Some(gpu) = &self.gpu else { return false };
+
+        let Some(idx) = self.ui_state.selected_pane else {
+            return false;
+        };
+
+        let Some(view) = &self.bflyt_view else {
+            return false;
+        };
+
+        let Some(node) = view.tree.iter().find(|n| n.pane_idx == idx) else {
+            return false;
+        };
+
+        if node.plain_quad.is_parts_root {
+            return false;
+        };
+
+        let world_pos = self.camera.screen_to_world(screen_pos);
+
+        let radius = 8.0 / self.camera.zoom.max(0.01);
+
+        let handle = match gpu.selection_renderer.hit_test(world_pos, radius) {
+            Some(h) => h,
+            None if point_in_quad(world_pos, &node.world_corners) => {
+                crate::renderer::selection::Handle::Body
+            }
+            None => return false,
+        };
+
+        let base = node.section.get_base_pane();
+        let translation = base
+            .map(|b| (b.translation.x, b.translation.y))
+            .unwrap_or((0.0, 0.0));
+
+        let size = base
+            .map(|b| (b.size.x * b.scale.x, b.size.y * b.scale.y))
+            .unwrap_or((node.world_size.x, node.world_size.y));
+        let rotate_z = base.map(|b| b.rotation.z).unwrap_or(0.0);
+
+        self.drag_state = Some(DragState {
+            pane_idx: idx,
+            handle,
+            start_world: world_pos,
+            start_translation: translation,
+            start_size: size,
+            rotate_z,
+        });
+        true
+    }
+
+    fn update_drag(&mut self, screen_pos: [f32; 2]) {
+        let Some(drag) = &self.drag_state else { return };
+        let Some(view) = &mut self.bflyt_view else {
+            return;
+        };
+
+        let world_pos = self.camera.screen_to_world(screen_pos);
+        let dx = world_pos[0] - drag.start_world[0];
+        let dy = world_pos[1] - drag.start_world[1];
+
+        let rad = -drag.rotate_z.to_radians();
+        let (sin_r, cos_r) = rad.sin_cos();
+        let local_dx = dx * cos_r + dy * sin_r;
+        let local_dy = -dx * sin_r + dy * cos_r;
+
+        let Some(node) = view.tree.iter_mut().find(|n| n.pane_idx == drag.pane_idx) else {
+            return;
+        };
+
+        if node.plain_quad.is_parts_root {
+            return;
+        }
+
+        let Some(base) = node.section.get_base_pane_mut() else {
+            return;
+        };
+
+        match drag.handle {
+            Handle::Body => {
+                base.translation.x = drag.start_translation.0 + local_dx;
+                base.translation.y = drag.start_translation.1 - local_dy;
+            }
+            Handle::TopLeft | Handle::TopRight | Handle::BottomLeft | Handle::BottomRight => {
+                let sx = if matches!(drag.handle, Handle::TopLeft | Handle::BottomLeft) {
+                    -1.0
+                } else {
+                    1.0
+                };
+
+                let sy = if matches!(drag.handle, Handle::TopLeft | Handle::TopRight) {
+                    -1.0
+                } else {
+                    1.0
+                };
+                base.size.x = (drag.start_size.0 + local_dx * sx * 2.0).max(1.0);
+                base.size.y = (drag.start_size.1 + local_dy * sy * 2.0).max(1.0);
+            }
+            Handle::Left | Handle::Right => {
+                let sx = if drag.handle == Handle::Left {
+                    -1.0
+                } else {
+                    1.0
+                };
+                base.size.x = (drag.start_size.0 + local_dx * sx * 2.0).max(1.0);
+            }
+            Handle::Top | Handle::Bottom => {
+                let sy = if drag.handle == Handle::Top {
+                    -1.0
+                } else {
+                    1.0
+                };
+                base.size.y = (drag.start_size.1 + local_dy * sy * 2.0).max(1.0);
+            }
+        }
+
+        node.mark_transform_dirty();
+        view.tree.recompute_dirty();
+    }
+
+    fn end_drag(&mut self) {
+        self.drag_state = None;
+    }
+
+    fn try_select_at(&mut self, screen_pos: [f32; 2]) {
+        let Some(view) = &self.bflyt_view else { return };
+        let world_pos = self.camera.screen_to_world(screen_pos);
+
+        let mut best = None;
+
+        for node in view.tree.iter() {
+            if !node.visible
+                || self.ui_state.hidden_panes.contains(&node.pane_idx)
+                    | node.plain_quad.is_parts_root
+            {
+                continue;
+            }
+
+            if !point_in_quad(world_pos, &node.world_corners) {
+                continue;
+            }
+
+            best = Some(node.pane_idx);
+        }
+
+        self.ui_state.selected_pane = best;
     }
 
     fn load_file(&mut self) {
@@ -718,10 +902,34 @@ impl ApplicationHandler for App {
                     self.camera.pan(pos);
                 }
 
+                if self.drag_state.is_some() && !egui_wants_pointer {
+                    self.update_drag(pos);
+                }
+
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
             }
+
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } => match state {
+                winit::event::ElementState::Pressed => {
+                    if !egui_wants_pointer {
+                        let pos = self.camera.cursor_screen;
+
+                        if !self.try_start_drag(pos) {
+                            self.try_select_at(pos);
+                            self.try_start_drag(pos);
+                        }
+                    }
+                }
+                winit::event::ElementState::Released => {
+                    self.end_drag();
+                }
+            },
 
             WindowEvent::MouseInput {
                 state,
