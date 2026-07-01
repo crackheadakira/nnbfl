@@ -283,12 +283,16 @@ fn cascade_translate(view: &mut BflytView, pane_idx: usize, new_trans_x: f32, ne
 
         node.world_pos.x += dx;
         node.world_pos.y += dy;
-        node.plain_quad.x = node.world_pos.x;
-        node.plain_quad.y = node.world_pos.y;
+
+        for corner in &mut node.plain_quad.corners {
+            corner[0] += dx;
+            corner[1] += dy;
+        }
 
         if let Some(tq) = &mut node.textured_quad {
             tq.x = node.world_pos.x;
             tq.y = node.world_pos.y;
+
             for corner in &mut tq.corners {
                 corner[0] += dx;
                 corner[1] += dy;

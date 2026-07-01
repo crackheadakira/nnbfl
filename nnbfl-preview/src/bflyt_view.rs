@@ -13,11 +13,11 @@ pub struct BflytView {
 
 impl BflytView {
     pub fn reset_to_base(&mut self) {
-        for node in self.tree.iter_mut() {
+        self.tree.for_each_mut(|node| {
             node.textured_quad = node.base_textured_quad.clone();
             node.dirty
                 .insert(DirtyFlags::TRANSFORM | DirtyFlags::MATERIAL | DirtyFlags::VERTICES);
-        }
+        });
 
         self.tree.recompute_dirty();
     }

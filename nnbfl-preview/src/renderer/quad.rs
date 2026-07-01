@@ -33,10 +33,9 @@ impl Vertex {
 
 #[derive(Clone, Debug)]
 pub struct Quad {
-    pub x: f32,
-    pub y: f32,
     pub width: f32,
     pub height: f32,
+    pub corners: [[f32; 2]; 4],
     pub is_parts_root: bool,
 
     pub color: [f32; 4],
@@ -145,17 +144,12 @@ impl QuadRenderer {
             };
 
             let base = (i * 4) as u32;
-            let x0 = q.x;
-            let y0 = q.y;
-            let x1 = q.x + q.width;
-            let y1 = q.y + q.height;
-            let c = q.color;
             let size = [q.width, q.height];
 
-            for (v_idx, pos) in [[x0, y0], [x1, y0], [x0, y1], [x1, y1]].iter().enumerate() {
+            for v_idx in 0..4 {
                 vertices.push(Vertex {
-                    position: *pos,
-                    color: c,
+                    position: q.corners[v_idx],
+                    color: q.color,
                     quad_size: size,
                     uv: uvs[v_idx],
                 });
@@ -236,15 +230,10 @@ impl QuadRenderer {
                 q.color
             };
 
-            let x0 = q.x;
-            let y0 = q.y;
-            let x1 = q.x + q.width;
-            let y1 = q.y + q.height;
             let size = [q.width, q.height];
 
-            let positions = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
             for v_offset in 0..4 {
-                self.cached_vertices[base + v_offset].position = positions[v_offset];
+                self.cached_vertices[base + v_offset].position = q.corners[v_offset];
                 self.cached_vertices[base + v_offset].color = color;
                 self.cached_vertices[base + v_offset].quad_size = size;
                 self.cached_vertices[base + v_offset].uv = uvs[v_offset];

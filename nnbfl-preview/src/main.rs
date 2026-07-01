@@ -464,7 +464,7 @@ impl App {
         let dx = world_pos[0] - drag.start_world[0];
         let dy = world_pos[1] - drag.start_world[1];
 
-        let Some(node) = view.tree.iter_mut().find(|n| n.pane_idx == drag.pane_idx) else {
+        let Some(node) = view.tree.find_node_mut(drag.pane_idx) else {
             return;
         };
 

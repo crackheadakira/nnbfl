@@ -10,10 +10,7 @@ use nnbfl::{
     ui2d::types::{Vector2f, Vector3f},
 };
 
-use crate::{
-    anim_state::AnimPlayer, bflyt_view::BflytView, camera::Camera, renderer::selection::Handle,
-    traits::Displaying,
-};
+use crate::{anim_state::AnimPlayer, bflyt_view::BflytView, camera::Camera, traits::Displaying};
 
 pub const SUPPORTED_SARC_EXTENSIONS: &[&str] = &[
     "blarc",
@@ -39,7 +36,6 @@ pub struct UiState {
     pub sidebar_tab: SidebarTab,
     pub right_sidebar_tab: SidebarRightTab,
     pub active_debug_stage: u32,
-    pub active_handle: Option<Handle>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -83,8 +79,11 @@ pub fn draw_ui(
             {
                 let display_text = text_box.text.as_deref().unwrap_or("");
 
-                let center_x = node.plain_quad.x + (node.plain_quad.width * 0.5);
-                let center_y = node.plain_quad.y + (node.plain_quad.height * 0.5);
+                let tl = node.plain_quad.corners[0];
+                let br = node.plain_quad.corners[3];
+
+                let center_x = (tl[0] + br[0]) * 0.5;
+                let center_y = (tl[1] + br[1]) * 0.5;
                 let screen_pos = camera.world_to_screen([center_x, center_y], screen_w, screen_h);
 
                 let font_size = (32.0 * camera.zoom).clamp(8.0, 128.0);
@@ -291,13 +290,7 @@ pub fn draw_ui(
                             ui.vertical(|ui| {
                                 if let Some(idx) = state.selected_pane {
                                     let changed = {
-                                        let node_ptr = view
-                                            .tree
-                                            .iter_mut()
-                                            .find(|n| n.pane_idx == idx)
-                                            .map(|n| n as *mut _);
-                                        if let Some(ptr) = node_ptr {
-                                            let node = unsafe { &mut *ptr };
+                                        if let Some(node) = view.tree.find_node_mut(idx) {
                                             draw_pane_properties(ui, node)
                                         } else {
                                             false
@@ -305,9 +298,7 @@ pub fn draw_ui(
                                     };
 
                                     if changed {
-                                        if let Some(node) =
-                                            view.tree.iter_mut().find(|n| n.pane_idx == idx)
-                                        {
+                                        if let Some(node) = view.tree.find_node_mut(idx) {
                                             node.mark_transform_dirty();
                                         }
                                         view.tree.recompute_dirty();

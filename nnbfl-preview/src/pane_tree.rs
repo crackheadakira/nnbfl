@@ -196,8 +196,7 @@ impl PaneNode {
 
                 self.world_corners = corners;
 
-                self.plain_quad.x = pos.x;
-                self.plain_quad.y = pos.y;
+                self.plain_quad.corners = corners.to_array();
                 self.plain_quad.width = size.x;
                 self.plain_quad.height = size.y;
 
@@ -250,31 +249,16 @@ impl<'a> Iterator for PaneIter<'a> {
     }
 }
 
-pub struct PaneIterMut<'a> {
-    stack: Vec<&'a mut PaneNode>,
-}
-
-impl<'a> Iterator for PaneIterMut<'a> {
-    type Item = &'a mut PaneNode;
-    fn next(&mut self) -> Option<Self::Item> {
-        let node = self.stack.pop()?;
-
-        // Safety: each node appears in the stack exactly once
-        let node = unsafe { &mut *(node as *mut PaneNode) };
-        for child in node.children.iter_mut().rev() {
-            self.stack.push(unsafe { &mut *(child as *mut PaneNode) });
-        }
-
-        Some(node)
-    }
-}
-
 pub struct PaneTree {
     pub roots: Vec<PaneNode>,
     pub layout_size: Vector2f,
     pub material_list: Option<BflytMaterialList>,
     pub file_name: String,
     pub discovered_bntx_buffers: Vec<Vec<u8>>,
+
+    pub parent_map: HashMap<usize, Option<usize>>,
+    pub label_map: HashMap<String, usize>,
+    pub max_pane_idx: usize,
 }
 
 impl PaneTree {
@@ -282,10 +266,40 @@ impl PaneTree {
         self.roots.iter().flat_map(|r| r.iter())
     }
 
-    pub fn iter_mut(&mut self) -> PaneIterMut<'_> {
-        PaneIterMut {
-            stack: self.roots.iter_mut().rev().collect(),
+    pub fn for_each_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut PaneNode),
+    {
+        fn walk_mut<F>(node: &mut PaneNode, f: &mut F)
+        where
+            F: FnMut(&mut PaneNode),
+        {
+            f(node);
+
+            for child in &mut node.children {
+                walk_mut(child, f);
+            }
         }
+
+        for root in &mut self.roots {
+            walk_mut(root, &mut f);
+        }
+    }
+
+    pub fn find_node_mut(&mut self, target_idx: usize) -> Option<&mut PaneNode> {
+        fn find_recursive(nodes: &mut [PaneNode], target_idx: usize) -> Option<&mut PaneNode> {
+            for node in nodes {
+                if node.pane_idx == target_idx {
+                    return Some(node);
+                }
+                if let Some(found) = find_recursive(&mut node.children, target_idx) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        find_recursive(&mut self.roots, target_idx)
     }
 
     pub fn recompute_dirty(&mut self) {
@@ -324,49 +338,25 @@ impl PaneTree {
     }
 
     pub fn build_idx_map(&mut self) -> HashMap<usize, *mut PaneNode> {
-        fn collect(node: &mut PaneNode, map: &mut HashMap<usize, *mut PaneNode>) {
-            map.insert(node.pane_idx, node as *mut PaneNode);
-
-            for child in &mut node.children {
-                collect(child, map);
-            }
-        }
-
         let mut map = HashMap::new();
-        for root in &mut self.roots {
-            collect(root, &mut map);
-        }
+
+        self.for_each_mut(|node| {
+            map.insert(node.pane_idx, node as *mut PaneNode);
+        });
 
         map
     }
 
     pub fn find_by_label(&self, label: &str) -> Option<&PaneNode> {
-        self.iter()
-            .find(|n| n.label.trim_end_matches('\0') == label)
+        let idx = *self.label_map.get(label)?;
+        self.iter().find(|n| n.pane_idx == idx)
     }
 
     pub fn label_to_idx(&self) -> HashMap<String, usize> {
-        self.iter()
-            .map(|n| (n.label.trim_end_matches('\0').to_string(), n.pane_idx))
-            .collect()
+        self.label_map.clone()
     }
 
     pub fn descendants(&self, pane_idx: usize) -> Vec<usize> {
-        fn find_and_collect(node: &PaneNode, target: usize, out: &mut Vec<usize>) -> bool {
-            if node.pane_idx == target {
-                collect_all(node, out);
-                return true;
-            }
-
-            for child in &node.children {
-                if find_and_collect(child, target, out) {
-                    return true;
-                }
-            }
-
-            false
-        }
-
         fn collect_all(node: &PaneNode, out: &mut Vec<usize>) {
             for child in &node.children {
                 out.push(child.pane_idx);
@@ -375,13 +365,95 @@ impl PaneTree {
         }
 
         let mut out = Vec::new();
-        for root in &self.roots {
-            if find_and_collect(root, pane_idx, &mut out) {
-                break;
-            }
+        if let Some(target_node) = self.iter().find(|n| n.pane_idx == pane_idx) {
+            collect_all(target_node, &mut out);
         }
 
         out
+    }
+
+    pub fn insert_node(&mut self, parent_idx: Option<usize>, node: PaneNode) -> usize {
+        let idx = node.pane_idx;
+
+        fn register_subtree(
+            n: &PaneNode,
+            parent: Option<usize>,
+            p_map: &mut HashMap<usize, Option<usize>>,
+            l_map: &mut HashMap<String, usize>,
+            max_idx: &mut usize,
+        ) {
+            let i = n.pane_idx;
+            *max_idx = (*max_idx).max(i);
+            p_map.insert(i, parent);
+            l_map.insert(n.label.trim_end_matches('\0').to_string(), i);
+
+            for child in &n.children {
+                register_subtree(child, Some(i), p_map, l_map, max_idx);
+            }
+        }
+
+        register_subtree(
+            &node,
+            parent_idx,
+            &mut self.parent_map,
+            &mut self.label_map,
+            &mut self.max_pane_idx,
+        );
+
+        match parent_idx {
+            Some(pid) => {
+                if let Some(parent_node) = self.find_node_mut(pid) {
+                    parent_node.children.push(node);
+                }
+            }
+            None => self.roots.push(node),
+        }
+
+        idx
+    }
+
+    pub fn remove_node(&mut self, target_idx: usize) -> Option<PaneNode> {
+        let parent_idx = *self.parent_map.get(&target_idx)?;
+
+        let removed_node = match parent_idx {
+            Some(pid) => {
+                let parent_node = self.find_node_mut(pid)?;
+                let pos = parent_node
+                    .children
+                    .iter()
+                    .position(|n| n.pane_idx == target_idx)?;
+
+                Some(parent_node.children.remove(pos))
+            }
+            None => {
+                let pos = self.roots.iter().position(|n| n.pane_idx == target_idx)?;
+
+                Some(self.roots.remove(pos))
+            }
+        };
+
+        if let Some(ref node) = removed_node {
+            fn unregister_subtree(
+                n: &PaneNode,
+                p_map: &mut HashMap<usize, Option<usize>>,
+                l_map: &mut HashMap<String, usize>,
+            ) {
+                p_map.remove(&n.pane_idx);
+                l_map.remove(n.label.trim_end_matches('\0'));
+
+                for child in &n.children {
+                    unregister_subtree(child, p_map, l_map);
+                }
+            }
+
+            unregister_subtree(node, &mut self.parent_map, &mut self.label_map);
+        }
+
+        removed_node
+    }
+
+    pub fn next_pane_idx(&self) -> usize {
+        self.max_pane_idx + 1
     }
 
     pub fn from_bflyt(
@@ -420,12 +492,48 @@ impl PaneTree {
             0,
         );
 
+        let mut parent_map = HashMap::new();
+        let mut label_map = HashMap::new();
+        let mut max_pane_idx = 0;
+
+        fn index_tree(
+            node: &PaneNode,
+            parent: Option<usize>,
+            p_map: &mut HashMap<usize, Option<usize>>,
+            l_map: &mut HashMap<String, usize>,
+            max_idx: &mut usize,
+        ) {
+            let idx = node.pane_idx;
+            *max_idx = (*max_idx).max(idx);
+            p_map.insert(idx, parent);
+
+            let clean_label = node.label.trim_end_matches('\0').to_string();
+            l_map.insert(clean_label, idx);
+
+            for child in &node.children {
+                index_tree(child, Some(idx), p_map, l_map, max_idx);
+            }
+        }
+
+        for root in &roots {
+            index_tree(
+                root,
+                None,
+                &mut parent_map,
+                &mut label_map,
+                &mut max_pane_idx,
+            );
+        }
+
         PaneTree {
             roots,
             layout_size,
             material_list,
             file_name,
             discovered_bntx_buffers,
+            parent_map,
+            label_map,
+            max_pane_idx,
         }
     }
 }
@@ -555,8 +663,7 @@ impl<'a> Builder<'a> {
         let is_parts_root = base.pane_name == "RootPane" && self.parts_source.is_some();
 
         let plain_quad = Quad {
-            x: pos.x,
-            y: pos.y,
+            corners: corners.to_array(),
             width: size.x,
             height: size.y,
             color,
