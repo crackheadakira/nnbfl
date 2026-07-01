@@ -34,6 +34,7 @@ impl SelectionVertex {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Handle {
     Body,
+    Rotation,
 
     TopLeft,
     TopRight,
@@ -116,6 +117,14 @@ impl SelectionRenderer {
         let ml = midpoint(tl, bl);
         let mr = midpoint(tr, br);
 
+        let dx = mt[0] - mb[0];
+        let dy = mt[1] - mb[1];
+        let len = (dx * dx + dy * dy).sqrt().max(f32::EPSILON);
+        let nx = dx / len;
+        let ny = dy / len;
+
+        let rotation_handle_pos = [mt[0] + nx * 25.0, mt[1] + ny * 25.0];
+
         let mut vertices: Vec<SelectionVertex> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
 
@@ -129,6 +138,15 @@ impl SelectionRenderer {
                 OUTLINE_COLOR,
             );
         }
+
+        push_edge(
+            &mut vertices,
+            &mut indices,
+            mt,
+            rotation_handle_pos,
+            1.5,
+            OUTLINE_COLOR,
+        );
 
         for &pos in &[tl, tr, bl, br] {
             push_square(&mut vertices, &mut indices, pos, HANDLE_HALF, HANDLE_COLOR);
@@ -161,6 +179,22 @@ impl SelectionRenderer {
             );
         }
 
+        push_square(
+            &mut vertices,
+            &mut indices,
+            rotation_handle_pos,
+            HANDLE_HALF,
+            HANDLE_COLOR,
+        );
+        push_square_border(
+            &mut vertices,
+            &mut indices,
+            rotation_handle_pos,
+            HANDLE_HALF,
+            1.5,
+            HANDLE_BORDER,
+        );
+
         self.handle_positions = vec![
             (tl, Handle::TopLeft),
             (tr, Handle::TopRight),
@@ -170,6 +204,7 @@ impl SelectionRenderer {
             (mb, Handle::Bottom),
             (ml, Handle::Left),
             (mr, Handle::Right),
+            (rotation_handle_pos, Handle::Rotation),
         ];
 
         self.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

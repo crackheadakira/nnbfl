@@ -481,6 +481,33 @@ impl App {
                 base.translation.x = drag.start_translation.0 + dx;
                 base.translation.y = drag.start_translation.1 - dy;
             }
+            Handle::Rotation => {
+                let tl = [node.world_corners.top_left.x, node.world_corners.top_left.y];
+                let br = [
+                    node.world_corners.bottom_right.x,
+                    node.world_corners.bottom_right.y,
+                ];
+                let geom_center_x = (tl[0] + br[0]) * 0.5;
+                let geom_center_y = (tl[1] + br[1]) * 0.5;
+
+                let start_v_x = drag.start_world[0] - geom_center_x;
+                let start_v_y = drag.start_world[1] - geom_center_y;
+                let start_angle = start_v_y.atan2(start_v_x).to_degrees();
+
+                let current_v_x = world_pos[0] - geom_center_x;
+                let current_v_y = world_pos[1] - geom_center_y;
+                let current_angle = current_v_y.atan2(current_v_x).to_degrees();
+
+                let mut angle_delta = current_angle - start_angle;
+
+                if angle_delta > 180.0 {
+                    angle_delta -= 360.0;
+                } else if angle_delta < -180.0 {
+                    angle_delta += 360.0;
+                }
+
+                base.rotation.z = drag.rotate_z - angle_delta;
+            }
             _ => {
                 let rad = -drag.rotate_z.to_radians();
                 let (sin_r, cos_r) = rad.sin_cos();
