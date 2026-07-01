@@ -5,6 +5,7 @@ struct VertexInput {
     @location(3) uv2:      vec2<f32>,
     @location(4) tint:     vec4<f32>,
     @location(5) tex_aspects: vec3<f32>,
+    @location(6) quad_size: vec2<f32>,
 }
 
 struct VertexOutput {
@@ -14,6 +15,7 @@ struct VertexOutput {
     @location(2) uv2:  vec2<f32>,
     @location(3) tint: vec4<f32>,
     @location(4) pos_mesh: vec2<f32>,
+    @location(5) quad_size: vec2<f32>,
 }
 
 struct StandardMaterial {
@@ -40,6 +42,7 @@ struct StandardMaterial {
     // 8 = composite layer alpha visualized as grayscale
     // 9 = final
     debug_stage: u32,
+    is_plain: u32,
 
     indirect_mtx0: vec4<f32>,
     indirect_mtx1: vec4<f32>,
@@ -116,12 +119,36 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.position = u_projection * vec4<f32>(in.position, 0.0, 1.0);
     out.tint = in.tint;
     out.pos_mesh = in.position;
+    out.quad_size = in.quad_size;
 
     out.uv0 = scale_vertex_uv(in.uv0, in.tex_aspects.x);
     out.uv1 = scale_vertex_uv(in.uv1, in.tex_aspects.y);
     out.uv2 = scale_vertex_uv(in.uv2, in.tex_aspects.z);
     
     return out;
+}
+
+const PLAIN_BORDER_THICKNESS: f32 = 2.0;
+const PLAIN_FILL_ALPHA_MULT: f32 = 0.15;
+
+fn plain_preview_color(tint: vec4<f32>, uv: vec2<f32>, quad_size: vec2<f32>) -> vec4<f32> {
+    let pixel_pos = uv * quad_size;
+
+    let dist_to_left   = pixel_pos.x;
+    let dist_to_right  = quad_size.x - pixel_pos.x;
+    let dist_to_top    = pixel_pos.y;
+    let dist_to_bottom = quad_size.y - pixel_pos.y;
+
+    let min_dist = min(min(dist_to_left, dist_to_right), min(dist_to_top, dist_to_bottom));
+
+    var out_color = tint;
+    if (min_dist < PLAIN_BORDER_THICKNESS) {
+        out_color.a = tint.a;
+    } else {
+        out_color.a = tint.a * PLAIN_FILL_ALPHA_MULT;
+    }
+    
+    return out_color;
 }
 
 const TEV_MODE_REPLACE:             u32 = 0u;
@@ -535,6 +562,10 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
     let mat = u_standard;
     if mat.visible == 0u {
         discard;
+    }
+
+    if mat.is_plain == 1u {
+        return plain_preview_color(in.tint, in.uv0, in.quad_size);
     }
 
     if mat.use_texture_only == 1u {

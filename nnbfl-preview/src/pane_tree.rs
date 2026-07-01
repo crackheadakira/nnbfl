@@ -18,7 +18,7 @@ use crate::{
     decompress_if_needed, extract_all_files_recursive,
     renderer::{
         quad::Quad,
-        textured_quad::{DetailedCombinerMaterial, StandardMaterial, TexturedQuad},
+        textured_quad::{DetailedCombinerMaterial, PaneQuadData, StandardMaterial, TexturedQuad},
     },
     traits::Displaying,
     ui::SUPPORTED_SARC_EXTENSIONS,
@@ -308,33 +308,27 @@ impl PaneTree {
         }
     }
 
-    pub fn collect_textured_quads(&self) -> Vec<&TexturedQuad> {
-        self.iter()
-            .filter_map(|n| n.textured_quad.as_ref())
-            .collect()
-    }
-
-    pub fn collect_textured_quads_mut(&mut self) -> Vec<&mut TexturedQuad> {
-        fn collect<'a>(node: &'a mut PaneNode, out: &mut Vec<&'a mut TexturedQuad>) {
-            if let Some(tq) = &mut node.textured_quad {
-                out.push(tq);
+    pub fn collect_render_quads(&self) -> Vec<PaneQuadData> {
+        fn collect_recursive(node: &PaneNode, out: &mut Vec<PaneQuadData>) {
+            if let Some(tq) = &node.textured_quad {
+                out.push(PaneQuadData::Textured(tq.clone()));
+            } else {
+                if !node.plain_quad.is_parts_root {
+                    out.push(PaneQuadData::Plain(node.plain_quad.clone()));
+                }
             }
 
-            for child in &mut node.children {
-                collect(child, out);
+            for child in &node.children {
+                collect_recursive(child, out);
             }
         }
 
         let mut out = Vec::new();
-        for root in &mut self.roots {
-            collect(root, &mut out);
+        for root in &self.roots {
+            collect_recursive(root, &mut out);
         }
 
         out
-    }
-
-    pub fn collect_plain_quads(&self) -> Vec<&Quad> {
-        self.iter().map(|n| &n.plain_quad).collect()
     }
 
     pub fn build_idx_map(&mut self) -> HashMap<usize, *mut PaneNode> {
@@ -669,6 +663,7 @@ impl<'a> Builder<'a> {
             color,
             has_textured: matches!(section, BflytSection::PicturePane(_)),
             is_parts_root,
+            pane_idx,
         };
 
         let mut node = PaneNode {

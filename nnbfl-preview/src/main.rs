@@ -18,9 +18,9 @@ use nnbfl::{
     sarc::file::{MagicFiles, Sarc, SarcFile},
 };
 use pollster::FutureExt;
-use renderer::quad::QuadRenderer;
+use renderer::quad::GridRenderer;
 use renderer::texture::TextureCache;
-use renderer::textured_quad::TexturedQuadRenderer;
+use renderer::textured_quad::PaneRenderer;
 use wgpu::CurrentSurfaceTexture;
 use winit::{
     application::ApplicationHandler,
@@ -44,8 +44,8 @@ struct GpuState {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    quad_renderer: QuadRenderer,
-    textured_quad_renderer: Option<TexturedQuadRenderer>,
+    grid_renderer: GridRenderer,
+    pane_renderer: PaneRenderer,
     selection_renderer: SelectionRenderer,
 
     texture_cache: TextureCache,
@@ -107,8 +107,7 @@ impl GpuState {
         };
         surface.configure(&device, &config);
 
-        let mut quad_renderer = QuadRenderer::new(&device, surface_format);
-        quad_renderer.upload_quads(&device, &[]);
+        let grid_renderer = GridRenderer::new(&device, surface_format);
 
         let selection_renderer = SelectionRenderer::new(&device, surface_format);
 
@@ -116,15 +115,15 @@ impl GpuState {
 
         let egui_renderer =
             egui_wgpu::Renderer::new(&device, surface_format, RendererOptions::default());
-        let textured_quad_renderer = None; // created after textures load
+        let pane_renderer = PaneRenderer::new(&device, &queue, surface_format);
 
         Self {
             surface,
             device,
             queue,
             config,
-            quad_renderer,
-            textured_quad_renderer,
+            grid_renderer,
+            pane_renderer,
             texture_cache,
             egui_renderer,
             selection_renderer,
@@ -151,20 +150,17 @@ impl GpuState {
         camera: &Camera,
         anim_player: &mut AnimPlayer,
     ) {
-        self.quad_renderer
+        self.grid_renderer
             .update_projection(&self.queue, camera, &self.config);
 
         let matrix = camera.build_matrix(self.config.width as f32, self.config.height as f32);
-        if let Some(tqr) = &self.textured_quad_renderer {
-            tqr.update_projection(&self.queue, matrix);
-        }
-
+        self.pane_renderer.update_projection(&self.queue, matrix);
         self.selection_renderer
             .update_projection(&self.queue, matrix);
 
         let mut scissor_rect = None;
         if let Some(view) = bflyt_view
-            && ui_state.clip_to_root
+            && ui_state.visiblity_flags.clip_to_root
         {
             let screen_w = self.config.width as f32;
             let screen_h = self.config.height as f32;
@@ -236,47 +232,42 @@ impl GpuState {
                 None => self.selection_renderer.clear(),
             }
 
-            let plain_quads = bflyt_view.tree.collect_plain_quads();
-            let plain_quads: Vec<_> = plain_quads.iter().map(|q| *q).cloned().collect();
+            let mut render_quads = bflyt_view.tree.collect_render_quads();
 
-            self.quad_renderer.update_anim(
+            self.pane_renderer.update_anim(
                 &self.queue,
-                &plain_quads,
+                &render_quads,
                 &ui_state.hidden_panes,
-                ui_state.quad_for_textured,
+                ui_state.visiblity_flags,
             );
 
-            self.quad_renderer.update_selection(
+            self.pane_renderer.update_texture_pattern(
+                &self.device,
+                &render_quads,
+                &self.texture_cache,
+            );
+
+            self.pane_renderer.recompute_proj_mtx(
+                &mut render_quads,
+                &self.texture_cache,
+                bflyt_view.layout_width,
+                bflyt_view.layout_height,
+            );
+
+            self.pane_renderer.update_selection(
                 &self.queue,
-                &plain_quads,
+                &mut render_quads,
                 ui_state.selected_pane,
                 &ui_state.hidden_panes,
-                ui_state.quad_for_textured,
+                ui_state.visiblity_flags,
+                ui_state.active_debug_stage,
             );
 
-            if let Some(tqr) = &mut self.textured_quad_renderer {
-                let mut tqs = bflyt_view.tree.collect_textured_quads_mut();
-
-                tqr.update_anim(&self.queue, &tqs, &ui_state.hidden_panes);
-
-                tqr.update_texture_pattern(&self.device, &tqs, &self.texture_cache);
-
-                tqr.recompute_proj_mtx(
-                    &mut tqs,
-                    &self.texture_cache,
-                    bflyt_view.layout_width,
-                    bflyt_view.layout_height,
-                );
-
-                tqr.update_selection(
-                    &self.queue,
-                    &mut tqs,
-                    ui_state.selected_pane,
-                    ui_state.active_debug_stage,
-                );
-
-                tqr.flush_mat_buffers(&self.queue, &tqs, &ui_state.hidden_panes);
-            }
+            self.pane_renderer.flush_mat_buffers(
+                &self.queue,
+                &render_quads,
+                &ui_state.hidden_panes,
+            );
         }
 
         let paint_jobs = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
@@ -325,21 +316,13 @@ impl GpuState {
                 multiview_mask: None,
             });
 
-            self.quad_renderer.render_grid(&mut rpass);
+            self.grid_renderer.render_grid(&mut rpass);
 
             if let Some((sx, sy, sw, sh)) = scissor_rect {
                 rpass.set_scissor_rect(sx, sy, sw, sh);
             }
 
-            if !ui_state.only_textured {
-                self.quad_renderer.render(&mut rpass);
-            }
-
-            if let Some(tqr) = &self.textured_quad_renderer
-                && !ui_state.no_textured
-            {
-                tqr.render(&mut rpass);
-            }
+            self.pane_renderer.render(&mut rpass);
 
             self.selection_renderer.render(&mut rpass);
 
@@ -668,31 +651,20 @@ impl App {
         if let Some(gpu) = &mut self.gpu {
             let view = self.bflyt_view.as_mut().unwrap();
 
-            let plain_quads: Vec<_> = view
-                .tree
-                .collect_plain_quads()
-                .into_iter()
-                .cloned()
-                .collect();
-
-            gpu.quad_renderer.upload_quads(&gpu.device, &plain_quads);
+            let render_quads = view.tree.collect_render_quads();
 
             for bntx_bytes in &view.tree.discovered_bntx_buffers {
                 gpu.texture_cache
                     .load_from_bntx_bytes(&gpu.device, &gpu.queue, bntx_bytes);
             }
 
-            let mut tgr = TexturedQuadRenderer::new(&gpu.device, gpu.config.format);
-            let mut tqs = view.tree.collect_textured_quads_mut();
-
-            tgr.upload_quads(
+            gpu.pane_renderer.upload_quads(
                 &gpu.device,
-                &mut tqs,
+                &render_quads,
                 &gpu.texture_cache,
                 view.layout_width,
                 view.layout_height,
             );
-            gpu.textured_quad_renderer = Some(tgr);
 
             if let Some(window) = &self.window {
                 let size = window.inner_size();

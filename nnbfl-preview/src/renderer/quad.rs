@@ -1,44 +1,20 @@
-use std::collections::HashSet;
-
 use bytemuck::{Pod, Zeroable};
 use wgpu::{SurfaceConfiguration, util::DeviceExt};
 
 use crate::camera::Camera;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct Vertex {
-    pub position: [f32; 2],
-    pub color: [f32; 4],
-    pub quad_size: [f32; 2],
-    pub uv: [f32; 2],
-}
-
-impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
-        0 => Float32x2,
-        1 => Float32x4,
-        2 => Float32x2,
-        3 => Float32x2,
-    ];
-
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct Quad {
+    pub pane_idx: usize,
     pub width: f32,
     pub height: f32,
     pub corners: [[f32; 2]; 4],
+    pub color: [f32; 4],
+
+    /// True when this quad is the RootPane from a PartsPane.
     pub is_parts_root: bool,
 
-    pub color: [f32; 4],
+    /// True when this pane also owns a [`super::textured_quad::TexturedQuad`].
     pub has_textured: bool,
 }
 
@@ -63,18 +39,11 @@ pub struct GridUniforms {
     pub _padding: f32,
 }
 
-pub struct QuadRenderer {
-    pub quad_pipeline: RenderPipelineContainer,
+pub struct GridRenderer {
     pub grid_pipeline: RenderPipelineContainer,
-
-    pub vertex_buffer: wgpu::Buffer,
-    pub index_buffer: wgpu::Buffer,
-    pub num_indices: u32,
-
-    cached_vertices: Vec<Vertex>,
 }
 
-impl QuadRenderer {
+impl GridRenderer {
     pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let matrix = [
             [1., 0., 0., 0.],
@@ -82,17 +51,6 @@ impl QuadRenderer {
             [0., 0., 1., 0.],
             [0., 0., 0., 1.],
         ];
-        let quad_uniforms = Uniforms::from_matrix(matrix);
-
-        let quad_container = RenderPipelineContainer::new(
-            device,
-            "quad",
-            include_str!("../shaders/quad.wgsl"),
-            &[Vertex::desc()],
-            surface_format,
-            quad_uniforms,
-            wgpu::ShaderStages::VERTEX,
-        );
 
         let grid_container = RenderPipelineContainer::new(
             device,
@@ -109,69 +67,9 @@ impl QuadRenderer {
             wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
         );
 
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("vertex_buffer"),
-            size: 0,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("index_buffer"),
-            size: 0,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         Self {
-            quad_pipeline: quad_container,
             grid_pipeline: grid_container,
-            vertex_buffer,
-            index_buffer,
-            num_indices: 0,
-            cached_vertices: Vec::new(),
         }
-    }
-
-    pub fn upload_quads(&mut self, device: &wgpu::Device, quads: &[Quad]) {
-        let mut vertices: Vec<Vertex> = Vec::with_capacity(quads.len() * 4);
-        let mut indices: Vec<u32> = Vec::with_capacity(quads.len() * 6);
-        let uvs = [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
-
-        for (i, q) in quads.iter().enumerate() {
-            if q.is_parts_root {
-                continue;
-            };
-
-            let base = (i * 4) as u32;
-            let size = [q.width, q.height];
-
-            for v_idx in 0..4 {
-                vertices.push(Vertex {
-                    position: q.corners[v_idx],
-                    color: q.color,
-                    quad_size: size,
-                    uv: uvs[v_idx],
-                });
-            }
-
-            indices.extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);
-        }
-
-        self.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("vertex_buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-
-        self.index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("index_buffer"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        self.num_indices = indices.len() as u32;
-        self.cached_vertices = vertices;
     }
 
     pub fn update_projection(
@@ -183,13 +81,6 @@ impl QuadRenderer {
         let width = config.width as f32;
         let height = config.height as f32;
         let matrix = camera.build_matrix(width, height);
-
-        let quad_uniforms = Uniforms::from_matrix(matrix);
-        queue.write_buffer(
-            &self.quad_pipeline.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&quad_uniforms),
-        );
 
         let grid_uniforms = GridUniforms {
             proj: matrix,
@@ -203,108 +94,6 @@ impl QuadRenderer {
             0,
             bytemuck::bytes_of(&grid_uniforms),
         );
-    }
-
-    pub fn update_anim(
-        &mut self,
-        queue: &wgpu::Queue,
-        quads: &[Quad],
-        hidden_panes: &HashSet<usize>,
-        quad_for_tex: bool,
-    ) {
-        if self.cached_vertices.is_empty() {
-            return;
-        }
-
-        let uvs = [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
-
-        for (i, q) in quads.iter().enumerate() {
-            let base = i * 4;
-            if base + 3 >= self.cached_vertices.len() {
-                continue;
-            }
-
-            let color = if hidden_panes.contains(&i) || (q.has_textured && !quad_for_tex) {
-                [0.0; 4]
-            } else {
-                q.color
-            };
-
-            let size = [q.width, q.height];
-
-            for v_offset in 0..4 {
-                self.cached_vertices[base + v_offset].position = q.corners[v_offset];
-                self.cached_vertices[base + v_offset].color = color;
-                self.cached_vertices[base + v_offset].quad_size = size;
-                self.cached_vertices[base + v_offset].uv = uvs[v_offset];
-            }
-        }
-
-        queue.write_buffer(
-            &self.vertex_buffer,
-            0,
-            bytemuck::cast_slice(&self.cached_vertices),
-        );
-    }
-
-    pub fn update_selection(
-        &mut self,
-        queue: &wgpu::Queue,
-        quads: &[Quad],
-        selected_idx: Option<usize>,
-        hidden_panes: &HashSet<usize>,
-        quad_for_tex: bool,
-    ) {
-        if self.cached_vertices.is_empty() {
-            return;
-        }
-
-        let uvs = [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
-
-        for (i, q) in quads.iter().enumerate() {
-            let base_vertex_idx = i * 4;
-            if base_vertex_idx + 3 >= self.cached_vertices.len() {
-                continue;
-            }
-
-            let size = [q.width, q.height];
-
-            let final_color = if hidden_panes.contains(&i) || (q.has_textured && !quad_for_tex) {
-                [0.0, 0.0, 0.0, 0.0]
-            } else if Some(i) == selected_idx {
-                [
-                    (q.color[0] + 0.4).min(1.0),
-                    (q.color[1] + 0.4).min(1.0),
-                    (q.color[2] + 0.4).min(1.0),
-                    0.95,
-                ]
-            } else {
-                q.color
-            };
-
-            for (v_offset, uv) in uvs.iter().enumerate() {
-                let vertex = &mut self.cached_vertices[base_vertex_idx + v_offset];
-                vertex.color = final_color;
-                vertex.quad_size = size;
-                vertex.uv = *uv;
-            }
-        }
-
-        queue.write_buffer(
-            &self.vertex_buffer,
-            0,
-            bytemuck::cast_slice(&self.cached_vertices),
-        );
-    }
-
-    pub fn render<'rpass>(&'rpass self, rpass: &mut wgpu::RenderPass<'rpass>) {
-        if self.num_indices > 0 {
-            rpass.set_pipeline(&self.quad_pipeline.pipeline);
-            rpass.set_bind_group(0, &self.quad_pipeline.bind_group, &[]);
-            rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            rpass.draw_indexed(0..self.num_indices, 0, 0..1);
-        }
     }
 
     pub fn render_grid<'rpass>(&'rpass self, rpass: &mut wgpu::RenderPass<'rpass>) {

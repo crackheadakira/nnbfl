@@ -27,15 +27,49 @@ pub struct UiState {
     pub hidden_panes: HashSet<usize>,
     pub error_message: Option<String>,
     pub pending_action: Option<UiAction>,
-    pub clip_to_root: bool,
-    pub only_textured: bool,
-    pub no_textured: bool,
-    pub quad_for_textured: bool,
+    pub visiblity_flags: PaneVisibilityFlags,
     pub anim_names: Vec<String>,
     pub pending_play_anim: Option<String>,
     pub sidebar_tab: SidebarTab,
     pub right_sidebar_tab: SidebarRightTab,
     pub active_debug_stage: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PaneVisibilityFlags {
+    /// Clips panes to fit within root pane.
+    pub clip_to_root: bool,
+
+    /// Hide every plain (non-texture) quad.
+    pub only_textured: bool,
+
+    /// Hide every textured quad (draw only outlines).
+    pub no_textured: bool,
+
+    /// Show the plain outline on top of panes that have a texture.
+    pub quad_for_textured: bool,
+}
+
+impl PaneVisibilityFlags {
+    pub fn plain_color(&self, q: &crate::renderer::quad::Quad, hidden: bool) -> [f32; 4] {
+        if hidden || self.only_textured || (q.has_textured && !self.quad_for_textured) {
+            [0.0; 4]
+        } else {
+            q.color
+        }
+    }
+
+    pub fn textured_tint(
+        &self,
+        tq: &crate::renderer::textured_quad::TexturedQuad,
+        hidden: bool,
+    ) -> [f32; 4] {
+        if hidden || self.no_textured {
+            [0.0; 4]
+        } else {
+            tq.tint
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -177,13 +211,19 @@ pub fn draw_ui(
             match state.sidebar_tab {
                 SidebarTab::Panes => {
                     ui.heading("Pane Tree");
-                    ui.checkbox(&mut state.clip_to_root, "Clip to root pane");
-                    ui.checkbox(&mut state.only_textured, "Draw only textures");
+                    ui.checkbox(&mut state.visiblity_flags.clip_to_root, "Clip to root pane");
                     ui.checkbox(
-                        &mut state.quad_for_textured,
+                        &mut state.visiblity_flags.only_textured,
+                        "Draw only textures",
+                    );
+                    ui.checkbox(
+                        &mut state.visiblity_flags.quad_for_textured,
                         "Draw pane outlines for textures",
                     );
-                    ui.checkbox(&mut state.no_textured, "Draw only pane outlines");
+                    ui.checkbox(
+                        &mut state.visiblity_flags.no_textured,
+                        "Draw only pane outlines",
+                    );
                     ui.separator();
 
                     egui::ScrollArea::vertical()
