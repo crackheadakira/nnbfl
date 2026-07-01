@@ -460,13 +460,9 @@ impl App {
         };
 
         let world_pos = self.camera.screen_to_world(screen_pos);
+
         let dx = world_pos[0] - drag.start_world[0];
         let dy = world_pos[1] - drag.start_world[1];
-
-        let rad = -drag.rotate_z.to_radians();
-        let (sin_r, cos_r) = rad.sin_cos();
-        let local_dx = dx * cos_r + dy * sin_r;
-        let local_dy = -dx * sin_r + dy * cos_r;
 
         let Some(node) = view.tree.iter_mut().find(|n| n.pane_idx == drag.pane_idx) else {
             return;
@@ -482,39 +478,55 @@ impl App {
 
         match drag.handle {
             Handle::Body => {
-                base.translation.x = drag.start_translation.0 + local_dx;
-                base.translation.y = drag.start_translation.1 - local_dy;
+                base.translation.x = drag.start_translation.0 + dx;
+                base.translation.y = drag.start_translation.1 - dy;
             }
-            Handle::TopLeft | Handle::TopRight | Handle::BottomLeft | Handle::BottomRight => {
-                let sx = if matches!(drag.handle, Handle::TopLeft | Handle::BottomLeft) {
-                    -1.0
-                } else {
-                    1.0
-                };
+            _ => {
+                let rad = -drag.rotate_z.to_radians();
+                let (sin_r, cos_r) = rad.sin_cos();
+                let local_dx = dx * cos_r + dy * sin_r;
+                let local_dy = -dx * sin_r + dy * cos_r;
 
-                let sy = if matches!(drag.handle, Handle::TopLeft | Handle::TopRight) {
-                    -1.0
-                } else {
-                    1.0
-                };
-                base.size.x = (drag.start_size.0 + local_dx * sx * 2.0).max(1.0);
-                base.size.y = (drag.start_size.1 + local_dy * sy * 2.0).max(1.0);
-            }
-            Handle::Left | Handle::Right => {
-                let sx = if drag.handle == Handle::Left {
-                    -1.0
-                } else {
-                    1.0
-                };
-                base.size.x = (drag.start_size.0 + local_dx * sx * 2.0).max(1.0);
-            }
-            Handle::Top | Handle::Bottom => {
-                let sy = if drag.handle == Handle::Top {
-                    -1.0
-                } else {
-                    1.0
-                };
-                base.size.y = (drag.start_size.1 + local_dy * sy * 2.0).max(1.0);
+                match drag.handle {
+                    Handle::TopLeft
+                    | Handle::TopRight
+                    | Handle::BottomLeft
+                    | Handle::BottomRight => {
+                        let sx = if matches!(drag.handle, Handle::TopLeft | Handle::BottomLeft) {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+
+                        let sy = if matches!(drag.handle, Handle::TopLeft | Handle::TopRight) {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+
+                        base.size.x = (drag.start_size.0 + local_dx * sx * 2.0).max(1.0);
+                        base.size.y = (drag.start_size.1 + local_dy * sy * 2.0).max(1.0);
+                    }
+
+                    Handle::Left | Handle::Right => {
+                        let sx = if drag.handle == Handle::Left {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+                        base.size.x = (drag.start_size.0 + local_dx * sx * 2.0).max(1.0);
+                    }
+
+                    Handle::Top | Handle::Bottom => {
+                        let sy = if drag.handle == Handle::Top {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+                        base.size.y = (drag.start_size.1 + local_dy * sy * 2.0).max(1.0);
+                    }
+                    _ => {}
+                }
             }
         }
 
