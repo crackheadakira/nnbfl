@@ -367,6 +367,15 @@ impl PaneTree {
     }
 
     pub fn insert_node(&mut self, parent_idx: Option<usize>, node: PaneNode) -> usize {
+        self.insert_node_at(parent_idx, usize::MAX, node)
+    }
+
+    pub fn insert_node_at(
+        &mut self,
+        parent_idx: Option<usize>,
+        position: usize,
+        node: PaneNode,
+    ) -> usize {
         let idx = node.pane_idx;
 
         fn register_subtree(
@@ -397,13 +406,28 @@ impl PaneTree {
         match parent_idx {
             Some(pid) => {
                 if let Some(parent_node) = self.find_node_mut(pid) {
-                    parent_node.children.push(node);
+                    let pos = position.min(parent_node.children.len());
+                    parent_node.children.insert(pos, node);
                 }
             }
-            None => self.roots.push(node),
+            None => {
+                let pos = position.min(self.roots.len());
+                self.roots.insert(pos, node);
+            }
         }
 
         idx
+    }
+
+    pub fn sibling_position(&self, target_idx: usize) -> Option<(Option<usize>, usize)> {
+        let parent_idx = *self.parent_map.get(&target_idx)?;
+        let siblings = match parent_idx {
+            Some(pid) => &self.iter().find(|n| n.pane_idx == pid)?.children,
+            None => &self.roots,
+        };
+
+        let position = siblings.iter().position(|n| n.pane_idx == target_idx)?;
+        Some((parent_idx, position))
     }
 
     pub fn remove_node(&mut self, target_idx: usize) -> Option<PaneNode> {
@@ -448,6 +472,40 @@ impl PaneTree {
 
     pub fn next_pane_idx(&self) -> usize {
         self.max_pane_idx + 1
+    }
+
+    pub fn duplicate_node(&mut self, target_idx: usize) -> Option<usize> {
+        let parent_idx = self.parent_map.get(&target_idx).copied().flatten();
+        let mut clone = self.iter().find(|n| n.pane_idx == target_idx)?.clone();
+
+        fn reindex(node: &mut PaneNode, next_idx: &mut usize) {
+            node.pane_idx = *next_idx;
+            *next_idx += 1;
+
+            node.plain_quad.pane_idx = node.pane_idx;
+            if let Some(tq) = &mut node.textured_quad {
+                tq.pane_idx = node.pane_idx;
+            }
+            if let Some(tq) = &mut node.base_textured_quad {
+                tq.pane_idx = node.pane_idx;
+            }
+            node.dirty = DirtyFlags::all();
+
+            for child in &mut node.children {
+                reindex(child, next_idx);
+            }
+        }
+
+        let mut next_idx = self.next_pane_idx();
+        reindex(&mut clone, &mut next_idx);
+        clone.label = format!("{} copy", clone.label.trim_end_matches('\0'));
+
+        let position = self
+            .sibling_position(target_idx)
+            .map(|(_, pos)| pos + 1)
+            .unwrap_or(usize::MAX);
+
+        Some(self.insert_node_at(parent_idx, position, clone))
     }
 
     pub fn from_bflyt(

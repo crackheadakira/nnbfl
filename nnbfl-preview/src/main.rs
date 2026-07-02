@@ -1,4 +1,5 @@
 mod anim_state;
+mod archive_browser;
 mod bflyt_view;
 mod camera;
 mod pane_tree;
@@ -34,6 +35,7 @@ use ui::{UiState, draw_ui};
 
 use crate::{
     anim_state::AnimPlayer,
+    archive_browser::ArchiveScan,
     renderer::selection::{Handle, SelectionRenderer, point_in_quad},
     traits::Displaying,
     ui::{SUPPORTED_SARC_EXTENSIONS, UiAction},
@@ -149,6 +151,8 @@ impl GpuState {
         ui_state: &mut UiState,
         camera: &Camera,
         anim_player: &mut AnimPlayer,
+        blarc_dir: Option<&PathBuf>,
+        archive_scan: Option<&ArchiveScan>,
     ) {
         self.grid_renderer
             .update_projection(&self.queue, camera, &self.config);
@@ -216,6 +220,8 @@ impl GpuState {
                 anim_player,
                 self.config.width as f32,
                 self.config.height as f32,
+                blarc_dir,
+                archive_scan,
             );
         });
 
@@ -363,6 +369,7 @@ struct App {
     anim_player: AnimPlayer,
     last_tick: Instant,
     drag_state: Option<DragState>,
+    archive_scan: Option<ArchiveScan>,
 }
 
 impl App {
@@ -381,6 +388,7 @@ impl App {
             anim_player: AnimPlayer::new(),
             last_tick: Instant::now(),
             drag_state: None,
+            archive_scan: None,
         }
     }
 
@@ -570,6 +578,20 @@ impl App {
         }
 
         self.ui_state.selected_pane = best;
+    }
+
+    fn try_open_context_menu(&mut self, screen_pos: [f32; 2]) {
+        if self.ui_state.selected_pane.is_none() {
+            return;
+        };
+
+        self.ui_state.context_menu =
+            self.ui_state
+                .selected_pane
+                .map(|pane_idx| ui::ContextMenuState {
+                    pane_idx,
+                    pos: egui::pos2(screen_pos[0], screen_pos[1]),
+                });
     }
 
     fn load_file(&mut self) {
@@ -899,6 +921,21 @@ impl ApplicationHandler for App {
                         w.request_redraw();
                     }
                 }
+
+                UiAction::StartArchiveScan => {
+                    if let Some(dir) = self.blarc_dir.clone() {
+                        self.archive_scan = Some(ArchiveScan::start(dir));
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                }
+
+                UiAction::CancelArchiveScan => {
+                    if let Some(scan) = &mut self.archive_scan {
+                        scan.request_cancel();
+                    }
+                }
             }
         }
 
@@ -954,6 +991,16 @@ impl ApplicationHandler for App {
                 }
                 winit::event::ElementState::Released => self.camera.end_pan(),
             },
+
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Right,
+                ..
+            } => {
+                if state == winit::event::ElementState::Pressed && !egui_wants_pointer {
+                    self.try_open_context_menu(self.camera.cursor_screen);
+                }
+            }
 
             WindowEvent::MouseWheel { delta, .. } if !egui_wants_scroll => {
                 let lines = match delta {
@@ -1022,9 +1069,24 @@ impl ApplicationHandler for App {
                         &mut self.ui_state,
                         &self.camera,
                         &mut self.anim_player,
+                        self.blarc_dir.as_ref(),
+                        self.archive_scan.as_ref(),
                     );
 
-                    if self.anim_player.is_playing() && window.has_focus() {
+                    let scan_active = self
+                        .archive_scan
+                        .as_mut()
+                        .map(|s| s.poll())
+                        .unwrap_or(false);
+
+                    let scan_in_progress = self
+                        .archive_scan
+                        .as_ref()
+                        .is_some_and(|s| !s.done && !s.cancelled);
+
+                    if (self.anim_player.is_playing() || scan_active || scan_in_progress)
+                        && window.has_focus()
+                    {
                         window.request_redraw();
                     }
                 }

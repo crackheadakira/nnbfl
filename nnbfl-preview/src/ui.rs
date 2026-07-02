@@ -33,6 +33,14 @@ pub struct UiState {
     pub sidebar_tab: SidebarTab,
     pub right_sidebar_tab: SidebarRightTab,
     pub active_debug_stage: u32,
+
+    pub context_menu: Option<ContextMenuState>,
+    pub archive_browser_open: bool,
+}
+
+pub struct ContextMenuState {
+    pub pane_idx: usize,
+    pub pos: egui::Pos2,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -89,6 +97,8 @@ pub enum SidebarRightTab {
 pub enum UiAction {
     LoadFile(PathBuf),
     SetBlarcDir(PathBuf),
+    StartArchiveScan,
+    CancelArchiveScan,
 }
 
 pub fn draw_ui(
@@ -99,6 +109,8 @@ pub fn draw_ui(
     anim_player: &mut AnimPlayer,
     screen_w: f32,
     screen_h: f32,
+    blarc_dir: Option<&std::path::PathBuf>,
+    archive_scan: Option<&crate::archive_browser::ArchiveScan>,
 ) {
     if let Some(view) = view {
         let viewport_rect = ui.content_rect();
@@ -146,6 +158,8 @@ pub fn draw_ui(
         }
     }
 
+    draw_context_menu(ui, state, view);
+
     egui::Panel::top("menu_bar").show_inside(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
@@ -164,13 +178,17 @@ pub fn draw_ui(
                     ui.close();
                 }
 
-                if ui.button("Set blarc folder...").clicked() {
+                if ui.button("Set Layout Folder...").clicked() {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                         state.pending_action = Some(UiAction::SetBlarcDir(dir));
                     }
                     ui.close();
                 }
             });
+
+            if ui.button("Browse Archives...").clicked() {
+                state.archive_browser_open = true;
+            }
 
             if view.is_some() {
                 ui.menu_button("Shader Pass", |ui| {
@@ -489,6 +507,167 @@ pub fn draw_ui(
                 }
             });
     };
+
+    draw_archive_browser_window(ui, state, blarc_dir, archive_scan);
+}
+
+fn draw_context_menu(ui: &mut Ui, state: &mut UiState, view: &Option<BflytView>) {
+    let Some(menu) = &state.context_menu else {
+        return;
+    };
+    let pane_idx = menu.pane_idx;
+    let pos = menu.pos;
+
+    let label = view
+        .as_ref()
+        .and_then(|v| v.tree.iter().find(|n| n.pane_idx == pane_idx))
+        .map(|n| n.label.trim_end_matches('\0').to_string())
+        .unwrap_or_else(|| "Pane".to_string());
+
+    let mut close = false;
+
+    let area_response = egui::Area::new(egui::Id::new("pane_context_menu"))
+        .fixed_pos(pos)
+        .order(egui::Order::Foreground)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(160.0);
+                ui.label(egui::RichText::new(label).strong());
+                ui.separator();
+
+                let hidden = state.hidden_panes.contains(&pane_idx);
+                if ui.button(if hidden { "Show" } else { "Hide" }).clicked() {
+                    if hidden {
+                        state.hidden_panes.remove(&pane_idx);
+                    } else {
+                        state.hidden_panes.insert(pane_idx);
+                    }
+                    close = true;
+                }
+
+                ui.separator();
+            });
+        });
+
+    let clicked_outside =
+        ui.ctx().input(|i| i.pointer.any_click()) && !area_response.response.contains_pointer();
+    let escape_pressed = ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
+
+    if close || clicked_outside || escape_pressed {
+        state.context_menu = None;
+    }
+}
+
+fn draw_archive_browser_window(
+    ui: &mut Ui,
+    state: &mut UiState,
+    blarc_dir: Option<&std::path::PathBuf>,
+    archive_scan: Option<&crate::archive_browser::ArchiveScan>,
+) {
+    if !state.archive_browser_open {
+        return;
+    }
+
+    let mut open = true;
+
+    egui::Window::new("Browse Archives")
+        .open(&mut open)
+        .default_width(420.0)
+        .default_height(420.0)
+        .show(ui, |ui| {
+            let Some(dir) = blarc_dir else {
+                ui.label("Set a layout folder first (File > Set Layout Folder...).");
+                return;
+            };
+
+            ui.label(format!("Directory: {}", dir.display()));
+            ui.separator();
+
+            match archive_scan {
+                None => {
+                    ui.label(
+                        "Not scanned yet. Scanning reads and unpacks every archive in this \
+                         directory to check for BFLYT layouts, which can take a while on a \
+                         large directory.",
+                    );
+                    if ui.button("Scan directory").clicked() {
+                        state.pending_action = Some(UiAction::StartArchiveScan);
+                    }
+                }
+
+                Some(scan) if scan.root() != dir => {
+                    ui.label("The layout folder changed since the last scan.");
+                    if ui.button("Scan directory").clicked() {
+                        state.pending_action = Some(UiAction::StartArchiveScan);
+                    }
+                }
+
+                Some(scan) => {
+                    ui.horizontal(|ui| {
+                        if scan.done {
+                            ui.label(format!(
+                                "Found {} BFLYT-containing archive(s) out of {} scanned.",
+                                scan.entries.len(),
+                                scan.scanned
+                            ));
+                        } else if scan.cancelled {
+                            ui.label(format!(
+                                "Cancelled after scanning {} of {}.",
+                                scan.scanned, scan.total
+                            ));
+                        } else {
+                            ui.spinner();
+                            ui.label(format!(
+                                "Scanning... {} / {}",
+                                scan.scanned,
+                                scan.total.max(scan.scanned)
+                            ));
+                            if ui.button("Cancel").clicked() {
+                                state.pending_action = Some(UiAction::CancelArchiveScan);
+                            }
+                        }
+
+                        if (scan.done || scan.cancelled) && ui.button("Rescan").clicked() {
+                            state.pending_action = Some(UiAction::StartArchiveScan);
+                        }
+                    });
+
+                    if !scan.done && !scan.cancelled && scan.total > 0 {
+                        ui.add(egui::ProgressBar::new(
+                            scan.scanned as f32 / scan.total.max(1) as f32,
+                        ));
+                    }
+
+                    ui.separator();
+
+                    // can this somehow be virtualized?
+                    egui::ScrollArea::vertical()
+                        .auto_shrink(false)
+                        .show(ui, |ui| {
+                            if scan.entries.is_empty() && scan.done {
+                                ui.weak("No BFLYT-containing archives found.");
+                            }
+
+                            for entry in &scan.entries {
+                                ui.horizontal(|ui| {
+                                    ui.label(&entry.display_name);
+                                    if ui.button("Load").clicked() {
+                                        // TODO: needs its own UI action for handing off raw bytes?
+                                        state.pending_action =
+                                            Some(UiAction::LoadFile(entry.path.clone()));
+                                        state.hidden_panes.clear();
+                                        state.selected_pane = None;
+                                    }
+                                });
+                            }
+                        });
+                }
+            }
+        });
+
+    if !open {
+        state.archive_browser_open = false;
+    }
 }
 
 fn hide_pane_recursive(idx: usize, view: &BflytView, hidden_set: &mut HashSet<usize>) {
