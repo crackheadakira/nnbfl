@@ -37,3 +37,4 @@
 - [ ] Captor pane support? (is this something rendering specific for in-game, or is it also used in bflyts)
 - [ ] Pop-up when loading from a SARC asking for which bflyt file to load
 - [x] Tab system
+- [ ] Add support for scaling by the handle's origin rather than center origin depending on shortcut pressed.
