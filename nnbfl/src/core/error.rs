@@ -78,9 +78,10 @@ pub enum FormatError {
     )]
     MissingLayout,
 
-    #[error("Missing parsing context '{expected}' at byte offset {offset}")]
+    #[error("Missing parsing context '{expected} {context}' at byte offset {offset}")]
     MissingContext {
         expected: &'static str,
+        context: &'static str,
         offset: usize,
     },
 

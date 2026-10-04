@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::core::VersionFormat;
 
 pub struct Writer {
@@ -5,6 +7,7 @@ pub struct Writer {
     pub breadcrumbs: Vec<(usize, String)>,
     pub version: VersionFormat,
     pub section_start: Option<usize>,
+    pub string_pool: Option<StringPool>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -19,6 +22,13 @@ impl Default for Writer {
     }
 }
 
+#[derive(Default)]
+pub struct StringPool {
+    bytes: Vec<u8>,
+    offsets: HashMap<String, u32>,
+    start: Option<usize>,
+}
+
 impl Writer {
     pub fn new() -> Self {
         Self {
@@ -26,6 +36,7 @@ impl Writer {
             breadcrumbs: Vec::new(),
             version: VersionFormat::default(),
             section_start: None,
+            string_pool: None,
         }
     }
 
@@ -121,5 +132,36 @@ impl Writer {
             let padding = alignment - remainder;
             self.buffer.resize(self.buffer.len() + padding, 0);
         }
+    }
+
+    fn intern_string(&mut self, value: &str) -> u32 {
+        let pool = self.string_pool.get_or_insert_with(StringPool::default);
+
+        if let Some(&offset) = pool.offsets.get(value) {
+            return offset
+        }
+
+        let offset = u32::try_from(pool.bytes.len()).expect("String pool exceeds u32 offsets");
+        
+        pool.bytes.extend_from_slice(value.as_bytes());
+        pool.bytes.push(0);
+        pool.offsets.insert(value.to_owned(), offset);
+
+        offset
+    }
+
+    pub fn write_string_offset(&mut self, value: &str) {
+        let offset = self.intern_string(value);
+        self.write_u32(offset);
+    }
+
+    pub fn write_string_pool(&mut self) -> usize {
+        let start = self.pos();
+        let pool = self.string_pool.get_or_insert_with(StringPool::default);
+
+        self.buffer.extend_from_slice(&pool.bytes);
+        pool.start = Some(start);
+
+        start
     }
 }

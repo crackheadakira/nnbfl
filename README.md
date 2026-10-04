@@ -56,7 +56,7 @@ nnbfl bflan test /path/to/bflan_dir/
 
 # Credits
 
-- Watertoon for their hexpat on .bflan & .bflyt files.
+- Watertoon for their hexpat on .bflan, .bflyt, and .ainb files.
 - KillzXGaming ([LayoutLibrary](https://github.com/KillzXGaming/LayoutLibrary)) for reference implementation about `MaterialDetailedCombiner`.
 
 # License

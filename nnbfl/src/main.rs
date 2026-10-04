@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use nnbfl::ainb::file::Ainb;
 use nnbfl::bfcpx::file::Bfcpx;
 use nnbfl::bfttf::file::{Bfotf, Bfttf};
 use std::ffi::OsStr;
@@ -46,6 +47,12 @@ enum Format {
 
     /// Works with BFOTF files
     Bfotf {
+        #[command(subcommand)]
+        action: BinaryAction,
+    },
+
+    /// Works with AINB (AI Node) files
+    Ainb {
         #[command(subcommand)]
         action: BinaryAction,
     },
@@ -116,6 +123,7 @@ impl Format {
         match &self {
             Self::Bflan { action } => action.handle::<Bflan>(),
             Self::Bflyt { action } => action.handle::<Bflyt>(),
+            Self::Ainb { action } => action.handle::<Ainb>(),
             Self::Bfcpx { action } => action.handle::<Bfcpx>(),
             Self::Bfttf { action } => action.handle::<Bfttf>(),
             Self::Bfotf { action } => action.handle::<Bfotf>(),

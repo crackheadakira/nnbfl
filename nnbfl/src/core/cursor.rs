@@ -6,6 +6,8 @@ pub struct Cursor<'a> {
     pub pos: usize,
     pub version: VersionFormat,
     pub section_start: Option<usize>,
+    pub string_pool_start: Option<usize>,
+    pub optional_offset: usize,
     pub last_was_pane: bool,
     pub is_embed: bool,
 }
@@ -17,7 +19,8 @@ impl<'a> Cursor<'a> {
             let short_name = full_name.split("::").last().unwrap_or(full_name);
 
             FormatError::MissingContext {
-                expected: Box::leak(format!("{short_name} section_start anchor").into_boxed_str()),
+                expected: short_name,
+                context: "section_start anchor",
                 offset: self.pos,
             }
         })
@@ -133,5 +136,39 @@ impl<'a> Cursor<'a> {
 
     pub fn seek_relative(&mut self, bytes: usize) {
         self.pos += bytes;
+    }
+
+    pub fn at<R>(
+        &mut self,
+        offset: usize,
+        f: impl FnOnce(&mut Self) -> Result<R, FormatError>,
+    ) -> Result<R, FormatError> {
+        let saved = self.pos;
+        self.seek(offset)?;
+
+        let result = f(self);
+
+        self.pos = saved;
+        result
+    }
+
+    pub fn read_string_from_pool(&mut self, offset: u32) -> Result<String, FormatError> {
+        let start = self.string_pool_start.ok_or(FormatError::MissingContext {
+            expected: "String",
+            context: "string_pool_start",
+            offset: self.pos,
+        })?;
+
+        let address = start + offset as usize;
+
+        if address >= self.data.len() {
+            return Err(FormatError::MalformedSection {
+                section_type: "StringPool".into(),
+                offset: self.pos,
+                reason: "String address overflow".into(),
+            });
+        }
+
+        self.at(address, |c| c.read_null_terminated_string())
     }
 }

@@ -89,19 +89,27 @@ pub struct VersionFormat {
     pub micro: u16,
 }
 
+impl BitPackable<u32> for VersionFormat {
+    fn decode(raw: u32) -> Self {
+        Self {
+            major: (raw >> 24) as u8,
+            minor: (raw >> 16) as u8,
+            micro: raw as u16,
+        }
+    }
+
+    fn encode(&self) -> u32 {
+        (self.major as u32) << 24 | (self.minor as u32) << 16 | self.micro as u32
+    }
+}
+
 impl ReadWriteable for VersionFormat {
     fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
-        Ok(Self {
-            micro: cursor.read_u16()?,
-            minor: cursor.read_u8()?,
-            major: cursor.read_u8()?,
-        })
+        cursor.read_u32().map(Self::decode)
     }
 
     fn write(&self, writer: &mut Writer) {
-        writer.write_u16(self.micro);
-        writer.write_u8(self.minor);
-        writer.write_u8(self.major);
+        writer.write_u32(self.encode());
     }
 }
 
