@@ -15,6 +15,9 @@ pub struct Blackboard {
     pub entry_bool: BlackboardTypeEntry,
     pub entry_vector3f: BlackboardTypeEntry,
     pub entry_void: BlackboardTypeEntry,
+
+    pub string_entries: Vec<BlackboardEntry>,
+    pub int_entries: Vec<BlackboardEntry>,
 }
 
 impl ReadWriteable for Blackboard {
@@ -35,6 +38,30 @@ impl ReadWriteable for Blackboard {
 
         let offset = cursor.pos;
 
+        let total_entries = usize::from(entry_void.base_index) + usize::from(entry_void.count);
+        let file_ref_offset = offset
+            + total_entries * BlackboardEntry::STRUCT_SIZE
+            + usize::from(entry_vector3f.base_offset)
+            + usize::from(entry_vector3f.count) * 0xC;
+
+        cursor.section_start = Some(file_ref_offset);
+
+        let string_entries = Vec::new();
+
+        let mut int_entries = Vec::new();
+
+        for idx in 0..entry_int.count {
+            cursor.seek(
+                offset
+                    + (entry_int.base_index as usize + idx as usize) * BlackboardEntry::STRUCT_SIZE,
+            )?;
+            let entry = BlackboardEntry::parse(cursor)?;
+
+            int_entries.push(entry);
+        }
+
+        cursor.section_start = None;
+
         Ok(Self {
             entry_string,
             entry_int,
@@ -43,10 +70,14 @@ impl ReadWriteable for Blackboard {
             entry_bool,
             entry_vector3f,
             entry_void,
+            string_entries,
+            int_entries,
         })
     }
 
-    fn write(&self, writer: &mut Writer) {}
+    fn write(&self, writer: &mut Writer) {
+        // reminder, `base_index` & `base_offset` are sequentially increased depending on prior entries.
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -110,6 +141,10 @@ pub struct BlackboardEntry {
     pub name: String,
 
     pub file_reference: Option<FileReferenceEntry>,
+}
+
+impl BlackboardEntry {
+    pub const STRUCT_SIZE: usize = 0x8;
 }
 
 impl ReadWriteable for BlackboardEntry {
@@ -211,4 +246,40 @@ pub enum InheritMode {
     InheritFromRoot,
     InheritFromParent,
     DontInherit,
+}
+
+pub trait BlackboardValue: Sized {
+    const SERIALIZED_SIZE: usize = 0x4;
+
+    fn read_value(cursor: &mut Cursor) -> Result<Self, FormatError>;
+    fn write_value(&self, writer: &mut Writer);
+}
+
+impl BlackboardValue for String {
+    fn read_value(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(cursor.read_string_from_pool()?)
+    }
+
+    fn write_value(&self, writer: &mut Writer) {
+        writer.write_string_offset(self);
+    }
+}
+
+impl BlackboardValue for i32 {
+    fn read_value(cursor: &mut Cursor) -> Result<Self, FormatError> {
+        Ok(cursor.read_i32()?)
+    }
+
+    fn write_value(&self, writer: &mut Writer) {
+        writer.write_i32(*self);
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct BlackboardParam<T: BlackboardValue> {
+    pub name: String,
+    pub notes: String,
+    pub inherit_mode: InheritMode,
+    pub file_reference: Option<FileReferenceEntry>,
+    pub value: T,
 }

@@ -170,7 +170,7 @@ impl<'a> Cursor<'a> {
             return Err(FormatError::MalformedSection {
                 section_type: "StringPool".into(),
                 offset: self.pos,
-                reason: "String address overflow".into(),
+                reason: format!("Offset {offset} causes string address overflow"),
             });
         }
 
