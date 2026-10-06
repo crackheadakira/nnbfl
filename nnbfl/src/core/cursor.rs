@@ -1,10 +1,10 @@
-use crate::core::{FormatError, VersionFormat};
+use crate::core::FormatError;
 
 #[derive(Default)]
 pub struct Cursor<'a> {
     pub data: &'a [u8],
     pub pos: usize,
-    pub version: VersionFormat,
+    pub version: u32,
     pub section_start: Option<usize>,
     pub string_pool_start: Option<usize>,
     pub optional_offset: usize,
@@ -152,7 +152,12 @@ impl<'a> Cursor<'a> {
         result
     }
 
-    pub fn read_string_from_pool(&mut self, offset: u32) -> Result<String, FormatError> {
+    pub fn read_string_from_pool(&mut self) -> Result<String, FormatError> {
+        let offset = self.read_u32()?;
+        self.read_string_from_pool_by_offset(offset)
+    }
+
+    pub fn read_string_from_pool_by_offset(&mut self, offset: u32) -> Result<String, FormatError> {
         let start = self.string_pool_start.ok_or(FormatError::MissingContext {
             expected: "String",
             context: "string_pool_start",

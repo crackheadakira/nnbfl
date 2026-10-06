@@ -7,7 +7,7 @@ use crate::{
         file::BflytSection,
         flags::{BflytPosition, PaneFlags, PaneFlagsEx, TextPaneFlags, WindowFlags},
     },
-    core::{BitPackable, Cursor, FormatError, Placeholder32, ReadWriteable, Writer},
+    core::{BitPackable, Cursor, FormatError, Placeholder32, ReadWriteable, VersionFormat, Writer},
     ui2d::types::{Color4u8, Vector2f, Vector3f},
 };
 
@@ -309,8 +309,8 @@ impl ReadWriteable for PerCharacterTransform {
         let mut fix_space_width = 0.0;
         let mut fix_space_or_insert_space_origin = HorizontalPosition::Left;
 
-        let is_extended =
-            cursor.version.major > 8 || (cursor.version.major == 8 && cursor.version.minor >= 1);
+        let sem_ver = VersionFormat::decode(cursor.version);
+        let is_extended = sem_ver.major > 8 || (sem_ver.major == 8 && sem_ver.minor >= 1);
 
         if is_extended {
             origin_v_offset = cursor.read_f32()?;

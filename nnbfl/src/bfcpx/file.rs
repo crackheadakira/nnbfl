@@ -31,7 +31,7 @@ impl ReadWriteable for Bfcpx {
         let endianness = Endianness::from_u16(cursor.read_u16()?)?;
         let header_size = cursor.read_u16()?;
         let version = VersionFormat::parse(cursor)?;
-        cursor.version = version;
+        cursor.version = version.encode();
         let _file_size = cursor.read_u32()?;
         let _section_count = cursor.read_u32()?;
 

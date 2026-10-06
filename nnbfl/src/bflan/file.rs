@@ -1,8 +1,8 @@
 use crate::{
     bflan::{anim_info::PaneAnimInfo, anim_tag::PaneAnimTag},
     core::{
-        Cursor, FileReadWriteable, FormatError, ReadWriteable, SectionHeader, SectionMagic,
-        VersionFormat, Writer, tchar_code32,
+        BitPackable, Cursor, FileReadWriteable, FormatError, ReadWriteable, SectionHeader,
+        SectionMagic, VersionFormat, Writer, tchar_code32,
     },
     ui2d::userdata::UserDataArray,
 };
@@ -34,7 +34,7 @@ impl ReadWriteable for Bflan {
         let endianness = cursor.read_u16()?;
         let header_size = cursor.read_u16()?;
         let version = VersionFormat::parse(cursor)?;
-        cursor.version = version;
+        cursor.version = version.encode();
         let _file_size = cursor.read_u32()?;
         let section_count = cursor.read_u32()?;
 

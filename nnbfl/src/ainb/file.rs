@@ -1,6 +1,6 @@
-use crate::core::{
-    BitPackable, Cursor, FileReadWriteable, FormatError, ReadWriteable, VersionFormat, Writer,
-    tchar_code32,
+use crate::{
+    ainb::blackboard::Blackboard,
+    core::{Cursor, FileReadWriteable, FormatError, ReadWriteable, Writer, tchar_code32},
 };
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -13,6 +13,8 @@ pub struct Ainb {
     pub query_count: u32,
     pub attachment_count: u32,
     pub element_output_count: u32,
+
+    pub blackboard: Blackboard,
 }
 
 impl ReadWriteable for Ainb {
@@ -28,7 +30,8 @@ impl ReadWriteable for Ainb {
         };
 
         let version = cursor.read_u32()?;
-        cursor.version = VersionFormat::decode(version);
+        cursor.version = version;
+
         let name_offset = cursor.read_u32()?;
         let command_count = cursor.read_u32()?;
         let element_count = cursor.read_u32()?;
@@ -36,12 +39,13 @@ impl ReadWriteable for Ainb {
         let attachment_count = cursor.read_u32()?;
         let element_output_count = cursor.read_u32()?;
 
-        let _blackboard_offset = cursor.read_u32()?;
+        let blackboard_offset = cursor.read_u32()?;
         let string_pool_start = cursor.read_u32()?;
 
         cursor.string_pool_start = Some(string_pool_start as usize);
 
-        let name = cursor.read_string_from_pool(name_offset)?;
+        let name = cursor.read_string_from_pool_by_offset(name_offset)?;
+        let blackboard = cursor.at(blackboard_offset as usize, |c| Blackboard::parse(c))?;
 
         Ok(Self {
             version,
@@ -51,6 +55,7 @@ impl ReadWriteable for Ainb {
             query_count,
             attachment_count,
             element_output_count,
+            blackboard,
         })
     }
 

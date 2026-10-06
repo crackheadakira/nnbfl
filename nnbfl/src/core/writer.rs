@@ -134,7 +134,7 @@ impl Writer {
         }
     }
 
-    fn intern_string(&mut self, value: &str) -> u32 {
+    pub fn intern_string(&mut self, value: &str) -> u32 {
         let pool = self.string_pool.get_or_insert_with(StringPool::default);
 
         if let Some(&offset) = pool.offsets.get(value) {
