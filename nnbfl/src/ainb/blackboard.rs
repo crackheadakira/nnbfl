@@ -344,11 +344,11 @@ impl BlackboardValue for bool {
     const SERIALIZED_SIZE: usize = 4;
 
     fn read_value(cursor: &mut Cursor) -> Result<Self, FormatError> {
-        Ok(cursor.read_u8()? != 0)
+        Ok(cursor.read_u32()? != 0)
     }
 
     fn write_value(&self, writer: &mut Writer) {
-        writer.write_u8(*self as u8);
+        writer.write_u32(*self as u32);
     }
 }
 

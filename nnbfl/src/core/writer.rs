@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::core::VersionFormat;
+use crate::core::{VersionFormat, context::ContextStore};
 
 pub struct Writer {
     pub buffer: Vec<u8>,
@@ -8,6 +8,7 @@ pub struct Writer {
     pub version: VersionFormat,
     pub section_start: Option<usize>,
     pub string_pool: Option<StringPool>,
+    pub contexts: ContextStore,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,6 +38,7 @@ impl Writer {
             version: VersionFormat::default(),
             section_start: None,
             string_pool: None,
+            contexts: ContextStore::default(),
         }
     }
 
@@ -163,5 +165,25 @@ impl Writer {
         pool.start = Some(start);
 
         start
+    }
+
+    pub fn context<T: std::any::Any>(&self) -> &T {
+        self.contexts.get::<T>().unwrap_or_else(|| {
+            panic!(
+                "Missing serialization context '{}' at byte offset 0x{:X}",
+                std::any::type_name::<T>(),
+                self.pos(),
+            )
+        })
+    }
+
+    pub fn with_context<T: std::any::Any + Send + Sync, R>(&mut self, value: T, f: impl FnOnce(&mut Self) -> R) -> R {
+        let previous = self.contexts.replace(value);
+
+        let result = f(self);
+
+        self.contexts.restore::<T>(previous);
+
+        result
     }
 }

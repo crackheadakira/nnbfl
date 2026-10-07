@@ -1,4 +1,4 @@
-use crate::core::FormatError;
+use crate::core::{FormatError, context::ContextStore};
 
 #[derive(Default)]
 pub struct Cursor<'a> {
@@ -10,6 +10,7 @@ pub struct Cursor<'a> {
     pub optional_offset: usize,
     pub last_was_pane: bool,
     pub is_embed: bool,
+    pub contexts: ContextStore,
 }
 
 impl<'a> Cursor<'a> {
@@ -175,5 +176,30 @@ impl<'a> Cursor<'a> {
         }
 
         self.at(address, |c| c.read_null_terminated_string())
+    }
+
+    pub fn context<T: std::any::Any>(&self) -> Result<&T, FormatError> {
+        self.contexts.get::<T>().ok_or(FormatError::MissingContext {
+            expected: std::any::type_name::<T>(),
+            context: "typed context",
+            offset: self.pos,
+        })
+    }
+
+    pub fn with_context<T: std::any::Any + Send + Sync, R>(
+        &mut self,
+        value: T,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = self.contexts.replace(value);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+
+        self.contexts.restore::<T>(previous);
+
+        match result {
+            Ok(value) => value,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 }

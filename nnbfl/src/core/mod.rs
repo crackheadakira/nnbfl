@@ -1,3 +1,4 @@
+mod context;
 mod cursor;
 mod error;
 mod section;
