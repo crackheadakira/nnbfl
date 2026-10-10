@@ -18,6 +18,8 @@ pub struct Blackboard {
     pub bool_entries: Vec<BlackboardParam<bool>>,
     pub vector3f_entries: Vec<BlackboardParam<Vector3f>>,
     pub void_entries: Vec<BlackboardParam<()>>,
+
+    pub file_reference_entries: Vec<FileReferenceEntry>,
 }
 
 impl ReadWriteable for Blackboard {
@@ -46,8 +48,6 @@ impl ReadWriteable for Blackboard {
             + usize::from(entry_vector3f.base_offset)
             + usize::from(entry_vector3f.count) * 0xC;
 
-        cursor.section_start = Some(file_ref_offset);
-
         let string_entries =
             entry_string.read_params::<String>(cursor, entries_start, values_start)?;
         let int_entries = entry_int.read_params::<i32>(cursor, entries_start, values_start)?;
@@ -64,7 +64,24 @@ impl ReadWriteable for Blackboard {
             entry_vector3f.read_params::<Vector3f>(cursor, entries_start, values_start)?;
         let void_entries = entry_void.read_params::<()>(cursor, entries_start, values_start)?;
 
-        cursor.section_start = None;
+        let indices = string_entries
+            .iter()
+            .filter_map(|e| e.file_reference_idx)
+            .chain(int_entries.iter().filter_map(|e| e.file_reference_idx))
+            .chain(uint_entries.iter().filter_map(|e| e.file_reference_idx))
+            .chain(float_entries.iter().filter_map(|e| e.file_reference_idx))
+            .chain(bool_entries.iter().filter_map(|e| e.file_reference_idx))
+            .chain(vector3f_entries.iter().filter_map(|e| e.file_reference_idx))
+            .chain(void_entries.iter().filter_map(|e| e.file_reference_idx));
+
+        let file_ref_count = indices.max().map_or(0, |index| usize::from(index) + 1);
+
+        let mut file_reference_entries = Vec::with_capacity(file_ref_count);
+
+        for index in 0..file_ref_count {
+            file_reference_entries
+                .push(cursor.at(file_ref_offset + index * 0x10, FileReferenceEntry::parse)?);
+        }
 
         Ok(Self {
             string_entries,
@@ -74,22 +91,167 @@ impl ReadWriteable for Blackboard {
             bool_entries,
             vector3f_entries,
             void_entries,
+            file_reference_entries,
         })
     }
 
     fn write(&self, writer: &mut Writer) {
-        // reminder, `base_index` & `base_offset` are sequentially increased depending on prior entries.
+        let has_uint = writer.version.encode() >= 0x408;
+
+        assert!(
+            has_uint || self.uint_entries.is_empty(),
+            "U32 blackboard entries require AINB version >= 0x408",
+        );
+
+        let mut base_index = 0;
+        let mut base_offset = 0;
+
+        BlackboardTypeEntry::write_for(
+            writer,
+            &self.string_entries,
+            &mut base_index,
+            &mut base_offset,
+        );
+
+        BlackboardTypeEntry::write_for(
+            writer,
+            &self.int_entries,
+            &mut base_index,
+            &mut base_offset,
+        );
+
+        if has_uint {
+            BlackboardTypeEntry::write_for(
+                writer,
+                &self.uint_entries,
+                &mut base_index,
+                &mut base_offset,
+            );
+        }
+
+        BlackboardTypeEntry::write_for(
+            writer,
+            &self.float_entries,
+            &mut base_index,
+            &mut base_offset,
+        );
+
+        BlackboardTypeEntry::write_for(
+            writer,
+            &self.bool_entries,
+            &mut base_index,
+            &mut base_offset,
+        );
+
+        BlackboardTypeEntry::write_for(
+            writer,
+            &self.vector3f_entries,
+            &mut base_index,
+            &mut base_offset,
+        );
+
+        BlackboardTypeEntry::write_for(
+            writer,
+            &self.void_entries,
+            &mut base_index,
+            &mut base_offset,
+        );
+
+        for entry in &self.string_entries {
+            entry.to_blackboard_entry().write(writer);
+        }
+
+        for entry in &self.int_entries {
+            entry.to_blackboard_entry().write(writer);
+        }
+
+        for entry in &self.uint_entries {
+            entry.to_blackboard_entry().write(writer);
+        }
+
+        for entry in &self.float_entries {
+            entry.to_blackboard_entry().write(writer);
+        }
+
+        for entry in &self.bool_entries {
+            entry.to_blackboard_entry().write(writer);
+        }
+
+        for entry in &self.vector3f_entries {
+            entry.to_blackboard_entry().write(writer);
+        }
+
+        for entry in &self.void_entries {
+            entry.to_blackboard_entry().write(writer);
+        }
+
+        for entry in &self.string_entries {
+            entry.value.write_value(writer);
+        }
+
+        for entry in &self.int_entries {
+            entry.value.write_value(writer);
+        }
+
+        for entry in &self.uint_entries {
+            entry.value.write_value(writer);
+        }
+
+        for entry in &self.float_entries {
+            entry.value.write_value(writer);
+        }
+
+        for entry in &self.bool_entries {
+            entry.value.write_value(writer);
+        }
+
+        for entry in &self.vector3f_entries {
+            entry.value.write_value(writer);
+        }
+
+        for entry in &self.file_reference_entries {
+            entry.write(writer);
+        }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
-pub struct BlackboardTypeEntry {
+pub(crate) struct BlackboardTypeEntry {
     pub count: u16,
     pub base_index: u16,
     pub base_offset: u16,
 }
 
 impl BlackboardTypeEntry {
+    fn write_for<T: BlackboardValue>(
+        writer: &mut Writer,
+        entries: &[BlackboardParam<T>],
+        base_index: &mut u16,
+        base_offset: &mut u16,
+    ) {
+        let count = u16::try_from(entries.len()).expect("Blackboard entry count exceeds u16");
+        let value_bytes = u16::try_from(entries.len() * T::SERIALIZED_SIZE)
+            .expect("Blackboard value size exceeds u16");
+
+        let next_index = base_index
+            .checked_add(count)
+            .expect("Blackboard base index exceeds u16");
+
+        let next_offset = base_offset
+            .checked_add(value_bytes)
+            .expect("Blackboard base offset exceeds u16");
+
+        Self {
+            count,
+            base_index: *base_index,
+            base_offset: *base_offset,
+        }
+        .write(writer);
+
+        *base_index = next_index;
+        *base_offset = next_offset;
+    }
+
     pub fn read_params<T: BlackboardValue>(
         &self,
         cursor: &mut Cursor,
@@ -115,7 +277,7 @@ impl BlackboardTypeEntry {
                 name: entry.name,
                 note: entry.note,
                 inherit_mode: entry.flags.inherit_mode,
-                file_reference: entry.file_reference,
+                file_reference_idx: entry.file_reference_idx,
                 value,
             });
         }
@@ -148,6 +310,8 @@ impl ReadWriteable for BlackboardTypeEntry {
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct FileReferenceEntry {
     pub file_path: String,
+
+    // TODO: probably can just calculate these later on.
     pub file_path_hash: u32,
     pub file_name_hash: u32,
     pub file_ext_hash: u32,
@@ -177,7 +341,7 @@ pub struct BlackboardEntry {
     pub note: String,
     pub name: String,
 
-    pub file_reference: Option<FileReferenceEntry>,
+    pub file_reference_idx: Option<u8>,
 }
 
 impl BlackboardEntry {
@@ -190,13 +354,8 @@ impl ReadWriteable for BlackboardEntry {
         let note = cursor.read_string_from_pool()?;
         let name = cursor.read_string_from_pool_by_offset(flags.name_offset)?;
 
-        let file_reference = if flags.has_file_ref {
-            let file_ref_pool = cursor.ctx_section_start::<Self>()?;
-
-            Some(cursor.at(
-                file_ref_pool + (flags.file_ref_idx as u32 * 0x10) as usize,
-                |c| FileReferenceEntry::parse(c),
-            )?)
+        let file_reference_idx = if flags.has_file_ref {
+            Some(flags.file_ref_idx)
         } else {
             None
         };
@@ -205,7 +364,7 @@ impl ReadWriteable for BlackboardEntry {
             flags,
             note,
             name,
-            file_reference,
+            file_reference_idx,
         })
     }
 
@@ -222,7 +381,9 @@ impl ReadWriteable for BlackboardEntry {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BlackboardFlags {
+    #[serde(skip_serializing)]
     pub name_offset: u32,
+
     pub inherit_mode: InheritMode,
     pub file_ref_idx: u8,
     pub has_file_ref: bool,
@@ -384,9 +545,25 @@ pub struct BlackboardParam<T: BlackboardValue> {
     pub note: String,
     pub inherit_mode: InheritMode,
 
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub file_reference: Option<FileReferenceEntry>,
+    pub file_reference_idx: Option<u8>,
 
     #[serde(skip_serializing_if = "skip_blackboard_value", default)]
     pub value: T,
+}
+
+impl<T: BlackboardValue> BlackboardParam<T> {
+    // TODO: maybe just, write it like blackboard entry to skip the clone
+    fn to_blackboard_entry(&self) -> BlackboardEntry {
+        BlackboardEntry {
+            flags: BlackboardFlags {
+                name_offset: 0,
+                inherit_mode: self.inherit_mode,
+                has_file_ref: self.file_reference_idx.is_some(),
+                file_ref_idx: self.file_reference_idx.unwrap_or(0),
+            },
+            note: self.note.clone(),
+            name: self.name.clone(),
+            file_reference_idx: self.file_reference_idx,
+        }
+    }
 }
