@@ -2,6 +2,7 @@ use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    ainb::file::{SerializableValue, skip_serializable_value},
     core::{BitPackable, Cursor, FormatError, ReadWriteable, Writer},
     ui2d::types::Vector3f,
 };
@@ -223,7 +224,7 @@ pub(crate) struct BlackboardTypeEntry {
 }
 
 impl BlackboardTypeEntry {
-    fn write_for<T: BlackboardValue>(
+    fn write_for<T: SerializableValue>(
         writer: &mut Writer,
         entries: &[BlackboardParam<T>],
         base_index: &mut u16,
@@ -252,7 +253,7 @@ impl BlackboardTypeEntry {
         *base_offset = next_offset;
     }
 
-    pub fn read_params<T: BlackboardValue>(
+    pub fn read_params<T: SerializableValue>(
         &self,
         cursor: &mut Cursor,
         entries_start: usize,
@@ -446,112 +447,19 @@ pub enum InheritMode {
     DontInherit,
 }
 
-pub trait BlackboardValue: Sized {
-    const SERIALIZED_SIZE: usize;
-
-    fn read_value(cursor: &mut Cursor) -> Result<Self, FormatError>;
-    fn write_value(&self, writer: &mut Writer);
-}
-
-impl BlackboardValue for String {
-    const SERIALIZED_SIZE: usize = 4;
-
-    fn read_value(cursor: &mut Cursor) -> Result<Self, FormatError> {
-        Ok(cursor.read_string_from_pool()?)
-    }
-
-    fn write_value(&self, writer: &mut Writer) {
-        writer.write_string_offset(self);
-    }
-}
-
-impl BlackboardValue for i32 {
-    const SERIALIZED_SIZE: usize = 4;
-
-    fn read_value(cursor: &mut Cursor) -> Result<Self, FormatError> {
-        Ok(cursor.read_i32()?)
-    }
-
-    fn write_value(&self, writer: &mut Writer) {
-        writer.write_i32(*self);
-    }
-}
-
-impl BlackboardValue for u32 {
-    const SERIALIZED_SIZE: usize = 4;
-
-    fn read_value(cursor: &mut Cursor) -> Result<Self, FormatError> {
-        Ok(cursor.read_u32()?)
-    }
-
-    fn write_value(&self, writer: &mut Writer) {
-        writer.write_u32(*self);
-    }
-}
-
-impl BlackboardValue for f32 {
-    const SERIALIZED_SIZE: usize = 4;
-
-    fn read_value(cursor: &mut Cursor) -> Result<Self, FormatError> {
-        Ok(cursor.read_f32()?)
-    }
-
-    fn write_value(&self, writer: &mut Writer) {
-        writer.write_f32(*self);
-    }
-}
-
-impl BlackboardValue for bool {
-    const SERIALIZED_SIZE: usize = 4;
-
-    fn read_value(cursor: &mut Cursor) -> Result<Self, FormatError> {
-        Ok(cursor.read_u32()? != 0)
-    }
-
-    fn write_value(&self, writer: &mut Writer) {
-        writer.write_u32(*self as u32);
-    }
-}
-
-impl BlackboardValue for Vector3f {
-    const SERIALIZED_SIZE: usize = 12;
-
-    fn read_value(cursor: &mut Cursor) -> Result<Self, FormatError> {
-        Ok(Self::parse(cursor)?)
-    }
-
-    fn write_value(&self, writer: &mut Writer) {
-        self.write(writer);
-    }
-}
-
-impl BlackboardValue for () {
-    const SERIALIZED_SIZE: usize = 0;
-
-    fn read_value(_cursor: &mut Cursor) -> Result<Self, FormatError> {
-        Ok(())
-    }
-
-    fn write_value(&self, _writer: &mut Writer) {}
-}
-
-fn skip_blackboard_value<T: BlackboardValue>(_: &T) -> bool {
-    T::SERIALIZED_SIZE == 0
-}
-
 #[derive(Debug, Serialize, Deserialize, Default)]
-pub struct BlackboardParam<T: BlackboardValue> {
+pub struct BlackboardParam<T: SerializableValue> {
     pub name: String,
     pub note: String,
     pub inherit_mode: InheritMode,
 
     pub file_reference_idx: Option<u8>,
 
-    #[serde(skip_serializing_if = "skip_blackboard_value", default)]
+    #[serde(skip_serializing_if = "skip_serializable_value", default)]
     pub value: T,
 }
 
-impl<T: BlackboardValue> BlackboardParam<T> {
+impl<T: SerializableValue> BlackboardParam<T> {
     // TODO: maybe just, write it like blackboard entry to skip the clone
     fn to_blackboard_entry(&self) -> BlackboardEntry {
         BlackboardEntry {

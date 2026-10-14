@@ -63,9 +63,11 @@ struct ResAinbPropertyTable {
 
 bitfield AinbPropertyFlags {
     index : 16;
-    reserve0 : 7;
-    is_pulse_tls : 1;
-    is_ptr_flag0 : 1;
+    bool is_use_index : 1;
+    bool is_not_local_blackboard_index : 1;
+    reserve0 : 4;
+    bool is_exb_index : 1;
+    bool is_ptr_flag0 : 1;
     reserve1 : 7;
 };
 
