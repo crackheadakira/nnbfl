@@ -47,7 +47,7 @@ use crate::{
     edit_history::EditHistory,
     error::LoadError,
     font::glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
-    pane_tree::{DirtyFlags, PaneTree},
+    pane_tree::PaneTree,
     renderer::{
         selection::{Handle, SelectionRenderer, point_in_quad},
         texture::{TexturePreviewData, TexturePreviewPipeline},
@@ -184,6 +184,7 @@ impl GpuState {
             puffin::profile_scope!("material_recompute");
             ctx.ui_state.material_editor.pending_upload = false;
             layout.tree.recompute_dirty_materials();
+            layout.tree.update_animation_visuals();
         }
 
         if ctx.layout_tabs.glyphs.atlas.is_dirty() {
@@ -280,8 +281,31 @@ impl GpuState {
 
         egui_state.handle_platform_output(window, full_output.platform_output.clone());
 
+        if let Some(layout) = ctx.layout_tabs.active_mut()
+            && let Some(pending_key_edit) = layout.timeline.pending_key_edit.take()
+        {
+            puffin::profile_scope!("pending_key_edit");
+            layout
+                .timeline
+                .anim_player
+                .apply_key_edit(&pending_key_edit);
+        }
+
+        if let Some(layout) = ctx.layout_tabs.active_mut()
+            && let Some(pending_slope_edit) = layout.timeline.pending_slope_edit.take()
+        {
+            puffin::profile_scope!("pending_slope_edit");
+            layout
+                .timeline
+                .anim_player
+                .apply_slope_edit(&pending_slope_edit);
+        }
+
         if let Some(layout) = ctx.layout_tabs.active_mut() {
             puffin::profile_scope!("pane_renderer_logic");
+
+            layout.timeline.anim_player.apply(&mut layout.tree);
+
             match ctx
                 .ui_state
                 .pane_tree_view
@@ -317,26 +341,6 @@ impl GpuState {
             size_in_pixels: [self.config.width, self.config.height],
             pixels_per_point: full_output.pixels_per_point,
         };
-
-        if let Some(layout) = ctx.layout_tabs.active_mut()
-            && let Some(pending_key_edit) = layout.timeline.pending_key_edit.take()
-        {
-            puffin::profile_scope!("pending_key_edit");
-            layout
-                .timeline
-                .anim_player
-                .apply_key_edit(&pending_key_edit);
-        }
-
-        if let Some(layout) = ctx.layout_tabs.active_mut()
-            && let Some(pending_slope_edit) = layout.timeline.pending_slope_edit.take()
-        {
-            puffin::profile_scope!("pending_slope_edit");
-            layout
-                .timeline
-                .anim_player
-                .apply_slope_edit(&pending_slope_edit);
-        }
 
         for (id, delta) in &full_output.textures_delta.set {
             puffin::profile_scope!("egui_update_texture");
@@ -628,9 +632,8 @@ impl LayoutData {
             if file_name
                 .as_ref()
                 .is_some_and(|f| f.contains(&bflyt.layout.name))
+                || file_name.is_none()
             {
-                timeline.anim_player.load(bflan);
-            } else if file_name.is_none() {
                 timeline.anim_player.load(bflan);
             }
         }
@@ -679,16 +682,6 @@ impl LayoutData {
         };
 
         Ok((layout_data, anim_names))
-    }
-
-    pub fn reset_to_base(&mut self) {
-        self.tree.for_each_mut(|node| {
-            node.textured_quad = node.base_textured_quad.clone();
-            node.dirty
-                .insert(DirtyFlags::TRANSFORM | DirtyFlags::MATERIAL | DirtyFlags::VERTICES);
-        });
-
-        self.tree.recompute_dirty();
     }
 }
 
@@ -946,9 +939,7 @@ impl App {
         match std::fs::read(path) {
             Ok(bytes) => {
                 let mut detected_files = Vec::new();
-                let file_name = path
-                    .file_name()
-                    .and_then(|f| Some(f.to_string_lossy().to_string()));
+                let file_name = path.file_name().map(|f| f.to_string_lossy().to_string());
 
                 extract_all_files_recursive(bytes, &mut detected_files, file_name);
                 self.open_file_from_buffer(detected_files);
@@ -1159,6 +1150,8 @@ impl App {
         };
 
         layout.tree.recompute_dirty();
+        layout.tree.recompute_dirty_materials();
+        layout.tree.update_animation_visuals();
 
         let Some(gpu) = &mut self.gpu else { return };
 
@@ -1479,7 +1472,7 @@ impl ApplicationHandler for App {
                     let file_name = entry
                         .path
                         .file_name()
-                        .and_then(|f| Some(f.to_string_lossy().to_string()));
+                        .map(|f| f.to_string_lossy().to_string());
 
                     match resolved {
                         Some(package_bytes) => {
@@ -1698,11 +1691,6 @@ impl ApplicationHandler for App {
                                     &layout.tree,
                                     &mut self.ui_state.pane_tree_view.hidden_panes,
                                 );
-                            }
-
-                            if layout.timeline.anim_player.is_playing() {
-                                layout.reset_to_base();
-                                layout.timeline.anim_player.apply(&mut layout.tree);
                             }
                         }
                     }

@@ -202,11 +202,9 @@ impl TreeView {
             ui.close();
         }
 
-        if !node.children.is_empty() && !is_hidden {
-            if ui.button("Hide All").clicked() {
-                Self::hide_pane_recursive(node, hidden_panes);
-                ui.close();
-            }
+        if !node.children.is_empty() && !is_hidden && ui.button("Hide All").clicked() {
+            Self::hide_pane_recursive(node, hidden_panes);
+            ui.close();
         }
 
         if is_hidden && ui.button("Show").clicked() {
@@ -214,11 +212,9 @@ impl TreeView {
             ui.close();
         }
 
-        if !node.children.is_empty() && is_hidden {
-            if ui.button("Show All").clicked() {
-                Self::show_pane_recursive(node, hidden_panes);
-                ui.close();
-            }
+        if !node.children.is_empty() && is_hidden && ui.button("Show All").clicked() {
+            Self::show_pane_recursive(node, hidden_panes);
+            ui.close();
         }
     }
 

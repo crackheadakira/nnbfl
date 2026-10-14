@@ -583,16 +583,19 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                                                 if anim.playing { "Pause" } else { "Play" };
                                             if ui.button(play_toggle).clicked() {
                                                 anim.playing = !anim.playing;
+                                                timeline.anim_player.preview_enabled = true;
                                                 anim.autoplay = !anim.autoplay;
                                             }
 
                                             if ui.button("Stop").clicked() {
+                                                timeline.anim_player.preview_enabled = false;
                                                 anim.frame = 0.0;
                                                 anim.playing = false;
                                                 anim.autoplay = false;
                                             }
 
                                             if ui.button("Loop").clicked() {
+                                                timeline.anim_player.preview_enabled = true;
                                                 anim.toggle_looping();
                                                 anim.frame = 0.0;
                                                 anim.playing = true;
@@ -611,6 +614,7 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                                         );
 
                                         if slider_res.changed() {
+                                            timeline.anim_player.preview_enabled = true;
                                             anim.frame = temporary_frame;
                                             if slider_res.dragged() {
                                                 anim.playing = false;
@@ -681,12 +685,14 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
     };
 
     if let Some(layout) = ctx.layout_tabs.items.get_mut(ctx.layout_tabs.active_index) {
+        let mut materials_changed = false;
         if let Some(material_list) = layout.tree.material_list.as_mut() {
             let changed = ctx.ui_state.material_editor.draw_with(ui, material_list);
 
             // TODO: clean this up perchance?
 
             if changed {
+                materials_changed = true;
                 layout.tree.for_each_mut(|node| {
                     let mut is_dirty = false;
 
@@ -707,8 +713,15 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
 
         if let Some(idx) = ctx.ui_state.pane_tree_view.selected_pane
             && let Some(node) = layout.tree.find_by_idx_mut(idx)
+            && ctx.ui_state.pane_editor.draw_with(ui, node)
         {
-            ctx.ui_state.pane_editor.draw_with(ui, node);
+            node.dirty.insert(DirtyFlags::MATERIAL);
+            materials_changed = true;
+        }
+
+        if materials_changed {
+            layout.tree.recompute_dirty_materials();
+            layout.tree.update_animation_visuals();
         }
 
         ctx.ui_state.texture_editor.draw_with(

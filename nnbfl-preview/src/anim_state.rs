@@ -1,22 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use nnbfl::bflan::anim_info::{AnimType, PaneAnimInfo};
+use nnbfl::bflan::targets::{PaneSrtTarget, TargetIndex, VertexColorTarget};
+use nnbfl::bflan::{anim_info::AnimInfo, curves::Curve, file::Bflan};
 use nnbfl::bflyt::list::MaterialTextureSrt;
+use nnbfl::bflyt::pane::Pane;
+use nnbfl::ui2d::types::{Vector2f, Vector3f};
 use nnbfl::ui2d::userdata::UserDataContent;
-use nnbfl::{
-    bflan::{
-        anim_info::{AnimInfo, AnimInfoType, AnimType, PaneAnimInfo},
-        curves::Curve,
-        file::Bflan,
-        targets::{
-            IndirectSrtTarget, PaneSrtTarget, TargetIndex, TextureSrtTarget, VertexColorTarget,
-        },
-    },
-    ui2d::types::Vector2f,
-};
 
 use crate::pane_tree::{DirtyFlags, PaneTree};
 use crate::renderer::textured_quad::TexturedQuad;
-use crate::traits::Displaying;
 use crate::ui::timeline::{PendingKeyEdit, PendingSlopeEdit, TimelineTrack};
 
 fn eval_hermite(keys: &[nnbfl::bflan::curves::HermiteKey], frame: f32) -> f32 {
@@ -221,6 +214,8 @@ pub struct AnimPlayer {
     pub anims: Vec<AnimInstance>,
     pub active: Option<usize>,
     pub limit_to_group: bool,
+    pub preview_enabled: bool,
+    last_applied: Option<(Option<usize>, u32, bool, u64)>,
 }
 
 impl AnimPlayer {
@@ -229,6 +224,8 @@ impl AnimPlayer {
             anims: Vec::new(),
             active: None,
             limit_to_group: false,
+            preview_enabled: false,
+            last_applied: None,
         }
     }
 
@@ -253,6 +250,7 @@ impl AnimPlayer {
             self.anims[idx].playing = true;
             self.anims[idx].autoplay = true;
             self.active = Some(idx);
+            self.preview_enabled = true;
 
             if self.limit_to_group {
                 self.anims[idx].resolve_group_visibility(pane_tree, hidden_panes);
@@ -270,7 +268,7 @@ impl AnimPlayer {
         anim.frame += dt * fps;
         let frame_count = anim.frame_count();
         if anim.frame >= frame_count {
-            if anim.is_looping() {
+            if anim.is_looping() && frame_count > 0.0 {
                 anim.frame %= frame_count;
             } else {
                 anim.frame = frame_count;
@@ -281,11 +279,48 @@ impl AnimPlayer {
         None
     }
 
-    pub fn apply(&self, pane_tree: &mut PaneTree) {
-        let Some(idx) = self.active else { return };
-        let anim = &self.anims[idx];
+    pub fn apply(&mut self, pane_tree: &mut PaneTree) -> bool {
+        let frame = self
+            .active
+            .and_then(|idx| self.anims.get(idx))
+            .map(|anim| anim.frame.to_bits())
+            .unwrap_or_default();
+        let key = (
+            self.active,
+            frame,
+            self.preview_enabled,
+            pane_tree.animation_binding_revision,
+        );
+        if self.last_applied == Some(key) {
+            return false;
+        }
 
-        apply_anim(&anim.bflan.anim_info, anim.frame, pane_tree);
+        let state = if self.preview_enabled {
+            self.active
+                .and_then(|idx| self.anims.get(idx))
+                .map(|anim| {
+                    AnimationState::evaluate(
+                        &anim.bflan.anim_info,
+                        anim.frame,
+                        &pane_tree.label_map,
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            AnimationState::default()
+        };
+        let changes = pane_tree.set_animation(state);
+        if changes.contains(DirtyFlags::TRANSFORM) {
+            pane_tree.recompute_dirty();
+        }
+        let bindings_changed = self
+            .last_applied
+            .is_none_or(|previous| previous.3 != pane_tree.animation_binding_revision);
+        if !changes.is_empty() || bindings_changed {
+            pane_tree.update_animation_visuals();
+        }
+        self.last_applied = Some(key);
+        true
     }
 
     pub fn is_playing(&self) -> bool {
@@ -301,6 +336,8 @@ impl AnimPlayer {
         let Some(curve) = anim.curve_mut(&edit.track) else {
             return;
         };
+
+        self.last_applied = None;
 
         match curve {
             Curve::Constant(keys) => {
@@ -365,6 +402,7 @@ impl AnimPlayer {
             && let Some(k) = keys.get_mut(edit.key_idx)
         {
             k.slope = edit.slope;
+            self.last_applied = None;
         }
     }
 }
@@ -396,377 +434,223 @@ pub fn all_quads_mut(
     node.textured_quad
         .iter_mut()
         .chain(node.window_quads.iter_mut())
+        .chain(node.glyph_quads.iter_mut())
 }
 
-fn apply_tex_srts(tq: &mut TexturedQuad) {
-    for (i, srt) in tq.tex_srts.iter().enumerate() {
-        for v_idx in 0..4 {
-            let base_uv = tq.base_uvs[v_idx][i];
-            tq.uvs[v_idx][i] = transform_uv_srt(srt, base_uv);
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PaneAnimation {
+    pub translation: [Option<f32>; 3],
+    pub rotation: [Option<f32>; 3],
+    pub scale: [Option<f32>; 2],
+    pub size: [Option<f32>; 2],
+    pub visible: Option<bool>,
+    pub alpha: Option<f32>,
+    pub corner_colors: [[Option<f32>; 4]; 4],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResolvedPaneTransform {
+    pub translation: Vector3f,
+    pub rotation: Vector3f,
+    pub scale: Vector2f,
+    pub size: Vector2f,
+}
+
+impl PaneAnimation {
+    pub fn resolve_transform(&self, base: &Pane) -> ResolvedPaneTransform {
+        ResolvedPaneTransform {
+            translation: Vector3f {
+                x: self.translation[0].unwrap_or(base.translation.x),
+                y: self.translation[1].unwrap_or(base.translation.y),
+                z: self.translation[2].unwrap_or(base.translation.z),
+            },
+
+            rotation: Vector3f {
+                x: self.rotation[0].unwrap_or(base.rotation.x),
+                y: self.rotation[1].unwrap_or(base.rotation.y),
+                z: self.rotation[2].unwrap_or(base.rotation.z),
+            },
+
+            scale: Vector2f::new(
+                self.scale[0].unwrap_or(base.scale.x),
+                self.scale[1].unwrap_or(base.scale.y),
+            ),
+
+            size: Vector2f::new(
+                self.size[0].unwrap_or(base.size.x),
+                self.size[1].unwrap_or(base.size.y),
+            ),
         }
     }
 }
 
-fn cascade_visibility(pane_tree: &mut PaneTree, pane_idx: usize, visible: bool) {
-    pane_tree.for_each_descendant_mut(pane_idx, |node| {
-        node.visible = visible;
-
-        node.plain_quad.color = if visible {
-            node.section.section_color()
-        } else {
-            [0.0; 4]
-        };
-
-        for tq in all_quads_mut(node) {
-            tq.standard_material.visible = visible as u32;
-        }
-
-        node.dirty.insert(DirtyFlags::VERTICES);
-    });
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TextureSrtAnimation {
+    pub translate_u: Option<f32>,
+    pub translate_v: Option<f32>,
+    pub rotate: Option<f32>,
+    pub scale_u: Option<f32>,
+    pub scale_v: Option<f32>,
 }
 
-fn apply_anim(pai: &PaneAnimInfo, frame: f32, pane_tree: &mut PaneTree) {
-    let pane_by_name = pane_tree.label_to_idx();
-
-    for content in &pai.contents {
-        let name = content.name.trim_end_matches('\0');
-        let Some(&pane_idx) = pane_by_name.get(name) else {
-            continue;
-        };
-
-        if !matches!(
-            content.anim_type,
-            AnimType::Pane | AnimType::PaneExt | AnimType::Material
-        ) {
-            continue;
+impl TextureSrtAnimation {
+    pub fn resolve(&self, base: &MaterialTextureSrt) -> MaterialTextureSrt {
+        MaterialTextureSrt {
+            translate_u: self.translate_u.unwrap_or(base.translate_u),
+            translate_v: self.translate_v.unwrap_or(base.translate_v),
+            rotate: self.rotate.unwrap_or(base.rotate),
+            scale_u: self.scale_u.unwrap_or(base.scale_u),
+            scale_v: self.scale_v.unwrap_or(base.scale_v),
         }
+    }
+}
 
-        for info in &content.infos {
-            let AnimInfo::Standard { anim_type, targets } = info else {
-                continue;
-            };
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MaterialAnimation {
+    pub texture_srts: [TextureSrtAnimation; 3],
+    pub texture_names: [Option<String>; 3],
+    pub indirect_rotation: Option<f32>,
+    pub indirect_scale: [Option<f32>; 2],
+    pub alpha_reference: Option<f32>,
+    pub black_color: [Option<u8>; 4],
+    pub white_color: [Option<u8>; 4],
+}
 
-            match anim_type {
-                AnimInfoType::PaneSrtAnim => {
-                    let (base_translation, base_size, base_rotation, base_scale) = {
-                        let Some(node) = pane_tree.find_by_idx(pane_idx) else {
+#[derive(Default)]
+pub struct AnimationState {
+    pub panes: HashMap<usize, PaneAnimation>,
+    pub materials: HashMap<String, MaterialAnimation>,
+}
+
+impl AnimationState {
+    pub fn evaluate(pai: &PaneAnimInfo, frame: f32, pane_by_name: &HashMap<String, usize>) -> Self {
+        let mut state = Self::default();
+
+        for content in &pai.contents {
+            let name = content.name.trim_end_matches('\0');
+
+            match content.anim_type {
+                AnimType::Pane | AnimType::PaneExt => {
+                    let Some(&pane_idx) = pane_by_name.get(name) else {
+                        continue;
+                    };
+
+                    let pane = state.panes.entry(pane_idx).or_default();
+
+                    for info in &content.infos {
+                        let AnimInfo::Standard { targets, .. } = info else {
                             continue;
                         };
-                        let base = node.section.get_base_pane();
-                        (
-                            base.map(|b| b.translation).unwrap_or_default(),
-                            base.map(|b| b.size).unwrap_or(node.world_size),
-                            base.map(|b| b.rotation).unwrap_or_default(),
-                            base.map(|b| b.scale).unwrap_or(Vector2f::new(1.0, 1.0)),
-                        )
-                    };
 
-                    let mut new_translation = base_translation;
-                    let mut new_scale = base_scale;
-                    let mut new_size = base_size;
-                    let mut new_rotation = base_rotation;
+                        for target in targets {
+                            let value = eval_curve(&target.curve, frame);
 
-                    for t in targets {
-                        let v = eval_curve(&t.curve, frame);
-                        match &t.target {
-                            TargetIndex::PaneSrt(PaneSrtTarget::TranslateX) => {
-                                new_translation.x = v
-                            }
-                            TargetIndex::PaneSrt(PaneSrtTarget::TranslateY) => {
-                                new_translation.y = v
-                            }
-                            TargetIndex::PaneSrt(PaneSrtTarget::TranslateZ) => {
-                                new_translation.z = v
-                            }
-                            TargetIndex::PaneSrt(PaneSrtTarget::ScaleX) => new_scale.x = v,
-                            TargetIndex::PaneSrt(PaneSrtTarget::ScaleY) => new_scale.y = v,
-                            TargetIndex::PaneSrt(PaneSrtTarget::SizeX) => new_size.x = v,
-                            TargetIndex::PaneSrt(PaneSrtTarget::SizeY) => new_size.y = v,
-                            TargetIndex::PaneSrt(PaneSrtTarget::RotateX) => new_rotation.x = v,
-                            TargetIndex::PaneSrt(PaneSrtTarget::RotateY) => new_rotation.y = v,
-                            TargetIndex::PaneSrt(PaneSrtTarget::RotateZ) => new_rotation.z = v,
-                            _ => {}
-                        }
-                    }
-
-                    if let Some(node) = pane_tree.find_by_idx_mut(pane_idx)
-                        && let Some(base) = node.section.get_base_pane_mut()
-                    {
-                        base.translation = new_translation;
-                        base.scale = new_scale;
-                        base.size = new_size;
-                        base.rotation = new_rotation;
-                        node.mark_transform_dirty();
-                    }
-                }
-
-                AnimInfoType::VisibilityAnim => {
-                    for t in targets {
-                        let visible = eval_curve_step_u16(&t.curve, frame) != 0;
-                        cascade_visibility(pane_tree, pane_idx, visible);
-                    }
-                }
-
-                AnimInfoType::TextureSrtAnim => {
-                    let Some(node) = pane_tree.find_by_idx_mut(pane_idx) else {
-                        continue;
-                    };
-
-                    for tq in all_quads_mut(node) {
-                        for t in targets {
-                            let v = eval_curve(&t.curve, frame);
-                            let layer = t.layer as usize;
-
-                            if layer >= tq.tex_srts.len() {
-                                continue;
-                            }
-
-                            match &t.target {
-                                TargetIndex::TextureSrt(TextureSrtTarget::TranslateU) => {
-                                    tq.tex_srts[layer].translate_u = v
+                            match &target.target {
+                                TargetIndex::PaneSrt(channel) => match channel {
+                                    PaneSrtTarget::TranslateX => pane.translation[0] = Some(value),
+                                    PaneSrtTarget::TranslateY => pane.translation[1] = Some(value),
+                                    PaneSrtTarget::TranslateZ => pane.translation[2] = Some(value),
+                                    PaneSrtTarget::RotateX => pane.rotation[0] = Some(value),
+                                    PaneSrtTarget::RotateY => pane.rotation[1] = Some(value),
+                                    PaneSrtTarget::RotateZ => pane.rotation[2] = Some(value),
+                                    PaneSrtTarget::ScaleX => pane.scale[0] = Some(value),
+                                    PaneSrtTarget::ScaleY => pane.scale[1] = Some(value),
+                                    PaneSrtTarget::SizeX => pane.size[0] = Some(value),
+                                    PaneSrtTarget::SizeY => pane.size[1] = Some(value),
+                                },
+                                TargetIndex::Visibility(_) => {
+                                    pane.visible =
+                                        Some(eval_curve_step_u16(&target.curve, frame) != 0);
                                 }
-                                TargetIndex::TextureSrt(TextureSrtTarget::TranslateV) => {
-                                    tq.tex_srts[layer].translate_v = v
-                                }
-                                TargetIndex::TextureSrt(TextureSrtTarget::Rotate) => {
-                                    tq.tex_srts[layer].rotate = v
-                                }
-                                TargetIndex::TextureSrt(TextureSrtTarget::ScaleU) => {
-                                    tq.tex_srts[layer].scale_u = v
-                                }
-                                TargetIndex::TextureSrt(TextureSrtTarget::ScaleV) => {
-                                    tq.tex_srts[layer].scale_v = v
-                                }
-                                _ => {}
-                            }
-                        }
-                        apply_tex_srts(tq);
-                    }
-                }
 
-                AnimInfoType::IndirectSrtAnim => {
-                    let Some(node) = pane_tree.find_by_idx_mut(pane_idx) else {
-                        continue;
-                    };
-
-                    for tq in all_quads_mut(node) {
-                        for t in targets {
-                            let v = eval_curve(&t.curve, frame);
-                            match &t.target {
-                                TargetIndex::IndirectSrt(IndirectSrtTarget::Rotate) => {
-                                    tq.indirect_rotation = v
+                                TargetIndex::VertexColor(VertexColorTarget::PaneAlpha) => {
+                                    pane.alpha = Some(value / 255.0);
                                 }
-                                TargetIndex::IndirectSrt(IndirectSrtTarget::ScaleU) => {
-                                    tq.indirect_scale.x = v
+
+                                TargetIndex::VertexColor(channel) => {
+                                    let index = channel.clone() as usize;
+                                    pane.corner_colors[index / 4][index % 4] = Some(value / 255.0);
                                 }
-                                TargetIndex::IndirectSrt(IndirectSrtTarget::ScaleV) => {
-                                    tq.indirect_scale.y = v
-                                }
-                                _ => {}
-                            }
-                        }
 
-                        let (m0, m1) = crate::renderer::textured_quad::build_indirect_matrices(
-                            tq.indirect_rotation,
-                            tq.indirect_scale,
-                        );
-                        tq.standard_material.indirect_mtx0 = m0;
-                        tq.standard_material.indirect_mtx1 = m1;
-                    }
-                }
-
-                AnimInfoType::TexturePatternAnim => {
-                    let Some(node) = pane_tree.find_by_idx_mut(pane_idx) else {
-                        continue;
-                    };
-
-                    for tq in all_quads_mut(node) {
-                        for t in targets {
-                            let file_idx = eval_curve_step_u16(&t.curve, frame) as usize;
-                            let Some(tex_name) = pai.textures.get(file_idx).cloned() else {
-                                continue;
-                            };
-                            match t.layer {
-                                0 => tq.texture_name = tex_name,
-                                1 => tq.texture_name1 = Some(tex_name),
-                                2 => tq.texture_name2 = Some(tex_name),
                                 _ => {}
                             }
                         }
                     }
                 }
 
-                AnimInfoType::AlphaCompareAnim => {
-                    let Some(node) = pane_tree.find_by_idx_mut(pane_idx) else {
-                        continue;
-                    };
+                AnimType::Material => {
+                    let material = state.materials.entry(name.to_string()).or_default();
 
-                    for tq in all_quads_mut(node) {
-                        for t in targets {
-                            let v_float = eval_curve(&t.curve, frame);
-                            let v_byte = (v_float.clamp(0.0, 1.0) * 255.0).round() as u32;
+                    for info in &content.infos {
+                        let AnimInfo::Standard { targets, .. } = info else {
+                            continue;
+                        };
 
-                            let mask = !(0xFFu32 << 3);
+                        for target in targets {
+                            let value = eval_curve(&target.curve, frame);
 
-                            tq.standard_material.packed_alpha_flags =
-                                (tq.standard_material.packed_alpha_flags & mask) | (v_byte << 3);
-                        }
-                    }
-                }
+                            match &target.target {
+                                TargetIndex::TextureSrt(channel) => {
+                                    use nnbfl::bflan::targets::TextureSrtTarget::*;
 
-                AnimInfoType::MaterialColorAnim => {
-                    let Some(node) = pane_tree.find_by_idx_mut(pane_idx) else {
-                        continue;
-                    };
+                                    let Some(srt) =
+                                        material.texture_srts.get_mut(target.layer as usize)
+                                    else {
+                                        continue;
+                                    };
 
-                    for tq in all_quads_mut(node) {
-                        for t in targets {
-                            let v_float = eval_curve(&t.curve, frame) / 255.0;
-                            let v_byte = (v_float.clamp(0.0, 1.0) * 255.0).round() as u32;
-
-                            if let TargetIndex::MaterialColor(c) = &t.target {
-                                use nnbfl::bflan::targets::MaterialColorTarget::*;
-                                match c {
-                                    BufferRed => {
-                                        tq.standard_material.black_color =
-                                            (tq.standard_material.black_color & !0xFFu32) | v_byte;
-                                    }
-                                    BufferGreen => {
-                                        tq.standard_material.black_color =
-                                            (tq.standard_material.black_color & !(0xFFu32 << 8))
-                                                | (v_byte << 8);
-                                    }
-                                    BufferBlue => {
-                                        tq.standard_material.black_color =
-                                            (tq.standard_material.black_color & !(0xFFu32 << 16))
-                                                | (v_byte << 16);
-                                    }
-                                    BufferAlpha => {
-                                        tq.standard_material.black_color =
-                                            (tq.standard_material.black_color & !(0xFFu32 << 24))
-                                                | (v_byte << 24);
-                                    }
-
-                                    Constant0Red | Color0Red | Color1Red | Color2Red
-                                    | Color3Red | Color4Red => {
-                                        tq.standard_material.white_color =
-                                            (tq.standard_material.white_color & !0xFFu32) | v_byte;
-                                    }
-                                    Constant0Green | Color0Green | Color1Green | Color2Green
-                                    | Color3Green | Color4Green => {
-                                        tq.standard_material.white_color =
-                                            (tq.standard_material.white_color & !(0xFFu32 << 8))
-                                                | (v_byte << 8);
-                                    }
-                                    Constant0Blue | Color0Blue | Color1Blue | Color2Blue
-                                    | Color3Blue | Color4Blue => {
-                                        tq.standard_material.white_color =
-                                            (tq.standard_material.white_color & !(0xFFu32 << 16))
-                                                | (v_byte << 16);
-                                    }
-                                    Constant0Alpha | Color0Alpha | Color1Alpha | Color2Alpha
-                                    | Color3Alpha | Color4Alpha => {
-                                        tq.standard_material.white_color =
-                                            (tq.standard_material.white_color & !(0xFFu32 << 24))
-                                                | (v_byte << 24);
+                                    match channel {
+                                        TranslateU => srt.translate_u = Some(value),
+                                        TranslateV => srt.translate_v = Some(value),
+                                        Rotate => srt.rotate = Some(value),
+                                        ScaleU => srt.scale_u = Some(value),
+                                        ScaleV => srt.scale_v = Some(value),
                                     }
                                 }
+
+                                TargetIndex::IndirectSrt(channel) => {
+                                    use nnbfl::bflan::targets::IndirectSrtTarget::*;
+
+                                    match channel {
+                                        Rotate => material.indirect_rotation = Some(value),
+                                        ScaleU => material.indirect_scale[0] = Some(value),
+                                        ScaleV => material.indirect_scale[1] = Some(value),
+                                    }
+                                }
+
+                                TargetIndex::TexturePattern(_) => {
+                                    let index = eval_curve_step_u16(&target.curve, frame) as usize;
+                                    if let Some(slot) =
+                                        material.texture_names.get_mut(target.layer as usize)
+                                    {
+                                        *slot = pai.textures.get(index).cloned();
+                                    }
+                                }
+
+                                TargetIndex::AlphaCompare(_) => {
+                                    material.alpha_reference = Some(value)
+                                }
+
+                                TargetIndex::MaterialColor(channel) => {
+                                    let index = channel.clone() as usize;
+
+                                    let color = if index < 4 {
+                                        &mut material.black_color
+                                    } else {
+                                        &mut material.white_color
+                                    };
+
+                                    color[index % 4] = Some(value.round().clamp(0.0, 255.0) as u8);
+                                }
+                                _ => {}
                             }
                         }
                     }
                 }
-
-                AnimInfoType::VertexColorAnim => {
-                    for t in targets {
-                        let v = eval_curve(&t.curve, frame) / 255.0;
-
-                        match &t.target {
-                            TargetIndex::VertexColor(VertexColorTarget::PaneAlpha) => {
-                                if let Some(node) = pane_tree.find_by_idx_mut(pane_idx) {
-                                    for tq in all_quads_mut(node) {
-                                        tq.tint[3] = v;
-
-                                        for c in tq.corner_tints.iter_mut() {
-                                            c[3] = v;
-                                        }
-                                    }
-                                }
-
-                                for descendant_idx in pane_tree.descendants(pane_idx) {
-                                    if let Some(node) = pane_tree.find_by_idx_mut(descendant_idx) {
-                                        for tq in all_quads_mut(node) {
-                                            tq.tint[3] = v;
-
-                                            for c in tq.corner_tints.iter_mut() {
-                                                c[3] = v;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {
-                                if let Some(node) = pane_tree.find_by_idx_mut(pane_idx) {
-                                    for tq in all_quads_mut(node) {
-                                        match &t.target {
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::LeftTopRed,
-                                            ) => tq.corner_tints[0][0] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::LeftTopGreen,
-                                            ) => tq.corner_tints[0][1] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::LeftTopBlue,
-                                            ) => tq.corner_tints[0][2] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::LeftTopAlpha,
-                                            ) => tq.corner_tints[0][3] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::RightTopRed,
-                                            ) => tq.corner_tints[1][0] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::RightTopGreen,
-                                            ) => tq.corner_tints[1][1] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::RightTopBlue,
-                                            ) => tq.corner_tints[1][2] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::RightTopAlpha,
-                                            ) => tq.corner_tints[1][3] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::LeftBottomRed,
-                                            ) => tq.corner_tints[2][0] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::LeftBottomGreen,
-                                            ) => tq.corner_tints[2][1] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::LeftBottomBlue,
-                                            ) => tq.corner_tints[2][2] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::LeftBottomAlpha,
-                                            ) => tq.corner_tints[2][3] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::RightBottomRed,
-                                            ) => tq.corner_tints[3][0] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::RightBottomGreen,
-                                            ) => tq.corner_tints[3][1] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::RightBottomBlue,
-                                            ) => tq.corner_tints[3][2] = v,
-                                            TargetIndex::VertexColor(
-                                                VertexColorTarget::RightBottomAlpha,
-                                            ) => tq.corner_tints[3][3] = v,
-                                            _ => {}
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
                 _ => {}
             }
         }
+
+        state
     }
 }

@@ -148,6 +148,7 @@ fn apply(action: Action, state: &mut UiState, timeline: Option<&mut TimelineStat
                 && let Some(anim) = timeline.anim_player.anims.get_mut(idx)
             {
                 anim.playing = !anim.playing;
+                timeline.anim_player.preview_enabled = true;
             }
         }
 

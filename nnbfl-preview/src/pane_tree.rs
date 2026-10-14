@@ -22,7 +22,9 @@ use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelI
 use tomolib::formats::bntx::Bntx;
 
 use crate::{
-    anim_state::transform_uv_srt,
+    anim_state::{
+        AnimationState, MaterialAnimation, PaneAnimation, ResolvedPaneTransform, transform_uv_srt,
+    },
     archive_browser::{ArchiveEntry, resolve_nested_package_bytes},
     decompress_if_needed, extract_all_files_recursive,
     font::glyph_atlas::{FontFace, GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
@@ -181,7 +183,7 @@ pub struct PaneNode {
 
     pub plain_quad: Quad,
     pub textured_quad: Option<TexturedQuad>,
-    pub base_textured_quad: Option<TexturedQuad>,
+    pub animation: PaneAnimation,
     pub window_quads: Vec<TexturedQuad>,
     pub glyph_quads: Vec<TexturedQuad>,
 
@@ -301,18 +303,24 @@ impl PaneNode {
         parent_rotation: Vector3f,
         bntxs: &[&Bntx],
     ) {
+        let transform = self
+            .section
+            .get_base_pane()
+            .map(|base| self.animation.resolve_transform(base));
         let child_scale;
 
         if self.dirty.contains(DirtyFlags::TRANSFORM) {
-            if let Some(base) = self.section.get_base_pane() {
+            if let Some(base) = self.section.get_base_pane()
+                && let Some(transform) = transform
+            {
                 let (pos, size, anchor, center) =
-                    resolve_rect(base, parent_pos, parent_size, parent_scale);
+                    resolve_rect(base, &transform, parent_pos, parent_size, parent_scale);
 
                 self.world_pos = pos;
                 self.world_size = size;
                 self.world_center = center;
                 self.parent_anchor = anchor;
-                self.world_rotation = base.rotation + parent_rotation;
+                self.world_rotation = transform.rotation + parent_rotation;
 
                 let corners = Corners::compute(
                     center,
@@ -420,22 +428,18 @@ impl PaneNode {
                 }
 
                 self.dirty.remove(DirtyFlags::TRANSFORM);
-                child_scale = base.scale * parent_scale;
+                child_scale = transform.scale * parent_scale;
             } else {
                 child_scale = parent_scale;
             }
         } else {
-            child_scale = self
-                .section
-                .get_base_pane()
-                .map(|b| b.scale * parent_scale)
+            child_scale = transform
+                .map(|t| t.scale * parent_scale)
                 .unwrap_or(parent_scale);
         }
 
-        let (child_rotation, child_size) = self
-            .section
-            .get_base_pane()
-            .map(|b| (b.rotation + parent_rotation, self.world_size))
+        let (child_rotation, child_size) = transform
+            .map(|t| (t.rotation + parent_rotation, self.world_size))
             .unwrap_or((parent_rotation, parent_size));
 
         self.children.par_iter_mut().for_each(|child| {
@@ -483,10 +487,6 @@ impl PaneNode {
                 )
             {
                 *quad = tq;
-
-                if let Some(base_quad) = &mut self.base_textured_quad {
-                    *base_quad = quad.clone();
-                }
             };
         }
 
@@ -569,6 +569,8 @@ pub struct PaneTree {
 
     pub layout_size: Vector2f,
     pub material_list: Option<MaterialList>,
+    pub material_animations: HashMap<String, MaterialAnimation>,
+    pub animation_binding_revision: u64,
     pub user_data: Option<UserDataArray>,
     pub texture_list: Option<TextureList>,
     pub font_list: Option<FontList>,
@@ -588,6 +590,84 @@ pub struct PaneTree {
 }
 
 impl PaneTree {
+    pub fn set_animation(&mut self, mut state: AnimationState) -> DirtyFlags {
+        let mut changes = DirtyFlags::empty();
+        self.for_each_mut(|node| {
+            let next = state.panes.remove(&node.pane_idx).unwrap_or_default();
+
+            if let Some(base) = node.section.get_base_pane()
+                && node.animation.resolve_transform(base) != next.resolve_transform(base)
+            {
+                node.mark_transform_dirty();
+                changes.insert(DirtyFlags::TRANSFORM);
+            }
+
+            if node.animation != next {
+                node.animation = next;
+                changes.insert(DirtyFlags::VERTICES);
+            }
+        });
+
+        if self.material_animations != state.materials {
+            self.material_animations = state.materials;
+            changes.insert(DirtyFlags::MATERIAL);
+        }
+        changes
+    }
+
+    pub fn update_animation_visuals(&mut self) {
+        fn update(
+            node: &mut PaneNode,
+            parent_visible: bool,
+            parent_alpha: f32,
+            materials: &HashMap<String, MaterialAnimation>,
+        ) {
+            let (visible, alpha) = if let Some(base) = node.section.get_base_pane() {
+                let visible =
+                    parent_visible && node.animation.visible.unwrap_or(base.pane_flags.is_visible);
+                let local_alpha = node.animation.alpha.unwrap_or(base.alpha as f32 / 255.0);
+                let alpha = if base.pane_flags.influenced_alpha {
+                    local_alpha * parent_alpha
+                } else {
+                    local_alpha
+                };
+                (visible, alpha)
+            } else {
+                (parent_visible, parent_alpha)
+            };
+
+            node.visible = visible;
+            node.plain_quad.color = if visible {
+                node.section.section_color()
+            } else {
+                [0.0; 4]
+            };
+
+            let animation = &node.animation;
+            for quad in node
+                .textured_quad
+                .iter_mut()
+                .chain(node.window_quads.iter_mut())
+                .chain(node.glyph_quads.iter_mut())
+            {
+                let material = if node.parts_source.is_none() {
+                    materials.get(&quad.base_appearance.material_name)
+                } else {
+                    None
+                };
+                quad.apply_animation(animation, material, alpha, visible);
+            }
+
+            for child in &mut node.children {
+                update(child, visible, alpha, materials);
+            }
+        }
+
+        for root in &mut self.roots {
+            update(root, true, 1.0, &self.material_animations);
+        }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &PaneNode> {
         self.roots.iter().flat_map(|r| r.iter())
     }
@@ -948,9 +1028,6 @@ impl PaneTree {
             if let Some(tq) = &mut node.textured_quad {
                 tq.pane_idx = node.pane_idx;
             }
-            if let Some(tq) = &mut node.base_textured_quad {
-                tq.pane_idx = node.pane_idx;
-            }
             node.dirty = DirtyFlags::all();
 
             for child in &mut node.children {
@@ -1090,6 +1167,8 @@ impl PaneTree {
             roots,
             layout_size,
             material_list: file.material_list,
+            material_animations: HashMap::new(),
+            animation_binding_revision: 0,
             file_name,
             main_bntx,
             sub_bntxs,
@@ -1107,6 +1186,7 @@ impl PaneTree {
     }
 
     pub fn rebuild_path_map(&mut self) {
+        self.animation_binding_revision = self.animation_binding_revision.wrapping_add(1);
         self.path_map.clear();
 
         fn walk(
@@ -1224,8 +1304,13 @@ impl<'a> Builder<'a> {
         let base = section.get_base_pane()?;
 
         let is_visible = parent_visible && base.pane_flags.is_visible;
-        let (pos, size, anchor, center) =
-            resolve_rect(base, parent_center, parent_size, parent_scale);
+        let (pos, size, anchor, center) = resolve_rect(
+            base,
+            &PaneAnimation::default().resolve_transform(base),
+            parent_center,
+            parent_size,
+            parent_scale,
+        );
 
         let corners = Corners::compute(
             center,
@@ -1325,8 +1410,8 @@ impl<'a> Builder<'a> {
             parent_anchor: anchor,
             world_corners: corners,
             world_rotation: base.rotation,
-            textured_quad: textured_quad.clone(),
-            base_textured_quad: textured_quad,
+            textured_quad,
+            animation: PaneAnimation::default(),
             window_quads,
             glyph_quads,
             plain_quad,
@@ -1363,7 +1448,7 @@ impl<'a> Builder<'a> {
             let file_name = entry
                 .path
                 .file_name()
-                .and_then(|f| Some(f.to_string_lossy().to_string()));
+                .map(|f| f.to_string_lossy().to_string());
 
             extract_all_files_recursive(parent_package_bytes, &mut all_files, file_name);
 
@@ -1558,8 +1643,7 @@ impl<'a> Builder<'a> {
                                 node.pane_idx,
                             );
 
-                            node.textured_quad = tq.clone();
-                            node.base_textured_quad = tq;
+                            node.textured_quad = tq;
                         }
                         return;
                     }
@@ -1672,6 +1756,7 @@ impl<'a> Builder<'a> {
 
 fn resolve_rect(
     pane: &Pane,
+    transform: &ResolvedPaneTransform,
     parent_center: Vector2f,
     parent_size: Vector2f,
     parent_scale: Vector2f,
@@ -1688,11 +1773,11 @@ fn resolve_rect(
         VerticalPosition::Bottom => parent_center.y + parent_size.y * 0.5,
     };
 
-    let cx = anchor_x + pane.translation.x * parent_scale.x;
-    let cy = anchor_y - pane.translation.y * parent_scale.y;
+    let cx = anchor_x + transform.translation.x * parent_scale.x;
+    let cy = anchor_y - transform.translation.y * parent_scale.y;
 
-    let w = pane.size.x * pane.scale.x * parent_scale.x;
-    let h = pane.size.y * pane.scale.y * parent_scale.y;
+    let w = transform.size.x * transform.scale.x * parent_scale.x;
+    let h = transform.size.y * transform.scale.y * parent_scale.y;
 
     let tl_x = match pane.position.position_x {
         HorizontalPosition::Center => cx - w * 0.5,

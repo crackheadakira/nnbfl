@@ -13,6 +13,8 @@ use wgpu::{BindGroupLayout, TextureView};
 
 use super::quad::Quad;
 use super::texture::TextureCache;
+use crate::anim_state::{MaterialAnimation, PaneAnimation};
+use crate::font::glyph_atlas::GLYPH_ATLAS_TEXTURE_NAME;
 use crate::pane_tree::PaneNode;
 use crate::renderer::quad::Uniforms;
 use crate::ui::general::PaneVisibilityFlags;
@@ -180,6 +182,19 @@ impl WgpuSamplerSettings {
 }
 
 #[derive(Clone, Debug)]
+pub struct QuadAppearance {
+    pub material_name: String,
+    pub texture_names: [Option<String>; 3],
+    pub tex_srts: Vec<MaterialTextureSrt>,
+    pub corner_tints: [[f32; 4]; 4],
+    pub black_color: u32,
+    pub white_color: u32,
+    pub packed_alpha_flags: u32,
+    pub indirect_rotation: f32,
+    pub indirect_scale: Vector2f,
+}
+
+#[derive(Clone, Debug)]
 pub struct TexturedQuad {
     pub pane_idx: usize,
     pub x: f32,
@@ -215,6 +230,8 @@ pub struct TexturedQuad {
 
     pub indirect_rotation: f32,
     pub indirect_scale: Vector2f,
+
+    pub base_appearance: QuadAppearance,
 }
 
 pub fn build_indirect_matrices(rotation_deg: f32, scale: Vector2f) -> ([f32; 4], [f32; 4]) {
@@ -303,12 +320,13 @@ impl TexturedQuad {
             return None;
         }
 
-        let base_uvs = PaneNode::compute_uvs(pane_data.texture_uvs);
+        let mut base_uvs = PaneNode::compute_uvs(pane_data.texture_uvs);
         let mut uvs = PaneNode::apply_srt_to_uvs(base_uvs, &mat.tex_srts);
 
         if let Some(glyph) = &glyph_override {
             for (idx, corner) in uvs.iter_mut().enumerate() {
                 corner[0] = glyph.uvs[idx];
+                base_uvs[idx][0] = glyph.uvs[idx];
             }
         }
 
@@ -511,7 +529,135 @@ impl TexturedQuad {
             material_idx: pane_data.material_idx,
             piece_id: pane_data.piece_id,
             rotation: pane_data.rotation,
+            base_appearance: QuadAppearance {
+                material_name: mat.material_name.trim_end_matches('\0').to_string(),
+                texture_names: [Some(tex_name.to_string()), get_name(1), get_name(2)],
+                tex_srts: mat.tex_srts.clone(),
+                corner_tints: pane_data.corner_tints,
+                black_color: black_packed,
+                white_color: white_packed,
+                packed_alpha_flags,
+                indirect_rotation,
+                indirect_scale,
+            },
         })
+    }
+
+    pub fn apply_animation(
+        &mut self,
+        pane: &PaneAnimation,
+        material: Option<&MaterialAnimation>,
+        alpha: f32,
+        visible: bool,
+    ) {
+        let base = &self.base_appearance;
+        let default_material = MaterialAnimation::default();
+        let material = material.unwrap_or(&default_material);
+
+        self.standard_material.visible = visible as u32;
+        self.tint[3] = alpha;
+
+        for (corner_idx, corner) in self.corner_tints.iter_mut().enumerate() {
+            for (channel, value) in corner.iter_mut().enumerate() {
+                *value = pane.corner_colors[corner_idx][channel]
+                    .unwrap_or(base.corner_tints[corner_idx][channel]);
+            }
+        }
+
+        let texture_name = if base.texture_names[0].as_deref() == Some(GLYPH_ATLAS_TEXTURE_NAME) {
+            base.texture_names[0].as_ref()
+        } else {
+            material.texture_names[0]
+                .as_ref()
+                .or(base.texture_names[0].as_ref())
+        };
+
+        if let Some(name) = texture_name
+            && self.texture_name != *name
+        {
+            self.texture_name.clone_from(name);
+        }
+
+        for (layer, name) in [(1, &mut self.texture_name1), (2, &mut self.texture_name2)] {
+            let resolved = material.texture_names[layer]
+                .as_ref()
+                .or(base.texture_names[layer].as_ref());
+            if name.as_ref() != resolved {
+                *name = resolved.cloned();
+            }
+        }
+
+        for (layer, base_srt) in base.tex_srts.iter().enumerate().take(3) {
+            let srt = material.texture_srts[layer].resolve(base_srt);
+            let previous = &self.tex_srts[layer];
+            if [
+                srt.translate_u,
+                srt.translate_v,
+                srt.rotate,
+                srt.scale_u,
+                srt.scale_v,
+            ] != [
+                previous.translate_u,
+                previous.translate_v,
+                previous.rotate,
+                previous.scale_u,
+                previous.scale_v,
+            ] {
+                for (corner, base_corner) in self.uvs.iter_mut().zip(self.base_uvs) {
+                    if layer != 0
+                        || base.texture_names[0].as_deref() != Some(GLYPH_ATLAS_TEXTURE_NAME)
+                    {
+                        corner[layer] =
+                            crate::anim_state::transform_uv_srt(&srt, base_corner[layer]);
+                    }
+                }
+                self.tex_srts[layer] = srt;
+            }
+        }
+
+        let rotation = material.indirect_rotation.unwrap_or(base.indirect_rotation);
+        let scale = Vector2f::new(
+            material.indirect_scale[0].unwrap_or(base.indirect_scale.x),
+            material.indirect_scale[1].unwrap_or(base.indirect_scale.y),
+        );
+
+        if rotation != self.indirect_rotation || scale != self.indirect_scale {
+            self.indirect_rotation = rotation;
+            self.indirect_scale = scale;
+            let (m0, m1) = build_indirect_matrices(rotation, scale);
+            self.standard_material.indirect_mtx0 = m0;
+            self.standard_material.indirect_mtx1 = m1;
+        }
+
+        self.standard_material.packed_alpha_flags = base.packed_alpha_flags;
+
+        if let Some(reference) = material.alpha_reference {
+            let reference = (reference.clamp(0.0, 1.0) * 255.0).round() as u32;
+
+            self.standard_material.packed_alpha_flags =
+                (base.packed_alpha_flags & !(0xFF << 3)) | (reference << 3);
+        }
+
+        for (packed, base_color, channels) in [
+            (
+                &mut self.standard_material.black_color,
+                base.black_color,
+                material.black_color,
+            ),
+            (
+                &mut self.standard_material.white_color,
+                base.white_color,
+                material.white_color,
+            ),
+        ] {
+            *packed = base_color;
+            for (channel, value) in channels.into_iter().enumerate() {
+                if let Some(value) = value {
+                    let shift = channel * 8;
+                    *packed = (*packed & !(0xFF << shift)) | ((value as u32) << shift);
+                }
+            }
+        }
     }
 }
 
