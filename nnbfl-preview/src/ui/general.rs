@@ -59,7 +59,7 @@ pub struct UiState {
 impl UiState {
     pub fn reset(&mut self) {
         self.pane_tree_view.hidden_panes.clear();
-        self.pane_tree_view.selected_pane = None;
+        self.pane_tree_view.select(None);
     }
 }
 
@@ -129,8 +129,8 @@ pub enum UiAction {
     SwitchActiveTab,
     PurgeUnusedTexturesAndSwitch(bool),
 
-    DeletePane(PaneId),
-    DuplicatePane(PaneId),
+    DeletePanes(Vec<PaneId>),
+    DuplicatePanes(Vec<PaneId>),
     RenamePane {
         target_idx: PaneId,
         name: String,
@@ -142,8 +142,8 @@ pub enum UiAction {
         kind: NewPaneKind,
     },
 
-    MovePane {
-        source_idx: PaneId,
+    MovePanes {
+        sources: Vec<PaneId>,
         new_parent: Option<PaneId>,
         anchor: Anchor,
     },
@@ -278,22 +278,23 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
     if let Some(layout) = ctx.layout_tabs.active()
         && let Some(node) = layout.tree.find_by_idx(ctx.ui_state.context_menu.pane_idx)
     {
+        let pane_idx = ctx.ui_state.context_menu.pane_idx;
+
         let state = ContextMenuState {
             node,
-            is_hidden: ctx
-                .ui_state
-                .pane_tree_view
-                .hidden_panes
-                .contains(&ctx.ui_state.context_menu.pane_idx),
+            is_hidden: ctx.ui_state.pane_tree_view.hidden_panes.contains(&pane_idx),
+            targets: ctx.ui_state.pane_tree_view.targets(pane_idx),
         };
 
         if let Some(action) = ctx.ui_state.context_menu.draw_with(ui, state) {
             match action {
-                ContextMenuAction::HidePane(pane_idx) => {
-                    ctx.ui_state.pane_tree_view.hidden_panes.insert(pane_idx);
+                ContextMenuAction::HidePanes(panes) => {
+                    ctx.ui_state.pane_tree_view.hidden_panes.extend(panes);
                 }
-                ContextMenuAction::ShowPane(pane_idx) => {
-                    ctx.ui_state.pane_tree_view.hidden_panes.remove(&pane_idx);
+                ContextMenuAction::ShowPanes(panes) => {
+                    for pane in &panes {
+                        ctx.ui_state.pane_tree_view.hidden_panes.remove(pane);
+                    }
                 }
                 ContextMenuAction::Action(ui_action) => {
                     ctx.ui_state.pending_action = Some(ui_action);

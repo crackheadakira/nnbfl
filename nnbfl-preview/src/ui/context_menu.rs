@@ -22,11 +22,12 @@ impl ContextMenu {
 pub struct ContextMenuState<'a> {
     pub node: &'a PaneNode,
     pub is_hidden: bool,
+    pub targets: Vec<PaneId>,
 }
 
 pub enum ContextMenuAction {
-    HidePane(PaneId),
-    ShowPane(PaneId),
+    HidePanes(Vec<PaneId>),
+    ShowPanes(Vec<PaneId>),
     Action(UiAction),
 }
 
@@ -42,7 +43,6 @@ impl DrawUiWith<ContextMenuState<'_>, Option<ContextMenuAction>> for ContextMenu
             return out_action;
         };
 
-        let pane_idx = self.pane_idx;
         let pos = self.pos;
 
         let label = state.node.label.trim_end_matches("\0");
@@ -58,11 +58,14 @@ impl DrawUiWith<ContextMenuState<'_>, Option<ContextMenuAction>> for ContextMenu
                 ui.separator();
 
                 let hidden = state.is_hidden;
+                
                 if ui.button(if hidden { "Show" } else { "Hide" }).clicked() {
+                    let targets = state.targets.clone();
+                    
                     if hidden {
-                        out_action = Some(ContextMenuAction::ShowPane(pane_idx));
+                        out_action = Some(ContextMenuAction::ShowPanes(targets));
                     } else {
-                        out_action = Some(ContextMenuAction::HidePane(pane_idx));
+                        out_action = Some(ContextMenuAction::HidePanes(targets));
                     }
                 }
 
@@ -72,7 +75,7 @@ impl DrawUiWith<ContextMenuState<'_>, Option<ContextMenuAction>> for ContextMenu
                     ui.weak("Part of a linked layout - edit it via the PartsPane's overrides, not directly.");
                 } else {
                     if ui.button("Duplicate").clicked() {
-                        out_action = Some(ContextMenuAction::Action(UiAction::DuplicatePane(pane_idx)))
+                        out_action = Some(ContextMenuAction::Action(UiAction::DuplicatePanes(state.targets.clone())))
                     }
 
                     if ui
@@ -82,7 +85,7 @@ impl DrawUiWith<ContextMenuState<'_>, Option<ContextMenuAction>> for ContextMenu
                         ))
                         .clicked()
                     {
-                        out_action = Some(ContextMenuAction::Action(UiAction::DeletePane(pane_idx)));
+                        out_action = Some(ContextMenuAction::Action(UiAction::DeletePanes(state.targets.clone())));
                     }
                 }
             });

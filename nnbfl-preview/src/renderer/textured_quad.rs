@@ -1297,7 +1297,7 @@ impl PaneRenderer {
         batch: &mut Batch,
         quad_lookup: &HashMap<(PaneId, usize), usize>,
         ordered: &[PaneQuadData],
-        selected_idx: Option<PaneId>,
+        selected: &[PaneId],
         hidden_panes: &HashSet<PaneId>,
         flags: PaneVisibilityFlags,
     ) -> bool {
@@ -1318,13 +1318,13 @@ impl PaneRenderer {
             };
 
             let hidden = hidden_panes.contains(&pane_idx);
-            let selected = Some(pane_idx) == selected_idx;
+            let is_selected = selected.contains(&pane_idx);
 
             let tint = match data {
                 PaneQuadData::Plain(q) => {
                     let base_tint = flags.plain_color(q, hidden);
 
-                    if selected && !hidden {
+                    if is_selected && !hidden {
                         highlight(base_tint)
                     } else {
                         base_tint
@@ -1620,7 +1620,7 @@ impl PaneRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ordered: &mut [PaneQuadData],
-        selected_idx: Option<PaneId>,
+        selected: &[PaneId],
         hidden_panes: &HashSet<PaneId>,
         flags: PaneVisibilityFlags,
         texture_cache: &TextureCache,
@@ -1666,7 +1666,7 @@ impl PaneRenderer {
                         batch,
                         &self.quad_lookup,
                         ordered,
-                        selected_idx,
+                        selected,
                         hidden_panes,
                         flags,
                     );

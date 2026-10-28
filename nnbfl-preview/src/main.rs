@@ -48,7 +48,7 @@ use crate::{
     edit_history::EditHistory,
     error::LoadError,
     font::glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
-    pane_tree::{PaneId, PaneTree},
+    pane_tree::{Anchor, PaneId, PaneTree},
     renderer::{
         selection::{Handle, SelectionRenderer, point_in_quad},
         texture::{TexturePreviewData, TexturePreviewPipeline},
@@ -303,7 +303,7 @@ impl GpuState {
                 &self.texture_cache,
                 layout,
                 &render::FrameView {
-                    selected: ctx.ui_state.pane_tree_view.selected_pane,
+                    selected: &ctx.ui_state.pane_tree_view.selection,
                     hidden: &ctx.ui_state.pane_tree_view.hidden_panes,
                     flags: ctx.ui_state.visiblity_flags,
                 },
@@ -436,6 +436,9 @@ pub struct RenderContext<'a> {
 struct DragState {
     pane_idx: PaneId,
     handle: Handle,
+    start_screen: [f32; 2],
+    moved: bool,
+    cycles: bool,
     start_world: [f32; 2],
     start_translation: Vector3f,
     start_size: Vector2f,
@@ -823,6 +826,9 @@ impl App {
         self.drag_state = Some(DragState {
             pane_idx: idx,
             handle,
+            start_screen: screen_pos,
+            moved: false,
+            cycles: matches!(handle, Handle::Body),
             start_world: world_pos,
             start_translation: translation,
             start_size: size,
@@ -833,6 +839,21 @@ impl App {
     }
 
     fn update_drag(&mut self, screen_pos: [f32; 2]) {
+        const DEAD_ZONE: f32 = 4.0;
+
+        if let Some(drag) = &mut self.drag_state
+            && !drag.moved
+        {
+            let dx = screen_pos[0] - drag.start_screen[0];
+            let dy = screen_pos[1] - drag.start_screen[1];
+
+            if dx * dx + dy * dy < DEAD_ZONE * DEAD_ZONE {
+                return;
+            }
+
+            drag.moved = true;
+        }
+
         let Some(drag) = &self.drag_state else { return };
 
         let Some(layout) = self.tabs.active_mut() else {
@@ -943,6 +964,14 @@ impl App {
             return;
         };
 
+        if !drag.moved {
+            if drag.cycles {
+                self.select_below(self.camera.cursor_screen, drag.pane_idx);
+            }
+
+            return;
+        }
+
         let Some(layout) = self.tabs.active_mut() else {
             return;
         };
@@ -973,15 +1002,37 @@ impl App {
     }
 
     fn try_select_at(&mut self, screen_pos: [f32; 2]) {
+        let pane = self.pane_at(screen_pos);
+        self.ui_state.pane_tree_view.select(pane);
+    }
+
+    fn select_below(&mut self, screen_pos: [f32; 2], current: PaneId) {
+        let stack = self.panes_at(screen_pos);
+
+        let next = match stack.iter().position(|&p| p == current) {
+            Some(i) => stack.get((i + 1) % stack.len()).copied(),
+            None => stack.first().copied(),
+        };
+
+        if next.is_some() {
+            self.ui_state.pane_tree_view.select(next);
+        }
+    }
+
+    fn pane_at(&self, screen_pos: [f32; 2]) -> Option<PaneId> {
+        self.panes_at(screen_pos).first().copied()
+    }
+
+    fn panes_at(&self, screen_pos: [f32; 2]) -> Vec<PaneId> {
         let Some(layout) = self.tabs.active() else {
-            return;
+            return Vec::new();
         };
 
         puffin::profile_function!();
 
         let world_pos = self.camera.screen_to_world(screen_pos);
 
-        let mut best = None;
+        let mut stack = Vec::new();
 
         for node in layout.tree.iter() {
             if !node.visible
@@ -1000,10 +1051,11 @@ impl App {
                 continue;
             }
 
-            best = Some(node.pane_idx);
+            stack.push(node.pane_idx);
         }
 
-        self.ui_state.pane_tree_view.select(best);
+        stack.reverse();
+        stack
     }
 
     fn open_document(&mut self, path: &Path, scope: EntryPath, layout: Option<EntryPath>) {
@@ -1146,7 +1198,7 @@ impl App {
 
     fn switch_active_tab(&mut self) {
         self.ui_state.anim_names = self.tabs.active_anim_names();
-        self.ui_state.pane_tree_view.selected_pane = None;
+        self.ui_state.pane_tree_view.select(None);
 
         if let Some(gpu) = &mut self.gpu {
             self.tabs
@@ -1190,7 +1242,7 @@ impl App {
     }
 
     fn clear_active_view(&mut self) {
-        self.ui_state.pane_tree_view.selected_pane = None;
+        self.ui_state.pane_tree_view.select(None);
         self.ui_state.texture_editor.selected_texture = None;
         self.ui_state.anim_names.clear();
 
@@ -1212,29 +1264,42 @@ impl App {
     }
 
     fn perform_pane_edit(&mut self, edit: edit_history::PaneEdit) {
+        self.perform_pane_edits(|_| vec![edit]);
+    }
+
+    fn perform_pane_edits(&mut self, edits: impl FnOnce(&PaneTree) -> Vec<edit_history::PaneEdit>) {
         let Some(layout) = self.tabs.active_mut() else {
             return;
         };
 
-        let target_idx = match &edit {
-            edit_history::PaneEdit::Delete { target_idx } => Some(*target_idx),
-            edit_history::PaneEdit::Duplicate { source_idx } => Some(*source_idx),
-            edit_history::PaneEdit::Add { parent, .. } => *parent,
-            edit_history::PaneEdit::Move { source_idx, .. } => Some(*source_idx),
-            edit_history::PaneEdit::Rename { target_idx, .. } => Some(*target_idx),
-        };
-
-        if let Some(idx) = target_idx
-            && layout
+        let is_parts_content = |idx: PaneId| {
+            layout
                 .tree
                 .find_by_idx(idx)
                 .is_some_and(|n| n.parts_source.is_some())
-        {
+        };
+
+        let edits: Vec<_> = edits(&layout.tree)
+            .into_iter()
+            .filter(|edit| {
+                let target_idx = match edit {
+                    edit_history::PaneEdit::Delete { target_idx } => Some(*target_idx),
+                    edit_history::PaneEdit::Duplicate { source_idx } => Some(*source_idx),
+                    edit_history::PaneEdit::Add { parent, .. } => *parent,
+                    edit_history::PaneEdit::Move { source_idx, .. } => Some(*source_idx),
+                    edit_history::PaneEdit::Rename { target_idx, .. } => Some(*target_idx),
+                };
+
+                !target_idx.is_some_and(is_parts_content)
+            })
+            .collect();
+
+        if edits.is_empty() {
             return;
         }
 
-        let resulting_idx = layout.history.perform(&mut layout.tree, edit);
-        self.ui_state.pane_tree_view.select(resulting_idx);
+        let resulting = layout.history.perform_all(&mut layout.tree, edits);
+        self.ui_state.pane_tree_view.select_many(resulting);
 
         self.after_structural_edit();
     }
@@ -1249,9 +1314,7 @@ impl App {
         let tree_view = &mut self.ui_state.pane_tree_view;
         tree_view.hidden_panes.retain(exists);
 
-        if tree_view.selected_pane.is_some_and(|id| !exists(&id)) {
-            tree_view.select(None);
-        }
+        tree_view.retain(exists);
 
         layout.tree.recompute_dirty();
         layout.tree.recompute_dirty_materials(&mut tabs.glyphs);
@@ -1609,13 +1672,19 @@ impl ApplicationHandler for App {
                     self.perform_pane_edit(edit_history::PaneEdit::Rename { target_idx, name })
                 }
 
-                UiAction::DeletePane(target_idx) => {
-                    self.perform_pane_edit(edit_history::PaneEdit::Delete { target_idx })
-                }
+                UiAction::DeletePanes(panes) => self.perform_pane_edits(|tree| {
+                    tree.selection_roots(&panes)
+                        .into_iter()
+                        .map(|target_idx| edit_history::PaneEdit::Delete { target_idx })
+                        .collect()
+                }),
 
-                UiAction::DuplicatePane(source_idx) => {
-                    self.perform_pane_edit(edit_history::PaneEdit::Duplicate { source_idx })
-                }
+                UiAction::DuplicatePanes(panes) => self.perform_pane_edits(|tree| {
+                    tree.selection_roots(&panes)
+                        .into_iter()
+                        .map(|source_idx| edit_history::PaneEdit::Duplicate { source_idx })
+                        .collect()
+                }),
 
                 UiAction::AddPane {
                     parent,
@@ -1627,28 +1696,39 @@ impl ApplicationHandler for App {
                     kind,
                 }),
 
-                UiAction::MovePane {
-                    source_idx,
+                UiAction::MovePanes {
+                    sources,
                     new_parent,
                     anchor,
-                } => self.perform_pane_edit(edit_history::PaneEdit::Move {
-                    source_idx,
-                    new_parent,
-                    anchor,
+                } => self.perform_pane_edits(|tree| {
+                    let mut anchor = anchor;
+
+                    tree.selection_roots(&sources)
+                        .into_iter()
+                        .map(|source_idx| {
+                            let edit = edit_history::PaneEdit::Move {
+                                source_idx,
+                                new_parent,
+                                anchor,
+                            };
+                            anchor = Anchor::After(source_idx);
+                            edit
+                        })
+                        .collect()
                 }),
 
                 UiAction::Undo => {
                     if let Some(layout) = self.tabs.active_mut() {
-                        let resulting_idx = layout.history.undo(&mut layout.tree);
-                        self.ui_state.pane_tree_view.select(resulting_idx);
+                        let resulting = layout.history.undo(&mut layout.tree);
+                        self.ui_state.pane_tree_view.select_many(resulting);
                         self.after_structural_edit();
                     }
                 }
 
                 UiAction::Redo => {
                     if let Some(layout) = self.tabs.active_mut() {
-                        let resulting_idx = layout.history.redo(&mut layout.tree);
-                        self.ui_state.pane_tree_view.select(resulting_idx);
+                        let resulting = layout.history.redo(&mut layout.tree);
+                        self.ui_state.pane_tree_view.select_many(resulting);
                         self.after_structural_edit();
                     }
                 }
@@ -1684,15 +1764,26 @@ impl ApplicationHandler for App {
                     if !egui_wants_pointer {
                         let pos = self.camera.cursor_screen;
 
-                        self.egui_ctx.input(|i| {
-                            if i.key_down(egui::Key::Space) {
-                                self.camera.start_pan(pos);
-                            }
-                        });
+                        let (space, toggle) = self
+                            .egui_ctx
+                            .input(|i| (i.key_down(egui::Key::Space), i.modifiers.command));
 
-                        if !self.try_start_drag(pos) && !self.camera.is_panning {
+                        if space {
+                            self.camera.start_pan(pos);
+                        }
+
+                        if toggle && !space {
+                            if let Some(pane) = self.pane_at(pos) {
+                                self.ui_state.pane_tree_view.toggle(pane);
+                            }
+                        } else if !self.try_start_drag(pos) && !self.camera.is_panning {
                             self.try_select_at(pos);
-                            self.try_start_drag(pos);
+
+                            if self.try_start_drag(pos)
+                                && let Some(drag) = &mut self.drag_state
+                            {
+                                drag.cycles = false;
+                            }
                         }
                     }
                 }

@@ -1038,6 +1038,29 @@ impl PaneTree {
         })
     }
 
+    pub fn selection_roots(&self, panes: &[PaneId]) -> Vec<PaneId> {
+        let listed: HashSet<PaneId> = panes.iter().copied().collect();
+
+        let has_listed_ancestor = |pane: PaneId| {
+            let mut current = self.parent_map.get(&pane).copied().flatten();
+
+            while let Some(parent) = current {
+                if listed.contains(&parent) {
+                    return true;
+                }
+                current = self.parent_map.get(&parent).copied().flatten();
+            }
+
+            false
+        };
+
+        self.iter()
+            .filter(|n| listed.contains(&n.pane_idx) && n.parts_source.is_none())
+            .map(|n| n.pane_idx)
+            .filter(|&pane| !has_listed_ancestor(pane))
+            .collect()
+    }
+
     pub fn can_add(&self, parent: Option<PaneId>, kind: NewPaneKind) -> bool {
         let fonts = self.font_list.as_ref().is_some_and(|f| !f.fonts.is_empty());
 

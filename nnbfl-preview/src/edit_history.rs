@@ -353,18 +353,25 @@ impl AppliedCommand {
         }
     }
 
-    pub fn resulting_pane_idx(&self) -> Option<PaneId> {
+    pub fn resulting_panes(&self) -> Vec<PaneId> {
         match self {
-            AppliedCommand::Inserted(idx) => Some(*idx),
-            AppliedCommand::Removed(_) => None,
-            AppliedCommand::Transformed { pane_idx, .. } => Some(*pane_idx),
-            AppliedCommand::Moved { pane_idx, .. } => Some(*pane_idx),
-            AppliedCommand::ReplacePane { pane_idx, .. } => Some(*pane_idx),
-            AppliedCommand::ReplaceLayoutMeta { .. } => None,
-            AppliedCommand::Batch(commands) => commands
-                .iter()
-                .rev()
-                .find_map(AppliedCommand::resulting_pane_idx),
+            AppliedCommand::Inserted(idx) => vec![*idx],
+            AppliedCommand::Removed(_) => Vec::new(),
+            AppliedCommand::Transformed { pane_idx, .. } => vec![*pane_idx],
+            AppliedCommand::Moved { pane_idx, .. } => vec![*pane_idx],
+            AppliedCommand::ReplacePane { pane_idx, .. } => vec![*pane_idx],
+            AppliedCommand::ReplaceLayoutMeta { .. } => Vec::new(),
+            AppliedCommand::Batch(commands) => {
+                let mut panes = Vec::new();
+
+                for pane in commands.iter().flat_map(AppliedCommand::resulting_panes) {
+                    if !panes.contains(&pane) {
+                        panes.push(pane);
+                    }
+                }
+
+                panes
+            }
         }
     }
 }
@@ -384,33 +391,56 @@ impl EditHistory {
         }
     }
 
-    pub fn perform(&mut self, tree: &mut PaneTree, edit: PaneEdit) -> Option<PaneId> {
-        let applied = edit.apply(tree)?;
-        let resulting_idx = applied.resulting_pane_idx();
-
-        self.record(applied);
-
-        resulting_idx
+    pub fn perform(&mut self, tree: &mut PaneTree, edit: PaneEdit) -> Vec<PaneId> {
+        self.perform_all(tree, vec![edit])
     }
 
-    pub fn undo(&mut self, tree: &mut PaneTree) -> Option<PaneId> {
-        let applied = self.undo_stack.pop()?;
-        let inverse = applied.invert(tree)?;
+    pub fn perform_all(&mut self, tree: &mut PaneTree, edits: Vec<PaneEdit>) -> Vec<PaneId> {
+        let mut applied: Vec<AppliedCommand> = edits
+            .into_iter()
+            .filter_map(|edit| edit.apply(tree))
+            .collect();
 
-        let resulting_idx = inverse.resulting_pane_idx();
+        let command = match applied.len() {
+            0 => return Vec::new(),
+            1 => applied.remove(0),
+            _ => AppliedCommand::Batch(applied),
+        };
+
+        let panes = command.resulting_panes();
+        self.record(command);
+
+        panes
+    }
+
+    pub fn undo(&mut self, tree: &mut PaneTree) -> Vec<PaneId> {
+        let Some(applied) = self.undo_stack.pop() else {
+            return Vec::new();
+        };
+
+        let Some(inverse) = applied.invert(tree) else {
+            return Vec::new();
+        };
+
+        let panes = inverse.resulting_panes();
         self.redo_stack.push(inverse);
 
-        resulting_idx
+        panes
     }
 
-    pub fn redo(&mut self, tree: &mut PaneTree) -> Option<PaneId> {
-        let applied = self.redo_stack.pop()?;
-        let inverse = applied.invert(tree)?;
+    pub fn redo(&mut self, tree: &mut PaneTree) -> Vec<PaneId> {
+        let Some(applied) = self.redo_stack.pop() else {
+            return Vec::new();
+        };
 
-        let resulting_idx = inverse.resulting_pane_idx();
+        let Some(inverse) = applied.invert(tree) else {
+            return Vec::new();
+        };
+
+        let panes = inverse.resulting_panes();
         self.push_undo(inverse);
 
-        resulting_idx
+        panes
     }
 
     fn push_undo(&mut self, applied: AppliedCommand) {

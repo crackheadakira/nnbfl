@@ -219,7 +219,7 @@ impl OffscreenRenderer {
             &self.texture_cache,
             layout,
             &FrameView {
-                selected: None,
+                selected: &[],
                 hidden: &HashSet::new(),
                 flags: settings.flags,
             },

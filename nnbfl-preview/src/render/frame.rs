@@ -8,7 +8,7 @@ use crate::{
 };
 
 pub struct FrameView<'a> {
-    pub selected: Option<PaneId>,
+    pub selected: &'a [PaneId],
     pub hidden: &'a HashSet<PaneId>,
     pub flags: PaneVisibilityFlags,
 }

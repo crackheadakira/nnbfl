@@ -164,7 +164,7 @@ fn apply(action: Action, state: &mut UiState, timeline: Option<&mut TimelineStat
         }
 
         Action::Deselect => {
-            state.pane_tree_view.selected_pane = None;
+            state.pane_tree_view.select(None);
             state.context_menu.is_open = false;
         }
 
@@ -176,14 +176,16 @@ fn apply(action: Action, state: &mut UiState, timeline: Option<&mut TimelineStat
         }
 
         Action::DeleteSelected => {
-            if let Some(pane_idx) = state.pane_tree_view.selected_pane {
-                state.pending_action = Some(UiAction::DeletePane(pane_idx));
+            if !state.pane_tree_view.selection.is_empty() {
+                let panes = state.pane_tree_view.selection.clone();
+                state.pending_action = Some(UiAction::DeletePanes(panes));
             }
         }
 
         Action::DuplicateSelected => {
-            if let Some(pane_idx) = state.pane_tree_view.selected_pane {
-                state.pending_action = Some(UiAction::DuplicatePane(pane_idx));
+            if !state.pane_tree_view.selection.is_empty() {
+                let panes = state.pane_tree_view.selection.clone();
+                state.pending_action = Some(UiAction::DuplicatePanes(panes));
             }
         }
 
