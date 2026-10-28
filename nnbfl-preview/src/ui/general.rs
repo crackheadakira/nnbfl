@@ -129,6 +129,10 @@ pub enum UiAction {
 
     DeletePane(PaneId),
     DuplicatePane(PaneId),
+    RenamePane {
+        target_idx: PaneId,
+        name: String,
+    },
 
     MovePane {
         source_idx: PaneId,
@@ -719,12 +723,25 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
             }
         }
 
-        if let Some(idx) = ctx.ui_state.pane_tree_view.selected_pane
-            && let Some(node) = layout.tree.find_by_idx_mut(idx)
-            && ctx.ui_state.pane_editor.draw_with(ui, node)
-        {
-            node.dirty.insert(DirtyFlags::MATERIAL);
-            materials_changed = true;
+        if let Some(idx) = ctx.ui_state.pane_tree_view.selected_pane {
+            let editor = &mut ctx.ui_state.pane_editor;
+            let name_error = editor
+                .pending_name(idx)
+                .and_then(|name| layout.tree.pane_name_error(name, Some(idx)));
+
+            if let Some(node) = layout.tree.find_by_idx_mut(idx)
+                && editor.draw_with(ui, (node, name_error.as_deref()))
+            {
+                node.dirty.insert(DirtyFlags::MATERIAL);
+                materials_changed = true;
+            }
+
+            if let Some(name) = editor.take_rename() {
+                ctx.ui_state.pending_action = Some(UiAction::RenamePane {
+                    target_idx: idx,
+                    name,
+                });
+            }
         }
 
         if materials_changed {

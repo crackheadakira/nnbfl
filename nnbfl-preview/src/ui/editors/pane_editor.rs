@@ -7,30 +7,84 @@ use nnbfl::{
 };
 
 use crate::{
-    pane_tree::PaneNode,
+    pane_tree::{PaneId, PaneNode},
     ui::{DrawUi, DrawUiWith},
 };
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct PaneEditor {
     pub is_editor_visible: bool,
+    name: Option<(PaneId, String, String)>,
+    rename: Option<String>,
 }
 
-impl DrawUiWith<&mut PaneNode> for PaneEditor {
-    fn draw_with(&mut self, ui: &mut egui::Ui, pane: &mut PaneNode) -> bool {
+impl PaneEditor {
+    pub fn pending_name(&self, pane: PaneId) -> Option<&str> {
+        self.name
+            .as_ref()
+            .filter(|(id, _, _)| *id == pane)
+            .map(|(_, _, typed)| typed.as_str())
+    }
+
+    pub fn take_rename(&mut self) -> Option<String> {
+        self.rename.take()
+    }
+}
+
+impl DrawUiWith<(&mut PaneNode, Option<&str>)> for PaneEditor {
+    fn draw_with(
+        &mut self,
+        ui: &mut egui::Ui,
+        (pane, name_error): (&mut PaneNode, Option<&str>),
+    ) -> bool {
         let mut changed = false;
+        let mut is_open = self.is_editor_visible;
 
         egui::Window::new("Detailed Pane Editor")
             .collapsible(false)
             .resizable(true)
-            .open(&mut self.is_editor_visible)
+            .open(&mut is_open)
             .show(ui, |ui| {
                 ui.heading("Pane Name");
 
-                ui.horizontal(|ui| {
-                    ui.label("Name:");
-                    ui.add(egui::TextEdit::singleline(&mut pane.label).char_limit(PANE_NAME_LEN));
-                });
+                let label = pane.label.trim_end_matches('\0');
+
+                if self
+                    .name
+                    .as_ref()
+                    .is_none_or(|(id, was, _)| *id != pane.pane_idx || was != label)
+                {
+                    self.name = Some((pane.pane_idx, label.to_string(), label.to_string()));
+                }
+
+                if pane.parts_source.is_some() {
+                    ui.label(format!("Name: {label} (from the parts layout)"));
+                } else if let Some((_, _, typed)) = &mut self.name {
+                    ui.horizontal(|ui| {
+                        ui.label("Name:");
+                        let response =
+                            ui.add(egui::TextEdit::singleline(typed).char_limit(PANE_NAME_LEN));
+
+                        let entered =
+                            response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+                        let can_rename = typed != label && name_error.is_none();
+
+                        if ui
+                            .add_enabled(can_rename, egui::Button::new("Rename"))
+                            .clicked()
+                            || (entered && can_rename)
+                        {
+                            self.rename = Some(typed.clone());
+                        }
+                    });
+
+                    if typed != label
+                        && let Some(error) = name_error
+                    {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                    }
+                }
 
                 ui.separator();
 
@@ -77,6 +131,7 @@ impl DrawUiWith<&mut PaneNode> for PaneEditor {
                 }
             });
 
+        self.is_editor_visible = is_open;
         changed
     }
 }

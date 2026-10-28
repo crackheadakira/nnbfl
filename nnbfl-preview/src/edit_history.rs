@@ -1,8 +1,19 @@
+use std::collections::HashSet;
+
 use crate::pane_tree::PaneId;
-use nnbfl::ui2d::types::{Vector2f, Vector3f};
+use nnbfl::{
+    bflyt::{
+        file::{BflytSection, ControlSourceElement, GroupElement},
+        list::MaterialList,
+    },
+    ui2d::{
+        types::{Vector2f, Vector3f},
+        userdata::UserDataArray,
+    },
+};
 
 use crate::{
-    pane_tree::{PaneNode, PaneTree},
+    pane_tree::{DirtyFlags, PaneNode, PaneTree},
     traits::Displaying,
 };
 
@@ -30,6 +41,10 @@ pub enum PaneEdit {
         new_parent: Option<PaneId>,
         position: usize,
     },
+    Rename {
+        target_idx: PaneId,
+        name: String,
+    },
 }
 
 impl PaneEdit {
@@ -37,12 +52,28 @@ impl PaneEdit {
         match self {
             PaneEdit::Delete { target_idx } => {
                 let (parent_idx, position) = tree.sibling_position(target_idx)?;
+                let meta_before = LayoutMeta::of(tree);
                 let node = tree.remove_node(target_idx)?;
-                Some(AppliedCommand::Removed(Box::new(PendingRemoval {
-                    parent_idx,
-                    position,
-                    node,
-                })))
+
+                let names: HashSet<String> = node
+                    .iter()
+                    .filter(|n| n.parts_source.is_none())
+                    .map(|n| n.label.trim_end_matches('\0').to_string())
+                    .collect();
+
+                tree.drop_references(&names);
+
+                Some(AppliedCommand::Batch(vec![
+                    AppliedCommand::Removed(Box::new(PendingRemoval {
+                        parent_idx,
+                        position,
+                        node,
+                    })),
+                    AppliedCommand::ReplaceLayoutMeta {
+                        before: Box::new(meta_before),
+                        after: Box::new(LayoutMeta::of(tree)),
+                    },
+                ]))
             }
 
             PaneEdit::Duplicate { source_idx } => {
@@ -73,6 +104,73 @@ impl PaneEdit {
                     old_position,
                 })
             }
+
+            PaneEdit::Rename { target_idx, name } => {
+                if tree.pane_name_error(&name, Some(target_idx)).is_some() {
+                    return None;
+                }
+
+                let node = tree.find_by_idx(target_idx)?;
+                if node.parts_source.is_some() {
+                    return None;
+                }
+
+                let pane_before = PaneSnapshot::of(node);
+                let old = pane_before.label.trim_end_matches('\0').to_string();
+                let meta_before = LayoutMeta::of(tree);
+
+                tree.find_by_idx_mut(target_idx)?.label = name.clone();
+                tree.rename_references(&old, &name);
+                tree.rebuild_maps();
+
+                Some(AppliedCommand::Batch(vec![
+                    AppliedCommand::ReplacePane {
+                        pane_idx: target_idx,
+                        before: Box::new(pane_before),
+                        after: Box::new(PaneSnapshot::of(tree.find_by_idx(target_idx)?)),
+                    },
+                    AppliedCommand::ReplaceLayoutMeta {
+                        before: Box::new(meta_before),
+                        after: Box::new(LayoutMeta::of(tree)),
+                    },
+                ]))
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct PaneSnapshot {
+    pub section: BflytSection,
+    pub label: String,
+    pub user_data: Option<UserDataArray>,
+}
+
+impl PaneSnapshot {
+    pub fn of(node: &PaneNode) -> Self {
+        Self {
+            section: node.section.clone(),
+            label: node.label.clone(),
+            user_data: node.user_data.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct LayoutMeta {
+    pub user_data: Option<UserDataArray>,
+    pub group: GroupElement,
+    pub control_source: Option<ControlSourceElement>,
+    pub material_list: Option<MaterialList>,
+}
+
+impl LayoutMeta {
+    pub fn of(tree: &PaneTree) -> Self {
+        Self {
+            user_data: tree.user_data.clone(),
+            group: tree.group.clone(),
+            control_source: tree.control_source.clone(),
+            material_list: tree.material_list.clone(),
         }
     }
 }
@@ -96,6 +194,16 @@ pub enum AppliedCommand {
         old_parent: Option<PaneId>,
         old_position: usize,
     },
+    ReplacePane {
+        pane_idx: PaneId,
+        before: Box<PaneSnapshot>,
+        after: Box<PaneSnapshot>,
+    },
+    ReplaceLayoutMeta {
+        before: Box<LayoutMeta>,
+        after: Box<LayoutMeta>,
+    },
+    Batch(Vec<AppliedCommand>),
 }
 
 impl AppliedCommand {
@@ -151,6 +259,53 @@ impl AppliedCommand {
                     old_position: prev_position,
                 })
             }
+
+            AppliedCommand::ReplacePane {
+                pane_idx,
+                before,
+                after,
+            } => {
+                let node = tree.find_by_idx_mut(pane_idx)?;
+                let renamed = node.label != before.label;
+
+                node.section = before.section.clone();
+                node.label = before.label.clone();
+                node.user_data = before.user_data.clone();
+                node.dirty = DirtyFlags::all();
+
+                if renamed {
+                    tree.rebuild_maps();
+                }
+
+                Some(AppliedCommand::ReplacePane {
+                    pane_idx,
+                    before: after,
+                    after: before,
+                })
+            }
+
+            AppliedCommand::ReplaceLayoutMeta { before, after } => {
+                tree.user_data = before.user_data.clone();
+                tree.group = before.group.clone();
+                tree.control_source = before.control_source.clone();
+                tree.material_list = before.material_list.clone();
+                tree.for_each_mut(|node| node.dirty.insert(DirtyFlags::MATERIAL));
+
+                Some(AppliedCommand::ReplaceLayoutMeta {
+                    before: after,
+                    after: before,
+                })
+            }
+
+            AppliedCommand::Batch(commands) => {
+                let mut inverses = Vec::with_capacity(commands.len());
+
+                for command in commands.into_iter().rev() {
+                    inverses.push(command.invert(tree)?);
+                }
+
+                Some(AppliedCommand::Batch(inverses))
+            }
         }
     }
 
@@ -160,6 +315,12 @@ impl AppliedCommand {
             AppliedCommand::Removed(_) => None,
             AppliedCommand::Transformed { pane_idx, .. } => Some(*pane_idx),
             AppliedCommand::Moved { pane_idx, .. } => Some(*pane_idx),
+            AppliedCommand::ReplacePane { pane_idx, .. } => Some(*pane_idx),
+            AppliedCommand::ReplaceLayoutMeta { .. } => None,
+            AppliedCommand::Batch(commands) => commands
+                .iter()
+                .rev()
+                .find_map(AppliedCommand::resulting_pane_idx),
         }
     }
 }
@@ -183,8 +344,7 @@ impl EditHistory {
         let applied = edit.apply(tree)?;
         let resulting_idx = applied.resulting_pane_idx();
 
-        self.redo_stack.clear();
-        self.push_undo(applied);
+        self.record(applied);
 
         resulting_idx
     }
@@ -217,6 +377,11 @@ impl EditHistory {
         self.undo_stack.push(applied);
     }
 
+    pub fn record(&mut self, applied: AppliedCommand) {
+        self.redo_stack.clear();
+        self.push_undo(applied);
+    }
+
     pub fn record_transform(
         &mut self,
         pane_idx: PaneId,
@@ -227,8 +392,7 @@ impl EditHistory {
             return;
         }
 
-        self.redo_stack.clear();
-        self.push_undo(AppliedCommand::Transformed {
+        self.record(AppliedCommand::Transformed {
             pane_idx,
             before,
             after,

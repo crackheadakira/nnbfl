@@ -1219,6 +1219,7 @@ impl App {
             edit_history::PaneEdit::Duplicate { source_idx } => Some(*source_idx),
             edit_history::PaneEdit::Insert { .. } => None,
             edit_history::PaneEdit::Move { source_idx, .. } => Some(*source_idx),
+            edit_history::PaneEdit::Rename { target_idx, .. } => Some(*target_idx),
         };
 
         if let Some(idx) = target_idx
@@ -1598,6 +1599,10 @@ impl ApplicationHandler for App {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
+                }
+
+                UiAction::RenamePane { target_idx, name } => {
+                    self.perform_pane_edit(edit_history::PaneEdit::Rename { target_idx, name })
                 }
 
                 UiAction::DeletePane(target_idx) => {

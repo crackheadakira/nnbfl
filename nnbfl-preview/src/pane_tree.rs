@@ -1,5 +1,8 @@
 use crate::archive::file_stem;
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use bitflags::bitflags;
 use nnbfl::{
@@ -8,8 +11,9 @@ use nnbfl::{
         flags::WindowKind,
         list::{CaptureTextureList, FontList, MaterialList, MaterialTextureSrt, TextureList},
         pane::{
-            BasePaneUsageFlags, HorizontalPosition, Pane, PartsPane, PartsPaneBasicInfo,
-            PicturePane, TextAlignment, TextBoxPane, TextureUv, VerticalPosition, WindowPane,
+            BasePaneUsageFlags, HorizontalPosition, PANE_NAME_LEN, Pane, PartsPane,
+            PartsPaneBasicInfo, PicturePane, TextAlignment, TextBoxPane, TextureUv,
+            VerticalPosition, WindowPane,
         },
     },
     core::FileReadWriteable,
@@ -1009,7 +1013,7 @@ impl PaneTree {
         Some((old_parent, old_position, final_parent, final_position))
     }
 
-    fn rebuild_maps(&mut self) {
+    pub fn rebuild_maps(&mut self) {
         puffin::profile_function!();
         self.animation_binding_revision = self.animation_binding_revision.wrapping_add(1);
         self.parent_map.clear();
@@ -1057,6 +1061,91 @@ impl PaneTree {
         }
     }
 
+    pub fn pane_name_error(&self, name: &str, pane: Option<PaneId>) -> Option<String> {
+        if name.is_empty() {
+            return Some("The name is empty".into());
+        }
+
+        if !name.bytes().all(|b| b.is_ascii_graphic()) {
+            return Some("Names are ASCII without spaces".into());
+        }
+
+        if name.len() > PANE_NAME_LEN {
+            return Some(format!("Names are at most {PANE_NAME_LEN} bytes"));
+        }
+
+        match self.label_map.get(name) {
+            Some(other) if Some(*other) != pane => Some(format!("Another pane is named {name}")),
+            _ => None,
+        }
+    }
+
+    pub fn unique_name(&self, base: &str, taken: &HashSet<String>) -> String {
+        let base = base.trim_end_matches('\0');
+        let stem = match base.rsplit_once('_') {
+            Some((stem, digits))
+                if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                stem
+            }
+            _ => base,
+        };
+
+        (0..)
+            .map(|n| {
+                let suffix = format!("_{n:02}");
+                let mut end = stem.len().min(PANE_NAME_LEN - suffix.len());
+                while !stem.is_char_boundary(end) {
+                    end -= 1;
+                }
+                format!("{}{suffix}", &stem[..end])
+            })
+            .find(|name| !self.label_map.contains_key(name) && !taken.contains(name))
+            .unwrap()
+    }
+
+    pub fn rename_references(&mut self, old: &str, new: &str) {
+        for name in self.group_child_names_mut() {
+            if name.trim_end_matches('\0') == old {
+                *name = new.to_string();
+            }
+        }
+
+        if let Some(control) = &mut self.control_source {
+            for binding in &mut control.data.pane_bindings {
+                if binding.trim_end_matches('\0') == old {
+                    *binding = new.to_string();
+                }
+            }
+        }
+    }
+
+    pub fn drop_references(&mut self, names: &HashSet<String>) {
+        let named = |name: &String| names.contains(name.trim_end_matches('\0'));
+
+        self.group.data.child_names.retain(|n| !named(n));
+        for group in &mut self.group.children {
+            group.child_names.retain(|n| !named(n));
+        }
+
+        if let Some(control) = &mut self.control_source {
+            for binding in &mut control.data.pane_bindings {
+                if named(binding) {
+                    binding.clear();
+                }
+            }
+        }
+    }
+
+    fn group_child_names_mut(&mut self) -> impl Iterator<Item = &mut String> {
+        self.group.data.child_names.iter_mut().chain(
+            self.group
+                .children
+                .iter_mut()
+                .flat_map(|g| &mut g.child_names),
+        )
+    }
+
     pub fn alloc_id(&mut self) -> PaneId {
         let id = PaneId(self.next_id);
         self.next_id += 1;
@@ -1087,7 +1176,16 @@ impl PaneTree {
         }
 
         reindex(&mut clone, self);
-        clone.label = format!("{} copy", clone.label.trim_end_matches('\0'));
+
+        fn rename(node: &mut PaneNode, tree: &PaneTree, taken: &mut HashSet<String>) {
+            node.label = tree.unique_name(&node.label, taken);
+            taken.insert(node.label.clone());
+
+            for child in &mut node.children {
+                rename(child, tree, taken);
+            }
+        }
+        rename(&mut clone, self, &mut HashSet::new());
 
         let position = self
             .sibling_position(target_idx)
