@@ -172,6 +172,14 @@ impl Corners {
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PaneId(pub u32);
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Anchor {
+    First,
+    Last,
+    Before(PaneId),
+    After(PaneId),
+}
+
 impl std::fmt::Display for PaneId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
@@ -894,15 +902,18 @@ impl PaneTree {
     ) -> PaneId {
         let old_idx = node.pane_idx;
 
-        match parent_idx {
-            Some(pid) => {
-                if let Some(parent_node) = self.find_by_idx_mut(pid) {
-                    let pos = position.min(parent_node.children.len());
-                    parent_node.children.insert(pos, node);
-                }
+        match parent_idx.and_then(|pid| self.find_by_idx_mut(pid)) {
+            Some(parent_node) => {
+                let pos = position.min(parent_node.children.len());
+                parent_node.children.insert(pos, node);
             }
             None => {
-                let pos = position.min(self.roots.len());
+                let pos = if parent_idx.is_some() {
+                    self.roots.len()
+                } else {
+                    position.min(self.roots.len())
+                };
+
                 self.roots.insert(pos, node);
             }
         }
@@ -973,27 +984,80 @@ impl PaneTree {
         &self,
         target: PaneId,
         position: &egui_ltreeview::DirPosition<PaneId>,
-    ) -> Option<(Option<PaneId>, usize)> {
+    ) -> Option<(Option<PaneId>, Anchor)> {
         use egui_ltreeview::DirPosition;
 
-        // TODO: there's a bug with nodes sometimes becoming children when they shouldn't be
-        // & sometimes them just magically dissappearing & deleting. But the general architecture is good
-        // so i'll leave it here for now.
+        let parent = self.find_by_idx(target)?;
 
-        match position {
-            DirPosition::First => Some((Some(target), 0)),
-            DirPosition::Last => {
-                let count = self.find_by_idx(target)?.children.len();
-                Some((Some(target), count))
+        if parent.parts_source.is_some() {
+            return None;
+        }
+
+        let is_child = |id: PaneId| parent.children.iter().any(|c| c.pane_idx == id);
+
+        let anchor = match *position {
+            DirPosition::First => Anchor::First,
+            DirPosition::Last => Anchor::Last,
+            DirPosition::Before(sibling) if is_child(sibling) => Anchor::Before(sibling),
+            DirPosition::After(sibling) if is_child(sibling) => Anchor::After(sibling),
+            DirPosition::Before(_) | DirPosition::After(_) => Anchor::First,
+        };
+
+        Some((Some(target), anchor))
+    }
+
+    fn siblings(&self, parent: Option<PaneId>) -> Option<&[PaneNode]> {
+        match parent {
+            Some(pid) => Some(&self.find_by_idx(pid)?.children),
+            None => Some(&self.roots),
+        }
+    }
+
+    pub fn anchor_of(&self, pane_idx: PaneId) -> Option<(Option<PaneId>, Anchor)> {
+        let parent = *self.parent_map.get(&pane_idx)?;
+        let siblings = self.siblings(parent)?;
+        let position = siblings.iter().position(|n| n.pane_idx == pane_idx)?;
+
+        let anchor = match position {
+            0 => Anchor::First,
+            _ => Anchor::After(siblings[position - 1].pane_idx),
+        };
+
+        Some((parent, anchor))
+    }
+
+    fn anchor_position(&self, parent: Option<PaneId>, anchor: Anchor) -> Option<usize> {
+        let siblings = self.siblings(parent)?;
+        let index_of = |id| siblings.iter().position(|n| n.pane_idx == id);
+
+        Some(match anchor {
+            Anchor::First => 0,
+            Anchor::Last => siblings.len(),
+            Anchor::Before(id) => index_of(id).unwrap_or(siblings.len()),
+            Anchor::After(id) => index_of(id).map_or(siblings.len(), |i| i + 1),
+        })
+    }
+
+    pub fn can_move(&self, source_idx: PaneId, new_parent: Option<PaneId>, anchor: Anchor) -> bool {
+        if matches!(anchor, Anchor::Before(id) | Anchor::After(id) if id == source_idx) {
+            return false;
+        }
+
+        if self
+            .find_by_idx(source_idx)
+            .is_none_or(|n| n.parts_source.is_some())
+        {
+            return false;
+        }
+
+        match new_parent {
+            Some(parent) => {
+                !self.is_ancestor_or_self(parent, source_idx)
+                    && self
+                        .find_by_idx(parent)
+                        .is_some_and(|n| n.parts_source.is_none())
             }
-            DirPosition::After(sibling) => {
-                let (parent, pos) = self.sibling_position(*sibling)?;
-                Some((parent, pos + 1))
-            }
-            DirPosition::Before(sibling) => {
-                let (parent, pos) = self.sibling_position(*sibling)?;
-                Some((parent, pos))
-            }
+            None => true,
         }
     }
 
@@ -1001,33 +1065,23 @@ impl PaneTree {
         &mut self,
         source_idx: PaneId,
         new_parent: Option<PaneId>,
-        position: usize,
-    ) -> Option<(Option<PaneId>, usize, Option<PaneId>, usize)> {
-        if let Some(target_parent) = new_parent
-            && self.is_ancestor_or_self(target_parent, source_idx)
-        {
+        anchor: Anchor,
+    ) -> Option<(Option<PaneId>, Anchor)> {
+        if !self.can_move(source_idx, new_parent, anchor) {
             return None;
         }
 
-        let node = self.find_by_idx(source_idx)?;
-        if node.parts_source.is_some() {
-            return None;
-        }
-
-        let (old_parent, old_position) = self.sibling_position(source_idx)?;
-
-        let mut target_position = position;
-        if old_parent == new_parent && old_position < target_position {
-            target_position -= 1;
-        }
+        let old = self.anchor_of(source_idx)?;
 
         let mut node = self.remove_node(source_idx)?;
         node.mark_transform_dirty();
 
-        self.insert_node_at(new_parent, target_position, node);
-        let (final_parent, final_position) = self.sibling_position(source_idx)?;
+        let position = self
+            .anchor_position(new_parent, anchor)
+            .unwrap_or(usize::MAX);
+        self.insert_node_at(new_parent, position, node);
 
-        Some((old_parent, old_position, final_parent, final_position))
+        (self.anchor_of(source_idx)? != old).then_some(old)
     }
 
     pub fn rebuild_maps(&mut self) {

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::pane_tree::PaneId;
+use crate::pane_tree::{Anchor, PaneId};
 use nnbfl::{
     bflyt::{
         file::{BflytSection, ControlSourceElement, GroupElement},
@@ -39,7 +39,7 @@ pub enum PaneEdit {
     Move {
         source_idx: PaneId,
         new_parent: Option<PaneId>,
-        position: usize,
+        anchor: Anchor,
     },
     Rename {
         target_idx: PaneId,
@@ -93,15 +93,14 @@ impl PaneEdit {
             PaneEdit::Move {
                 source_idx,
                 new_parent,
-                position,
+                anchor,
             } => {
-                let (old_parent, old_position, _, _) =
-                    tree.move_node(source_idx, new_parent, position)?;
+                let (old_parent, old_anchor) = tree.move_node(source_idx, new_parent, anchor)?;
 
                 Some(AppliedCommand::Moved {
                     pane_idx: source_idx,
                     old_parent,
-                    old_position,
+                    old_anchor,
                 })
             }
 
@@ -206,7 +205,7 @@ pub enum AppliedCommand {
     Moved {
         pane_idx: PaneId,
         old_parent: Option<PaneId>,
-        old_position: usize,
+        old_anchor: Anchor,
     },
     ReplacePane {
         pane_idx: PaneId,
@@ -262,15 +261,15 @@ impl AppliedCommand {
             AppliedCommand::Moved {
                 pane_idx,
                 old_parent,
-                old_position,
+                old_anchor,
             } => {
-                let (prev_parent, prev_position, _, _) =
-                    tree.move_node(pane_idx, old_parent, old_position)?;
+                let (prev_parent, prev_anchor) =
+                    tree.move_node(pane_idx, old_parent, old_anchor)?;
 
                 Some(AppliedCommand::Moved {
                     pane_idx,
                     old_parent: prev_parent,
-                    old_position: prev_position,
+                    old_anchor: prev_anchor,
                 })
             }
 

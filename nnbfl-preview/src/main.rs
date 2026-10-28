@@ -1619,11 +1619,11 @@ impl ApplicationHandler for App {
                 UiAction::MovePane {
                     source_idx,
                     new_parent,
-                    position,
+                    anchor,
                 } => self.perform_pane_edit(edit_history::PaneEdit::Move {
                     source_idx,
                     new_parent,
-                    position,
+                    anchor,
                 }),
 
                 UiAction::Undo => {

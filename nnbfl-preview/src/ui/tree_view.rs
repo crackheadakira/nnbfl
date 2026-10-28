@@ -6,7 +6,7 @@ use nnbfl::bflyt::file::BflytSection;
 
 use crate::{
     LayoutData,
-    pane_tree::{PaneNode, PaneTree},
+    pane_tree::{Anchor, PaneNode, PaneTree},
     ui::general::UiAction,
 };
 
@@ -61,22 +61,19 @@ impl TreeView {
                             }
 
                             Action::Drag(drag) => {
-                                if !Self::is_valid_move(&layout.tree, drag) {
+                                if Self::resolve_move(&layout.tree, drag).is_none() {
                                     drag.remove_drop_marker(ui);
                                 }
                             }
 
                             Action::Move(drag) => {
-                                if let Some(source_idx) = drag.source.first().copied()
-                                    && Self::is_valid_move(&layout.tree, drag)
-                                    && let Some((new_parent, position)) = layout
-                                        .tree
-                                        .resolve_drop_position(drag.target, &drag.position)
+                                if let Some((source_idx, new_parent, anchor)) =
+                                    Self::resolve_move(&layout.tree, drag)
                                 {
                                     out_action = Some(UiAction::MovePane {
                                         source_idx,
                                         new_parent,
-                                        position,
+                                        anchor,
                                     });
                                 }
                             }
@@ -92,34 +89,19 @@ impl TreeView {
         out_action
     }
 
-    fn is_valid_move(pane_tree: &PaneTree, drag: &egui_ltreeview::DragAndDrop<PaneId>) -> bool {
-        let Some(&source_idx) = drag.source.first() else {
-            return false;
+    fn resolve_move(
+        pane_tree: &PaneTree,
+        drag: &egui_ltreeview::DragAndDrop<PaneId>,
+    ) -> Option<(PaneId, Option<PaneId>, Anchor)> {
+        let [source_idx] = drag.source[..] else {
+            return None;
         };
 
-        if drag.source.len() != 1 {
-            return false;
-        }
+        let (new_parent, anchor) = pane_tree.resolve_drop_position(drag.target, &drag.position)?;
 
-        if pane_tree
-            .find_by_idx(source_idx)
-            .is_some_and(|n| n.parts_source.is_some())
-        {
-            return false;
-        }
-
-        let Some((new_parent, _)) = pane_tree.resolve_drop_position(drag.target, &drag.position)
-        else {
-            return false;
-        };
-
-        if let Some(target_parent) = new_parent
-            && pane_tree.is_ancestor_or_self(target_parent, source_idx)
-        {
-            return false;
-        }
-
-        true
+        pane_tree
+            .can_move(source_idx, new_parent, anchor)
+            .then_some((source_idx, new_parent, anchor))
     }
 
     fn draw_pane_node(
@@ -146,7 +128,7 @@ impl TreeView {
             egui::RichText::new(label_text)
         };
 
-        if node.all_children().next().is_some() {
+        if !is_parts_content || node.all_children().next().is_some() {
             builder.node(
                 NodeBuilder::dir(i)
                     .default_open(!(is_parts_content || is_parts_section))

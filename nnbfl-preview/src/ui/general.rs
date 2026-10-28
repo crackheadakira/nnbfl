@@ -1,4 +1,4 @@
-use crate::pane_tree::PaneId;
+use crate::pane_tree::{Anchor, PaneId};
 use egui::Ui;
 use nnbfl::{
     bflyt::{file::BflytSection, list::Layout, pane::Pane},
@@ -136,7 +136,7 @@ pub enum UiAction {
     MovePane {
         source_idx: PaneId,
         new_parent: Option<PaneId>,
-        position: usize,
+        anchor: Anchor,
     },
 
     Undo,
