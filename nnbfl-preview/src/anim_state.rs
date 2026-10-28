@@ -260,6 +260,20 @@ impl AnimPlayer {
         }
     }
 
+    pub fn pose(&mut self, anim: Option<usize>, frame: f32) {
+        for instance in &mut self.anims {
+            instance.playing = false;
+        }
+
+        if let Some(instance) = anim.and_then(|idx| self.anims.get_mut(idx)) {
+            instance.frame = frame;
+        }
+
+        self.active = anim.filter(|&idx| idx < self.anims.len());
+        self.preview_enabled = self.active.is_some();
+        self.limit_to_group = false;
+    }
+
     pub fn tick(&mut self, dt: f32, fps: f32) -> Option<String> {
         let idx = self.active?;
         let anim = &mut self.anims[idx];

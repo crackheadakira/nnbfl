@@ -3,12 +3,14 @@ mod archive;
 mod archive_browser;
 mod camera;
 mod chinese_font;
+mod cli;
 mod edit_history;
 mod error;
 mod font;
 mod game_config;
 mod keybinds;
 mod pane_tree;
+mod render;
 mod renderer;
 mod traits;
 mod ui;
@@ -293,7 +295,18 @@ impl GpuState {
         if let Some(layout) = ctx.layout_tabs.active_mut() {
             puffin::profile_scope!("pane_renderer_logic");
 
-            layout.timeline.anim_player.apply(&mut layout.tree);
+            render::prepare_frame(
+                &mut self.pane_renderer,
+                &self.device,
+                &self.queue,
+                &self.texture_cache,
+                layout,
+                &render::FrameView {
+                    selected: ctx.ui_state.pane_tree_view.selected_pane,
+                    hidden: &ctx.ui_state.pane_tree_view.hidden_panes,
+                    flags: ctx.ui_state.visiblity_flags,
+                },
+            );
 
             match ctx
                 .ui_state
@@ -308,32 +321,6 @@ impl GpuState {
                 ),
                 None => self.selection_renderer.clear(),
             }
-
-            let layout_size = layout.tree.layout_size;
-
-            if layout.tree.take_rebatch() {
-                let render_quads = layout.tree.collect_render_quads();
-                self.pane_renderer.upload_quads(
-                    &self.device,
-                    &render_quads,
-                    &self.texture_cache,
-                    layout_size,
-                    &ctx.ui_state.visiblity_flags,
-                );
-            }
-
-            let mut render_quads = layout.tree.collect_render_quads();
-
-            self.pane_renderer.update_visuals(
-                &self.device,
-                &self.queue,
-                &mut render_quads,
-                ctx.ui_state.pane_tree_view.selected_pane,
-                &ctx.ui_state.pane_tree_view.hidden_panes,
-                ctx.ui_state.visiblity_flags,
-                &self.texture_cache,
-                layout_size,
-            );
         }
 
         let paint_jobs = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
@@ -630,13 +617,13 @@ impl LayoutData {
         archive_scan_entries: Option<&[ArchiveEntry]>,
         glyphs: &mut GlyphData,
     ) -> Result<(Self, Vec<String>), LoadError> {
-        let bflyt_bytes = all_files
+        let (bflyt_path, bflyt_bytes) = all_files
             .iter()
             .find_map(|(path, file)| match file {
                 MagicFiles::Bflyt(_, bytes)
                     if source.as_ref().is_none_or(|source| source.layout == *path) =>
                 {
-                    Some(bytes)
+                    Some((path, bytes))
                 }
                 _ => None,
             })
@@ -660,6 +647,17 @@ impl LayoutData {
                         == Some(bflyt.layout.name.as_str()) =>
                 {
                     Some(path.clone())
+                }
+                _ => None,
+            })
+            .collect();
+
+        // The opened layout is left out, so it can't become a parts layout of itself
+        let archive_layouts: Vec<(String, Vec<u8>)> = all_files
+            .iter()
+            .filter_map(|(path, file)| match file {
+                MagicFiles::Bflyt(Some(name), bytes) if path != bflyt_path => {
+                    Some((file_stem(name).to_string(), bytes.clone()))
                 }
                 _ => None,
             })
@@ -735,6 +733,7 @@ impl LayoutData {
             layout_dir,
             layout_name.clone(),
             archive_scan_entries,
+            &archive_layouts,
             discovered_bntxs,
             glyphs,
         );
@@ -1850,6 +1849,10 @@ impl ApplicationHandler for App {
 
 fn main() {
     env_logger::init();
+
+    if let Some(code) = cli::run_if_command() {
+        std::process::exit(code);
+    }
     let event_loop = EventLoop::new().expect("create event loop");
     let mut app = App::new();
 

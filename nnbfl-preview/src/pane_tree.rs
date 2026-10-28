@@ -1229,6 +1229,7 @@ impl PaneTree {
         blarc_dir: Option<&Path>,
         file_name: String,
         archive_entries: Option<&[ArchiveEntry]>,
+        archive_layouts: &[(String, Vec<u8>)],
         discovered_bntxs: Vec<Bntx>,
         glyphs: &mut GlyphData,
     ) -> Self {
@@ -1256,6 +1257,7 @@ impl PaneTree {
             sub_material_list: None,
             font_list: file.font_list.as_ref(),
             archive_entries,
+            archive_layouts,
             blarc_dir,
             blarc_cache: &mut blarc_cache,
             main_bntx: main_bntx.as_ref(),
@@ -1318,6 +1320,7 @@ struct Builder<'a> {
     font_list: Option<&'a FontList>,
     blarc_dir: Option<&'a Path>,
     archive_entries: Option<&'a [ArchiveEntry]>,
+    archive_layouts: &'a [(String, Vec<u8>)],
     blarc_cache: &'a mut HashMap<String, Option<Bflyt>>,
     main_bntx: Option<&'a Bntx>,
     sub_bntxs: &'a mut Vec<Bntx>,
@@ -1586,10 +1589,6 @@ impl<'a> Builder<'a> {
         parent_visible: bool,
     ) {
         puffin::profile_function!();
-        let Some(blarc_dir) = self.blarc_dir else {
-            return;
-        };
-
         let layout_name = parts.o_layout_name.trim_end_matches('\0');
         if layout_name.is_empty() {
             return;
@@ -1610,7 +1609,17 @@ impl<'a> Builder<'a> {
         }
 
         if !self.blarc_cache.contains_key(layout_name) {
-            let assets = load_bflyt_from_blarc_dir(blarc_dir, layout_name)
+            let in_archive = self
+                .archive_layouts
+                .iter()
+                .find(|(stem, _)| stem.eq_ignore_ascii_case(layout_name))
+                .map(|(stem, bytes)| vec![MagicFiles::Bflyt(Some(stem.clone()), bytes.clone())]);
+
+            let assets = in_archive
+                .or_else(|| {
+                    self.blarc_dir
+                        .and_then(|dir| load_bflyt_from_blarc_dir(dir, layout_name))
+                })
                 .or_else(|| self.load_bflyt_from_archive_index(layout_name));
 
             if let Some(assets) = assets {

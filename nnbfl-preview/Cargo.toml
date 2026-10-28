@@ -31,6 +31,8 @@ egui_ltreeview = "0.8"
 thiserror = "2.0.19"
 ttf-parser = "0.25"
 fontdue = "0.9"
+png = "0.18"
+clap = { version = "4.6.1", features = ["derive"] }
 
 [lints.rust]
 unsafe_code = "deny"

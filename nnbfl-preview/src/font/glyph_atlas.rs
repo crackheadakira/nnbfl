@@ -168,6 +168,11 @@ impl GlyphAtlas {
         self.dirty = true;
     }
 
+    /// Uploads again on the next [`Self::upload`], for a cache that lost the atlas
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
     pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cache: &mut TextureCache) {
         puffin::profile_function!();
 

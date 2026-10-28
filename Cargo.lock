@@ -1803,6 +1803,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.13.0",
  "bytemuck",
+ "clap",
  "egui",
  "egui-wgpu",
  "egui-winit",
@@ -1811,6 +1812,7 @@ dependencies = [
  "fontdue",
  "log",
  "nnbfl",
+ "png",
  "pollster",
  "puffin",
  "puffin_egui",
