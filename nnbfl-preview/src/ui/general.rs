@@ -1,11 +1,6 @@
 use egui::Ui;
 use nnbfl::{
-    bflyt::{
-        file::BflytSection,
-        list::Layout,
-        pane::{HorizontalPosition, VerticalPosition},
-        pane::{Pane, TextAlignment},
-    },
+    bflyt::{ file::BflytSection, list::Layout, pane::Pane},
     ui2d::types::{Vector2f, Vector3f},
 };
 
@@ -125,6 +120,8 @@ pub enum UiAction {
     CancelArchiveScan,
     LoadArchiveEntry(crate::archive_browser::ArchiveEntry),
     SaveFile,
+    SaveFileAs,
+    ExportBflyt,
 
     SwitchActiveTab,
     PurgeUnusedTexturesAndSwitch(bool),
@@ -306,8 +303,18 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                     ui.close();
                 }
 
-                if ui.button("Save File As...").clicked() {
+                if ui.button("Save").clicked() {
                     ctx.ui_state.pending_action = Some(UiAction::SaveFile);
+                    ui.close();
+                }
+
+                if ui.button("Save As...").clicked() {
+                    ctx.ui_state.pending_action = Some(UiAction::SaveFileAs);
+                    ui.close();
+                }
+
+                if ui.button("Export .bflyt...").clicked() {
+                    ctx.ui_state.pending_action = Some(UiAction::ExportBflyt);
                     ui.close();
                 }
             });

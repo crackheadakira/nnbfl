@@ -1,4 +1,5 @@
 mod anim_state;
+mod archive;
 mod archive_browser;
 mod camera;
 mod chinese_font;
@@ -12,11 +13,7 @@ mod renderer;
 mod traits;
 mod ui;
 
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Instant,
-};
+use std::{collections::HashMap, path::Path, sync::Arc, time::Instant};
 
 use camera::Camera;
 use chinese_font::{FontError, setup_chinese_fonts};
@@ -43,6 +40,7 @@ use winit::{
 };
 
 use crate::{
+    archive::{DocStore, EntryPath, LayoutSource, anim_owner, file_stem},
     archive_browser::{ArchiveEntry, ArchiveScan},
     edit_history::EditHistory,
     error::LoadError,
@@ -142,7 +140,7 @@ impl GpuState {
         let preview_pipeline = TexturePreviewPipeline::new(&device, surface_format);
         egui_renderer.callback_resources.insert(TexturePreviewData {
             pipeline: preview_pipeline,
-            bind_groups: std::collections::HashMap::new(),
+            bind_groups: HashMap::new(),
         });
 
         Self {
@@ -540,6 +538,7 @@ impl LayoutTabs {
 
 pub struct LayoutData {
     pub tree: PaneTree,
+    pub source: Option<LayoutSource>,
     pub is_centered: bool,
     pub parts_size: Vector2f,
     pub file_name: String,
@@ -582,27 +581,93 @@ impl LayoutData {
         }
     }
 
+    pub fn save_problems(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+
+        let textures: Vec<&str> = self
+            .tree
+            .texture_list
+            .iter()
+            .flat_map(|list| list.textures.iter().map(String::as_str))
+            .collect();
+
+        for material in self.tree.material_list.iter().flat_map(|l| &l.materials) {
+            if material.material_name.len() > 28 {
+                problems.push(format!(
+                    "Material name '{}' is longer than 28 bytes",
+                    material.material_name
+                ));
+            }
+
+            for tex_map in &material.tex_maps {
+                if !textures.contains(&tex_map.texture_name.as_str()) {
+                    problems.push(format!(
+                        "Material '{}' uses texture '{}', which isn't in the texture list",
+                        material.material_name, tex_map.texture_name
+                    ));
+                }
+            }
+        }
+
+        for node in self.tree.iter().filter(|n| n.parts_source.is_none()) {
+            if node.label.len() > 24 {
+                problems.push(format!(
+                    "Pane name '{}' is longer than 24 bytes",
+                    node.label
+                ));
+            }
+        }
+
+        problems
+    }
+
     pub fn load_from_buffer(
-        all_files: Vec<MagicFiles>,
+        all_files: Vec<(EntryPath, MagicFiles)>,
+        source: Option<LayoutSource>,
         layout_dir: Option<&Path>,
         archive_scan_entries: Option<&[ArchiveEntry]>,
         glyphs: &mut GlyphData,
     ) -> Result<(Self, Vec<String>), LoadError> {
         let bflyt_bytes = all_files
             .iter()
-            .find_map(|file| match file {
-                MagicFiles::Bflyt(_, bytes) => Some(bytes),
+            .find_map(|(path, file)| match file {
+                MagicFiles::Bflyt(_, bytes)
+                    if source.as_ref().is_none_or(|source| source.layout == *path) =>
+                {
+                    Some(bytes)
+                }
                 _ => None,
             })
             .ok_or(LoadError::NoBflytFound)?;
 
         let bflyt = Bflyt::parse_file(bflyt_bytes).map_err(LoadError::BflytParse)?;
 
+        let mut layout_names: Vec<&str> = all_files
+            .iter()
+            .filter_map(|(_, file)| match file {
+                MagicFiles::Bflyt(Some(name), _) => Some(file_stem(name)),
+                _ => None,
+            })
+            .collect();
+        layout_names.push(&bflyt.layout.name);
+        let owned: Vec<EntryPath> = all_files
+            .iter()
+            .filter_map(|(path, file)| match file {
+                MagicFiles::Bflan(Some(name), _)
+                    if anim_owner(file_stem(name), layout_names.iter().copied())
+                        == Some(bflyt.layout.name.as_str()) =>
+                {
+                    Some(path.clone())
+                }
+                _ => None,
+            })
+            .collect();
+
         let (discovered_bntxs, discovered_bflans) = all_files
             .into_par_iter()
             .fold(
                 || (Vec::new(), Vec::new()),
-                |(mut bntxs, mut bflans), magic_file| {
+                |(mut bntxs, mut bflans), (path, magic_file)| {
                     match magic_file {
                         MagicFiles::Bntx(_, bytes) => match Bntx::parse(&bytes) {
                             Ok(bntx) => bntxs.push(bntx),
@@ -610,7 +675,7 @@ impl LayoutData {
                         },
                         MagicFiles::Bflan(file_name, bytes) => {
                             if let Ok(bflan) = Bflan::parse_file(&bytes) {
-                                bflans.push((file_name, bflan));
+                                bflans.push((path, file_name, bflan));
                             }
                         }
                         _ => {}
@@ -628,13 +693,14 @@ impl LayoutData {
             );
 
         let mut timeline = TimelineState::default();
-        for (file_name, bflan) in discovered_bflans {
+        for (path, file_name, bflan) in discovered_bflans {
             if file_name
                 .as_ref()
                 .is_some_and(|f| f.contains(&bflyt.layout.name))
                 || file_name.is_none()
             {
-                timeline.anim_player.load(bflan);
+                let saved_to = (source.is_some() && owned.contains(&path)).then_some(path);
+                timeline.anim_player.load(bflan, saved_to);
             }
         }
 
@@ -673,6 +739,7 @@ impl LayoutData {
 
         let layout_data = Self {
             tree,
+            source,
             timeline,
             is_centered,
             parts_size,
@@ -687,6 +754,7 @@ impl LayoutData {
 
 struct App {
     tabs: LayoutTabs,
+    docs: DocStore,
     ui_state: UiState,
     camera: Camera,
     egui_ctx: egui::Context,
@@ -701,6 +769,7 @@ impl App {
     fn new() -> Self {
         Self {
             tabs: LayoutTabs::new(),
+            docs: DocStore::default(),
             ui_state: UiState::default(),
             camera: Camera::new(),
             egui_ctx: egui::Context::default(),
@@ -935,24 +1004,46 @@ impl App {
         self.ui_state.pane_tree_view.select(best);
     }
 
-    fn open_file_from_path(&mut self, path: &PathBuf) {
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                let mut detected_files = Vec::new();
-                let file_name = path.file_name().map(|f| f.to_string_lossy().to_string());
-
-                extract_all_files_recursive(bytes, &mut detected_files, file_name);
-                self.open_file_from_buffer(detected_files);
-            }
-
+    fn open_document(&mut self, path: &Path, scope: EntryPath, layout: Option<EntryPath>) {
+        let doc = match self.docs.open(path) {
+            Ok(doc) => doc,
             Err(err) => {
-                log::error!("Failed to read file at {path:?}: {err}");
-                self.ui_state.error_message = Some(format!("Failed to read file: {err}"));
+                log::error!("{err}");
+                self.ui_state.error_message = Some(err);
+                return;
             }
+        };
+
+        let files = self.docs.docs[doc].files(&scope);
+        let layout = layout.or_else(|| {
+            files.iter().find_map(|(path, file)| {
+                matches!(file, MagicFiles::Bflyt(..)).then(|| path.clone())
+            })
+        });
+
+        let Some(layout) = layout else {
+            self.ui_state.error_message = Some(LoadError::NoBflytFound.to_string());
+            return;
+        };
+
+        if let Some(tab) = self.tabs.items.iter().position(|tab| {
+            tab.source
+                .as_ref()
+                .is_some_and(|source| source.doc == doc && source.layout == layout)
+        }) {
+            self.tabs.active_index = tab;
+            self.switch_active_tab();
+            return;
         }
+
+        self.open_file_from_buffer(files, Some(LayoutSource { doc, layout }));
     }
 
-    fn open_file_from_buffer(&mut self, all_files: Vec<MagicFiles>) {
+    fn open_file_from_buffer(
+        &mut self,
+        all_files: Vec<(EntryPath, MagicFiles)>,
+        source: Option<LayoutSource>,
+    ) {
         let is_dir_stale = match (
             &self.ui_state.archive_browser.layout_dir,
             &self.ui_state.archive_browser.archive_scan,
@@ -978,6 +1069,7 @@ impl App {
 
         match LayoutData::load_from_buffer(
             all_files,
+            source,
             layout_dir,
             archive_scan_entries,
             &mut self.tabs.glyphs,
@@ -1171,23 +1263,86 @@ impl App {
         }
     }
 
-    fn extract_layout_from_sarc_bytes(path: &PathBuf) -> Option<Vec<MagicFiles>> {
-        let mut file_bytes = std::fs::read(path).ok()?;
-        let filename = path.file_name()?.to_string_lossy();
+    fn save_active(&mut self, choose_path: bool) {
+        let Some(source) = self.tabs.active().and_then(|layout| layout.source.as_ref()) else {
+            return;
+        };
+        let doc_id = source.doc;
+        let doc = &self.docs.docs[doc_id];
 
-        file_bytes = decompress_if_needed(file_bytes, &filename);
+        let target = match (&doc.save_path, choose_path) {
+            (Some(path), false) => path.clone(),
+            _ => {
+                let dialog = rfd::FileDialog::new()
+                    .set_title("Save archive as")
+                    .set_file_name(doc.file_name().unwrap_or_default());
+                let Some(path) = dialog.save_file() else {
+                    return;
+                };
+                path
+            }
+        };
 
-        let mut all_files = Vec::new();
-        extract_all_files_recursive(file_bytes, &mut all_files, Some(filename.to_string()));
+        let mut edits = HashMap::new();
+        let mut problems = Vec::new();
+        let raw = |path: &EntryPath| doc.root.at(path).map(|node| node.raw().to_vec());
 
-        let has_bflyt = all_files
-            .iter()
-            .any(|f| matches!(f, MagicFiles::Bflyt(_, _)));
-        if !has_bflyt {
-            return None;
+        for tab in &self.tabs.items {
+            let Some(source) = tab.source.as_ref().filter(|s| s.doc == doc_id) else {
+                continue;
+            };
+            problems.extend(tab.save_problems());
+
+            let bflyt = tab.bake_bflyt().write_file().buffer;
+            if raw(&source.layout).as_ref() != Some(&bflyt) {
+                edits.insert(source.layout.clone(), bflyt);
+            }
+
+            for anim in &tab.timeline.anim_player.anims {
+                let Some(path) = &anim.source else { continue };
+                let bflan = anim.bflan.write_file().buffer;
+                if raw(path).as_ref() != Some(&bflan) {
+                    edits.insert(path.clone(), bflan);
+                }
+            }
         }
 
-        Some(all_files)
+        if !problems.is_empty() {
+            self.ui_state.error_message = Some(problems.join("\n"));
+            return;
+        }
+
+        let changed = edits.len();
+        match self.docs.docs[doc_id].save(&target, &edits) {
+            Ok(()) => log::info!("Saved {target:?} with {changed} changed files"),
+            Err(err) => {
+                log::error!("{err}");
+                self.ui_state.error_message = Some(err);
+            }
+        }
+    }
+
+    fn export_bflyt(&mut self) {
+        let Some(layout) = self.tabs.active() else {
+            return;
+        };
+
+        let dialog = rfd::FileDialog::new()
+            .set_title("Export .bflyt")
+            .add_filter("BFLYT Layout", &["bflyt"])
+            .set_file_name(&layout.file_name);
+        let Some(target_path) = dialog.save_file() else {
+            return;
+        };
+
+        let writer = layout.bake_bflyt().write_file();
+        match std::fs::write(&target_path, &writer.buffer) {
+            Ok(_) => log::info!("File succesfully written to: {target_path:?}"),
+            Err(e) => {
+                log::error!("Failed writing to disk: {e:?}");
+                self.ui_state.error_message = Some(format!("Write error: {e}"));
+            }
+        }
     }
 
     fn purge_unused_textures(&mut self) {
@@ -1398,55 +1553,17 @@ impl ApplicationHandler for App {
                         return;
                     };
 
-                    let path_str = path.to_string_lossy().to_lowercase();
-
-                    let is_sarc = SUPPORTED_SARC_EXTENSIONS
-                        .iter()
-                        .any(|ext| path_str.ends_with(&format!(".{}", ext.to_lowercase())));
-
                     self.ui_state.reset();
-
-                    if is_sarc {
-                        if let Some(all_files) = Self::extract_layout_from_sarc_bytes(&path) {
-                            self.open_file_from_buffer(all_files);
-                        }
-                    } else {
-                        self.open_file_from_path(&path);
-                    }
+                    self.open_document(&path, Vec::new(), None);
 
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
                 }
 
-                UiAction::SaveFile => {
-                    if let Some(layout) = self.tabs.active() {
-                        let mut dialog = rfd::FileDialog::new()
-                            .set_title("Save as .bflyt")
-                            .add_filter("BFLYT Layout", &["bflyt"]);
-
-                        dialog = dialog.set_file_name(&layout.file_name);
-
-                        if let Some(target_path) = dialog.save_file() {
-                            let baked_bflyt = layout.bake_bflyt();
-                            let writer = baked_bflyt.write_file();
-
-                            match std::fs::write(&target_path, &writer.buffer) {
-                                Ok(_) => {
-                                    log::info!("File succesfully written to: {target_path:?}",);
-                                }
-                                Err(e) => {
-                                    log::error!("Failed writing to disk: {e:?}");
-                                    self.ui_state.error_message = Some(format!("Write error: {e}"));
-                                }
-                            }
-                        } else {
-                            log::error!(
-                                "Failed baking layout fields into file model layout structures."
-                            );
-                        }
-                    }
-                }
+                UiAction::SaveFile => self.save_active(false),
+                UiAction::SaveFileAs => self.save_active(true),
+                UiAction::ExportBflyt => self.export_bflyt(),
 
                 UiAction::StartArchiveScan => {
                     if let Some(dir) = self.ui_state.archive_browser.layout_dir.clone() {
@@ -1464,46 +1581,11 @@ impl ApplicationHandler for App {
                 }
 
                 UiAction::LoadArchiveEntry(entry) => {
-                    let resolved = std::fs::read(&entry.path).ok().and_then(|bytes| {
-                        archive_browser::resolve_nested_package_bytes(&bytes, &entry.nested_path)
-                    });
-
                     self.ui_state.reset();
 
-                    let file_name = entry
-                        .path
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_string());
-
-                    match resolved {
-                        Some(package_bytes) => {
-                            let mut all_files = Vec::new();
-                            extract_all_files_recursive(package_bytes, &mut all_files, file_name);
-
-                            let mut final_files = Vec::new();
-                            let mut target_layout = None;
-
-                            for (idx, file) in all_files.into_iter().enumerate() {
-                                if matches!(file, MagicFiles::Bflyt(_, _)) && idx == entry.file_idx
-                                {
-                                    target_layout = Some(file);
-                                } else {
-                                    final_files.push(file);
-                                }
-                            }
-
-                            if let Some(target) = target_layout {
-                                final_files.insert(0, target);
-                            }
-
-                            self.open_file_from_buffer(final_files);
-                        }
-
-                        None => {
-                            self.ui_state.error_message =
-                                Some(format!("Failed to unpack '{}'.", entry.display_name));
-                        }
-                    }
+                    let mut layout = entry.nested_path.clone();
+                    layout.push(entry.file_idx);
+                    self.open_document(&entry.path, entry.nested_path.clone(), Some(layout));
 
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -1651,7 +1733,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::DroppedFile(path) => {
                 if path.extension().and_then(|s| s.to_str()) == Some("bflyt") {
-                    self.open_file_from_path(&path);
+                    self.open_document(&path, Vec::new(), None);
                 } else {
                     self.ui_state.error_message =
                         Some("Invalid file type. Please drop a .bflyt file".to_string());

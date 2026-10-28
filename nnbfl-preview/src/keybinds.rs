@@ -15,6 +15,7 @@ pub struct KeyBind {
 
 #[derive(Clone, Copy)]
 pub enum Action {
+    Save,
     SaveAs,
     TogglePlayback,
     Deselect,
@@ -32,6 +33,16 @@ pub const BINDINGS: &[KeyBind] = &[
     KeyBind {
         key: Key::S,
         modifiers: Modifiers::COMMAND,
+        action: Action::Save,
+        description: "Save",
+    },
+    KeyBind {
+        key: Key::S,
+        modifiers: Modifiers {
+            command: true,
+            shift: true,
+            ..Modifiers::NONE
+        },
         action: Action::SaveAs,
         description: "Save As...",
     },
@@ -179,7 +190,8 @@ fn apply(action: Action, state: &mut UiState, timeline: Option<&mut TimelineStat
         Action::Undo => state.pending_action = Some(UiAction::Undo),
         Action::Redo => state.pending_action = Some(UiAction::Redo),
         Action::Open => state.pending_action = Some(UiAction::LoadFile),
-        Action::SaveAs => state.pending_action = Some(UiAction::SaveFile),
+        Action::Save => state.pending_action = Some(UiAction::SaveFile),
+        Action::SaveAs => state.pending_action = Some(UiAction::SaveFileAs),
         Action::SetLayoutDirectory => state.pending_action = Some(UiAction::SetBlarcDir),
         Action::ToggleArchiveBrowser => {
             state.archive_browser.is_visible = !state.archive_browser.is_visible

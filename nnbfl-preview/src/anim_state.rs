@@ -71,6 +71,7 @@ pub fn eval_curve_step_u16(curve: &Curve, frame: f32) -> u16 {
 
 pub struct AnimInstance {
     pub bflan: Bflan,
+    pub source: Option<crate::archive::EntryPath>,
     pub name: String,
     pub frame: f32,
     pub playing: bool,
@@ -79,12 +80,13 @@ pub struct AnimInstance {
 }
 
 impl AnimInstance {
-    pub fn new(bflan: Bflan) -> Self {
+    pub fn new(bflan: Bflan, source: Option<crate::archive::EntryPath>) -> Self {
         let next_anim = find_next_anim(&bflan);
         let name = bflan.anim_tag.o_name.clone();
 
         Self {
             bflan,
+            source,
             name,
             frame: 0.0,
             playing: false,
@@ -229,8 +231,8 @@ impl AnimPlayer {
         }
     }
 
-    pub fn load(&mut self, bflan: Bflan) {
-        self.anims.push(AnimInstance::new(bflan));
+    pub fn load(&mut self, bflan: Bflan, source: Option<crate::archive::EntryPath>) {
+        self.anims.push(AnimInstance::new(bflan, source));
     }
 
     pub fn play(
