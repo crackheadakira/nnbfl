@@ -3,6 +3,7 @@
 - [x] Better animation graph editor
     - [ ] Curve easing
     - [ ] Adding / deleting keyframes
+    - [ ] Fix the graph editor zoom in resulting in the graph overlapping UI elements
 - [x] Smarter material upload
 - [x] Material creation
     - [x] Adding entries to material
@@ -20,21 +21,23 @@
 - [ ] Font rendering system for text box panes
     - [x] Bfttf / Bfotf parsing
     - [ ] Bffnt / Bfcpx(?) support
+    - [ ] Per character animations & rendering
 - [ ] Detailed pane editor (!!)
     - [ ] User data editing (!!)
     - [ ] PartsPane override editing
 - [ ] Texture uploading / replacing
+    - [ ] BNTX texture setting editing
 - [ ] Intuitive selection
 - [ ] Saving file as a packed SARC
-- [ ] Auto-remove orphans?
 - [x] Pane tree view
     - [x] Fix 'draw only pane outlines'
     - [x] Fix 'draw pane outlines for textures'
     - [ ] Adding new panes
+        - [ ] Importing PartsPanes
+        - [ ] Creating a PartsPane layout
     - [ ] Multi-select panes
     - [ ] Reordering panes
 - [ ] Scissor pane support
-- [ ] Captor pane support? (is this something rendering specific for in-game, or is it also used in bflyts)
 - [ ] Pop-up when loading from a SARC asking for which bflyt file to load
 - [x] Tab system
 - [ ] Add support for scaling by the handle's origin rather than center origin depending on shortcut pressed.

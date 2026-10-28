@@ -4,6 +4,8 @@ use crate::core::{
     Cursor, Endianness, FileReadWriteable, FormatError, ReadWriteable, Writer, tchar_code32,
 };
 
+const MAX_ALIGNMENT: u32 = 0x2000;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Sarc {
     pub endianness: Endianness,
@@ -11,6 +13,10 @@ pub struct Sarc {
     pub padding: u16,
     pub hash_multiplier: u32,
     pub data_alignment: u32,
+
+    #[serde(default)]
+    pub data_offset: Option<u32>,
+
     pub files: Vec<SarcFile>,
 }
 
@@ -68,11 +74,12 @@ impl ReadWriteable for Sarc {
             let data_start = cursor.read_u32()?;
             let data_end = cursor.read_u32()?;
 
+            let has_name = attributes >> 24 != 0;
             let word_offset = attributes & 0x00FFFFFF;
 
             fat_entries.push(FatEntry {
                 name_hash,
-                name_table_offset: word_offset * 4,
+                name_table_offset: has_name.then_some(word_offset * 4),
                 data_start,
                 data_end,
             });
@@ -98,8 +105,8 @@ impl ReadWriteable for Sarc {
             let data_length = (entry.data_end - entry.data_start) as usize;
             let file_bytes = cursor.data[data_offset..(data_offset + data_length)].to_vec();
 
-            let name = if entry.name_table_offset > 0 || cursor.data[sfnt_pool_start] != 0 {
-                let str_start = sfnt_pool_start + entry.name_table_offset as usize;
+            let name = if let Some(name_table_offset) = entry.name_table_offset {
+                let str_start = sfnt_pool_start + name_table_offset as usize;
                 let mut str_bytes = Vec::new();
                 let mut current_pos = str_start;
 
@@ -116,6 +123,7 @@ impl ReadWriteable for Sarc {
             files.push(SarcFile {
                 name,
                 hash: entry.name_hash,
+                alignment: Some(inferred_alignment(data_offset as u32)),
                 data: file_bytes,
             });
         }
@@ -126,6 +134,7 @@ impl ReadWriteable for Sarc {
             padding,
             hash_multiplier,
             data_alignment,
+            data_offset: Some(data_start_offset),
             files,
         })
     }
@@ -159,31 +168,26 @@ impl ReadWriteable for Sarc {
 
         let sfat_size = 0x0C + (num_files as u32 * 0x10);
         let names_size = 0x08 + name_table_bytes.len() as u32;
-        let absolute_data_start =
-            (0x14 + sfat_size + names_size).next_multiple_of(self.data_alignment);
+        let header_end = 0x14 + sfat_size + names_size;
+        let absolute_data_start = match self.data_offset {
+            Some(offset) if offset >= header_end => offset,
+            _ => header_end.next_multiple_of(self.data_alignment),
+        };
 
-        let mut relative_cursor: u32 = 0;
+        let mut position = absolute_data_start;
         let mut file_layouts = Vec::with_capacity(sorted_files.len());
 
-        for file in &self.files {
-            let alignment = if let Some(name) = &file.name {
-                if name.ends_with(".bntx") || name.ends_with(".bnsh") || name.ends_with(".baglmf") {
-                    self.data_alignment
-                } else if name.ends_with(".szs") {
-                    64
-                } else {
-                    16
-                }
-            } else {
-                16
-            };
+        for file in &sorted_files {
+            let alignment = file
+                .alignment
+                .unwrap_or_else(|| default_alignment(file.name.as_deref(), self.data_alignment));
 
-            relative_cursor = relative_cursor.next_multiple_of(alignment);
-            let start = relative_cursor;
+            position = position.next_multiple_of(alignment);
+            let start = position - absolute_data_start;
             let end = start + file.data.len() as u32;
 
             file_layouts.push((start, end));
-            relative_cursor = end;
+            position = absolute_data_start + end;
         }
 
         writer.mark("SARC Header");
@@ -244,10 +248,65 @@ impl ReadWriteable for Sarc {
     }
 }
 
+impl Sarc {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, FormatError> {
+        if self.endianness != Endianness::Little {
+            return Err(FormatError::UnwritableArchive(
+                "big-endian archives aren't supported".into(),
+            ));
+        }
+
+        let mut hashes: Vec<(u32, Option<&str>)> = self
+            .files
+            .iter()
+            .map(|file| {
+                let hash = match &file.name {
+                    Some(name) => SarcFile::calculate_filename_hash(name, self.hash_multiplier),
+                    None => file.hash,
+                };
+
+                (hash, file.name.as_deref())
+            })
+            .collect();
+
+        hashes.sort_by_key(|(hash, _)| *hash);
+
+        if let Some(pair) = hashes.windows(2).find(|pair| pair[0].0 == pair[1].0) {
+            return Err(FormatError::UnwritableArchive(format!(
+                "{:?} and {:?} share the hash {:08X}",
+                pair[0].1, pair[1].1, pair[0].0
+            )));
+        }
+
+        Ok(self.write_file().buffer)
+    }
+}
+
+fn inferred_alignment(position: u32) -> u32 {
+    match position {
+        0 => MAX_ALIGNMENT,
+        _ => (1 << position.trailing_zeros()).min(MAX_ALIGNMENT),
+    }
+}
+
+fn default_alignment(name: Option<&str>, data_alignment: u32) -> u32 {
+    let Some(name) = name else { return 16 };
+
+    if name.ends_with(".bntx") || name.ends_with(".bnsh") || name.ends_with(".baglmf") {
+        data_alignment
+    } else if name.ends_with(".szs") {
+        64
+    } else {
+        16
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SarcFile {
     pub name: Option<String>,
     pub hash: u32,
+    #[serde(default)]
+    pub alignment: Option<u32>,
     pub data: Vec<u8>,
 }
 
@@ -311,7 +370,7 @@ impl SarcFile {
 
 struct FatEntry {
     name_hash: u32,
-    name_table_offset: u32,
+    name_table_offset: Option<u32>,
     data_start: u32,
     data_end: u32,
 }

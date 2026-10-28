@@ -105,7 +105,7 @@ impl ReadWriteable for VersionFormat {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Default, Debug, Clone, Copy)]
+#[derive(serde::Deserialize, serde::Serialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endianness {
     Little,
     #[default]

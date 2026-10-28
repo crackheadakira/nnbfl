@@ -336,6 +336,7 @@ fn walk_sarc_for_packages(
     let probe = SarcFile {
         name: None,
         hash: 0,
+        alignment: None,
         data: data.to_vec(),
     };
 

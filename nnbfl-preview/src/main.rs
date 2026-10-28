@@ -1207,6 +1207,7 @@ pub fn extract_all_files_recursive(
     let current_file = SarcFile {
         name: current_file_name,
         hash: 0,
+        alignment: None,
         data,
     };
 
