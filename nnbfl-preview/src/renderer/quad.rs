@@ -1,3 +1,4 @@
+use crate::pane_tree::PaneId;
 use bytemuck::{Pod, Zeroable};
 use wgpu::{SurfaceConfiguration, util::DeviceExt};
 
@@ -5,7 +6,7 @@ use crate::camera::Camera;
 
 #[derive(Clone, Debug)]
 pub struct Quad {
-    pub pane_idx: usize,
+    pub pane_idx: PaneId,
     pub width: f32,
     pub height: f32,
     pub corners: [[f32; 2]; 4],

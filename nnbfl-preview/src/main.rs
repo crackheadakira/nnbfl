@@ -45,7 +45,7 @@ use crate::{
     edit_history::EditHistory,
     error::LoadError,
     font::glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
-    pane_tree::PaneTree,
+    pane_tree::{PaneId, PaneTree},
     renderer::{
         selection::{Handle, SelectionRenderer, point_in_quad},
         texture::{TexturePreviewData, TexturePreviewPipeline},
@@ -444,7 +444,7 @@ pub struct RenderContext<'a> {
 }
 
 struct DragState {
-    pane_idx: usize,
+    pane_idx: PaneId,
     handle: Handle,
     start_world: [f32; 2],
     start_translation: Vector3f,
@@ -1240,6 +1240,14 @@ impl App {
         let Some(layout) = self.tabs.active_mut() else {
             return;
         };
+
+        let exists = |id: &PaneId| layout.tree.path_map.contains_key(id);
+        let tree_view = &mut self.ui_state.pane_tree_view;
+        tree_view.hidden_panes.retain(exists);
+
+        if tree_view.selected_pane.is_some_and(|id| !exists(&id)) {
+            tree_view.select(None);
+        }
 
         layout.tree.recompute_dirty();
         layout.tree.recompute_dirty_materials();

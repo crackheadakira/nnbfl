@@ -1,3 +1,4 @@
+use crate::pane_tree::PaneId;
 use nnbfl::bflyt::flags::WindowKind;
 use nnbfl::bflyt::list::MaterialList;
 use nnbfl::bflyt::pane::{TextureFlip, TextureUv, WindowPane};
@@ -475,7 +476,7 @@ pub fn derive_from_window(
     material_list: &MaterialList,
     corners: [[f32; 2]; 4],
     is_visible: bool,
-    pane_idx: usize,
+    pane_idx: PaneId,
     bntxs: &[&Bntx],
 ) -> Vec<TexturedQuad> {
     let mut out = Vec::new();

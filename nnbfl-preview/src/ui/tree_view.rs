@@ -1,3 +1,4 @@
+use crate::pane_tree::PaneId;
 use std::collections::HashSet;
 
 use egui_ltreeview::{Action, NodeBuilder, TreeViewBuilder, TreeViewSettings, TreeViewState};
@@ -11,13 +12,13 @@ use crate::{
 
 #[derive(Default)]
 pub struct TreeView {
-    pub hidden_panes: HashSet<usize>,
-    pub selected_pane: Option<usize>,
-    tree_state: TreeViewState<usize>,
+    pub hidden_panes: HashSet<PaneId>,
+    pub selected_pane: Option<PaneId>,
+    tree_state: TreeViewState<PaneId>,
 }
 
 impl TreeView {
-    pub fn select(&mut self, pane_idx: Option<usize>) {
+    pub fn select(&mut self, pane_idx: Option<PaneId>) {
         if let Some(pane_idx) = pane_idx {
             self.tree_state.set_one_selected(pane_idx);
         } else {
@@ -91,7 +92,7 @@ impl TreeView {
         out_action
     }
 
-    fn is_valid_move(pane_tree: &PaneTree, drag: &egui_ltreeview::DragAndDrop<usize>) -> bool {
+    fn is_valid_move(pane_tree: &PaneTree, drag: &egui_ltreeview::DragAndDrop<PaneId>) -> bool {
         let Some(&source_idx) = drag.source.first() else {
             return false;
         };
@@ -123,8 +124,8 @@ impl TreeView {
 
     fn draw_pane_node(
         node: &PaneNode,
-        builder: &mut TreeViewBuilder<usize>,
-        hidden_panes: &mut HashSet<usize>,
+        builder: &mut TreeViewBuilder<PaneId>,
+        hidden_panes: &mut HashSet<PaneId>,
     ) {
         let i = node.pane_idx;
 
@@ -145,7 +146,7 @@ impl TreeView {
             egui::RichText::new(label_text)
         };
 
-        if !node.children.is_empty() {
+        if node.all_children().next().is_some() {
             builder.node(
                 NodeBuilder::dir(i)
                     .default_open(!(is_parts_content || is_parts_section))
@@ -164,7 +165,7 @@ impl TreeView {
                     }),
             );
 
-            for child in &node.children {
+            for child in node.all_children() {
                 Self::draw_pane_node(child, builder, hidden_panes);
             }
 
@@ -192,7 +193,7 @@ impl TreeView {
     fn draw_pane_context_menu(
         ui: &mut egui::Ui,
         node: &PaneNode,
-        hidden_panes: &mut HashSet<usize>,
+        hidden_panes: &mut HashSet<PaneId>,
     ) {
         ui.set_min_width(64.0);
         let is_hidden = hidden_panes.contains(&node.pane_idx);
@@ -202,7 +203,8 @@ impl TreeView {
             ui.close();
         }
 
-        if !node.children.is_empty() && !is_hidden && ui.button("Hide All").clicked() {
+        let has_children = node.all_children().next().is_some();
+        if has_children && !is_hidden && ui.button("Hide All").clicked() {
             Self::hide_pane_recursive(node, hidden_panes);
             ui.close();
         }
@@ -212,13 +214,13 @@ impl TreeView {
             ui.close();
         }
 
-        if !node.children.is_empty() && is_hidden && ui.button("Show All").clicked() {
+        if has_children && is_hidden && ui.button("Show All").clicked() {
             Self::show_pane_recursive(node, hidden_panes);
             ui.close();
         }
     }
 
-    fn show_pane_recursive(node: &PaneNode, hidden_panes: &mut HashSet<usize>) {
+    fn show_pane_recursive(node: &PaneNode, hidden_panes: &mut HashSet<PaneId>) {
         hidden_panes.remove(&node.pane_idx);
 
         for child in node.descendants() {
@@ -226,7 +228,7 @@ impl TreeView {
         }
     }
 
-    fn hide_pane_recursive(node: &PaneNode, hidden_panes: &mut HashSet<usize>) {
+    fn hide_pane_recursive(node: &PaneNode, hidden_panes: &mut HashSet<PaneId>) {
         hidden_panes.insert(node.pane_idx);
 
         for child in node.descendants() {

@@ -1,3 +1,4 @@
+use crate::pane_tree::PaneId;
 use std::collections::{HashMap, HashSet};
 
 use bytemuck::{Pod, Zeroable};
@@ -196,7 +197,7 @@ pub struct QuadAppearance {
 
 #[derive(Clone, Debug)]
 pub struct TexturedQuad {
-    pub pane_idx: usize,
+    pub pane_idx: PaneId,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -300,7 +301,7 @@ impl TexturedQuad {
         size: Vector2f,
         corners: [[f32; 2]; 4],
         is_visible: bool,
-        pane_idx: usize,
+        pane_idx: PaneId,
         glyph_override: Option<GlyphQuadOverride<'_>>,
     ) -> Option<Self> {
         puffin::profile_function!();
@@ -668,7 +669,7 @@ pub enum PaneQuadData<'a> {
 }
 
 impl<'a> PaneQuadData<'a> {
-    pub fn pane_idx(&self) -> usize {
+    pub fn pane_idx(&self) -> PaneId {
         match self {
             PaneQuadData::Plain(q) => q.pane_idx,
             PaneQuadData::Textured(t) => t.pane_idx,
@@ -750,7 +751,7 @@ struct Batch {
     key: BatchKey,
 
     /// [`TexturedQuad::pane_idx`] & [`TexturedQuad::piece_id`]
-    piece_keys: Vec<(usize, usize)>,
+    piece_keys: Vec<(PaneId, usize)>,
 }
 
 pub struct PaneRenderer {
@@ -767,7 +768,7 @@ pub struct PaneRenderer {
 
     batches: Vec<Batch>,
 
-    quad_lookup: HashMap<(usize, usize), usize>,
+    quad_lookup: HashMap<(PaneId, usize), usize>,
 }
 
 impl PaneRenderer {
@@ -1290,10 +1291,10 @@ impl PaneRenderer {
 
     fn update_selection(
         batch: &mut Batch,
-        quad_lookup: &HashMap<(usize, usize), usize>,
+        quad_lookup: &HashMap<(PaneId, usize), usize>,
         ordered: &[PaneQuadData],
-        selected_idx: Option<usize>,
-        hidden_panes: &HashSet<usize>,
+        selected_idx: Option<PaneId>,
+        hidden_panes: &HashSet<PaneId>,
         flags: PaneVisibilityFlags,
     ) -> bool {
         let mut dirty = false;
@@ -1358,7 +1359,7 @@ impl PaneRenderer {
         device: &wgpu::Device,
         ordered: &[PaneQuadData],
         texture_cache: &TextureCache,
-        quad_lookup: &HashMap<(usize, usize), usize>,
+        quad_lookup: &HashMap<(PaneId, usize), usize>,
         placeholder_view: &TextureView,
         texture_bgl: &BindGroupLayout,
     ) {
@@ -1615,8 +1616,8 @@ impl PaneRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ordered: &mut [PaneQuadData],
-        selected_idx: Option<usize>,
-        hidden_panes: &HashSet<usize>,
+        selected_idx: Option<PaneId>,
+        hidden_panes: &HashSet<PaneId>,
         flags: PaneVisibilityFlags,
         texture_cache: &TextureCache,
         layout_size: Vector2f,
@@ -1682,10 +1683,10 @@ impl PaneRenderer {
     }
 
     fn update_anim(
-        quad_lookup: &HashMap<(usize, usize), usize>,
+        quad_lookup: &HashMap<(PaneId, usize), usize>,
         batch: &mut Batch,
         ordered: &[PaneQuadData],
-        hidden_panes: &HashSet<usize>,
+        hidden_panes: &HashSet<PaneId>,
         flags: PaneVisibilityFlags,
     ) -> bool {
         let mut dirty = false;
@@ -1723,10 +1724,10 @@ impl PaneRenderer {
 
     fn flush_mat_buffers(
         batch: &mut Batch,
-        quad_lookup: &HashMap<(usize, usize), usize>,
+        quad_lookup: &HashMap<(PaneId, usize), usize>,
         queue: &wgpu::Queue,
         ordered: &[PaneQuadData],
-        hidden_panes: &HashSet<usize>,
+        hidden_panes: &HashSet<PaneId>,
     ) {
         if !matches!(batch.key, BatchKey::Textured { .. }) {
             return;

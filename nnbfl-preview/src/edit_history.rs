@@ -1,3 +1,4 @@
+use crate::pane_tree::PaneId;
 use nnbfl::ui2d::types::{Vector2f, Vector3f};
 
 use crate::{
@@ -14,19 +15,19 @@ pub struct PaneTransform {
 
 pub enum PaneEdit {
     Delete {
-        target_idx: usize,
+        target_idx: PaneId,
     },
     Duplicate {
-        source_idx: usize,
+        source_idx: PaneId,
     },
     Insert {
-        parent_idx: Option<usize>,
+        parent_idx: Option<PaneId>,
         position: usize,
         node: Box<PaneNode>,
     },
     Move {
-        source_idx: usize,
-        new_parent: Option<usize>,
+        source_idx: PaneId,
+        new_parent: Option<PaneId>,
         position: usize,
     },
 }
@@ -77,22 +78,22 @@ impl PaneEdit {
 }
 
 pub struct PendingRemoval {
-    parent_idx: Option<usize>,
+    parent_idx: Option<PaneId>,
     position: usize,
     node: PaneNode,
 }
 
 pub enum AppliedCommand {
-    Inserted(usize),
+    Inserted(PaneId),
     Removed(Box<PendingRemoval>),
     Transformed {
-        pane_idx: usize,
+        pane_idx: PaneId,
         before: PaneTransform,
         after: PaneTransform,
     },
     Moved {
-        pane_idx: usize,
-        old_parent: Option<usize>,
+        pane_idx: PaneId,
+        old_parent: Option<PaneId>,
         old_position: usize,
     },
 }
@@ -153,7 +154,7 @@ impl AppliedCommand {
         }
     }
 
-    pub fn resulting_pane_idx(&self) -> Option<usize> {
+    pub fn resulting_pane_idx(&self) -> Option<PaneId> {
         match self {
             AppliedCommand::Inserted(idx) => Some(*idx),
             AppliedCommand::Removed(_) => None,
@@ -178,7 +179,7 @@ impl EditHistory {
         }
     }
 
-    pub fn perform(&mut self, tree: &mut PaneTree, edit: PaneEdit) -> Option<usize> {
+    pub fn perform(&mut self, tree: &mut PaneTree, edit: PaneEdit) -> Option<PaneId> {
         let applied = edit.apply(tree)?;
         let resulting_idx = applied.resulting_pane_idx();
 
@@ -188,7 +189,7 @@ impl EditHistory {
         resulting_idx
     }
 
-    pub fn undo(&mut self, tree: &mut PaneTree) -> Option<usize> {
+    pub fn undo(&mut self, tree: &mut PaneTree) -> Option<PaneId> {
         let applied = self.undo_stack.pop()?;
         let inverse = applied.invert(tree)?;
 
@@ -198,7 +199,7 @@ impl EditHistory {
         resulting_idx
     }
 
-    pub fn redo(&mut self, tree: &mut PaneTree) -> Option<usize> {
+    pub fn redo(&mut self, tree: &mut PaneTree) -> Option<PaneId> {
         let applied = self.redo_stack.pop()?;
         let inverse = applied.invert(tree)?;
 
@@ -218,7 +219,7 @@ impl EditHistory {
 
     pub fn record_transform(
         &mut self,
-        pane_idx: usize,
+        pane_idx: PaneId,
         before: PaneTransform,
         after: PaneTransform,
     ) {

@@ -1,3 +1,4 @@
+use crate::pane_tree::PaneId;
 use crate::{
     pane_tree::PaneNode,
     ui::{DrawUiWith, general::UiAction},
@@ -6,12 +7,12 @@ use crate::{
 #[derive(Default)]
 pub struct ContextMenu {
     pub is_open: bool,
-    pub pane_idx: usize,
+    pub pane_idx: PaneId,
     pub pos: egui::Pos2,
 }
 
 impl ContextMenu {
-    pub fn open_context_menu(&mut self, screen_pos: [f32; 2], pane_idx: usize) {
+    pub fn open_context_menu(&mut self, screen_pos: [f32; 2], pane_idx: PaneId) {
         self.pane_idx = pane_idx;
         self.pos = egui::pos2(screen_pos[0], screen_pos[1]);
         self.is_open = true;
@@ -24,8 +25,8 @@ pub struct ContextMenuState<'a> {
 }
 
 pub enum ContextMenuAction {
-    HidePane(usize),
-    ShowPane(usize),
+    HidePane(PaneId),
+    ShowPane(PaneId),
     Action(UiAction),
 }
 

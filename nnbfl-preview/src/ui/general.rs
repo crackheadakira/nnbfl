@@ -1,6 +1,7 @@
+use crate::pane_tree::PaneId;
 use egui::Ui;
 use nnbfl::{
-    bflyt::{ file::BflytSection, list::Layout, pane::Pane},
+    bflyt::{file::BflytSection, list::Layout, pane::Pane},
     ui2d::types::{Vector2f, Vector3f},
 };
 
@@ -126,12 +127,12 @@ pub enum UiAction {
     SwitchActiveTab,
     PurgeUnusedTexturesAndSwitch(bool),
 
-    DeletePane(usize),
-    DuplicatePane(usize),
+    DeletePane(PaneId),
+    DuplicatePane(PaneId),
 
     MovePane {
-        source_idx: usize,
-        new_parent: Option<usize>,
+        source_idx: PaneId,
+        new_parent: Option<PaneId>,
         position: usize,
     },
 
@@ -761,7 +762,7 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
             .resizable(true)
             .open(&mut ctx.ui_state.show_statistics_window)
             .show(ui, |ui| {
-                ui.label(format!("Total Panes: {}", layout.tree.max_pane_idx + 1));
+                ui.label(format!("Total Panes: {}", layout.tree.iter().count()));
 
                 let total_textured = layout
                     .tree

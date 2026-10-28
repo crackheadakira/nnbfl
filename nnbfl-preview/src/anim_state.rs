@@ -1,3 +1,4 @@
+use crate::pane_tree::PaneId;
 use std::collections::{HashMap, HashSet};
 
 use nnbfl::bflan::anim_info::{AnimType, PaneAnimInfo};
@@ -127,7 +128,7 @@ impl AnimInstance {
         Some(&mut targets.get_mut(track.target_idx)?.curve)
     }
 
-    pub fn get_active_group_pane_indices(&self, pane_tree: &PaneTree) -> HashSet<usize> {
+    pub fn get_active_group_pane_indices(&self, pane_tree: &PaneTree) -> HashSet<PaneId> {
         let mut active_indices = HashSet::new();
 
         if self.bflan.anim_tag.groups.is_empty() {
@@ -159,7 +160,7 @@ impl AnimInstance {
     pub fn resolve_group_visibility(
         &self,
         pane_tree: &PaneTree,
-        hidden_panes: &mut HashSet<usize>,
+        hidden_panes: &mut HashSet<PaneId>,
     ) {
         if self.bflan.anim_tag.groups.is_empty() {
             return;
@@ -239,7 +240,7 @@ impl AnimPlayer {
         &mut self,
         anim_idx: Option<usize>,
         pane_tree: &PaneTree,
-        hidden_panes: &mut HashSet<usize>,
+        hidden_panes: &mut HashSet<PaneId>,
     ) {
         if let Some(idx) = anim_idx {
             if let Some(prev) = self.active
@@ -520,12 +521,16 @@ pub struct MaterialAnimation {
 
 #[derive(Default)]
 pub struct AnimationState {
-    pub panes: HashMap<usize, PaneAnimation>,
+    pub panes: HashMap<PaneId, PaneAnimation>,
     pub materials: HashMap<String, MaterialAnimation>,
 }
 
 impl AnimationState {
-    pub fn evaluate(pai: &PaneAnimInfo, frame: f32, pane_by_name: &HashMap<String, usize>) -> Self {
+    pub fn evaluate(
+        pai: &PaneAnimInfo,
+        frame: f32,
+        pane_by_name: &HashMap<String, PaneId>,
+    ) -> Self {
         let mut state = Self::default();
 
         for content in &pai.contents {
