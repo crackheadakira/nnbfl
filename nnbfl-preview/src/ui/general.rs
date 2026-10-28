@@ -1,4 +1,7 @@
-use crate::pane_tree::{Anchor, PaneId};
+use crate::{
+    pane_factory::NewPaneKind,
+    pane_tree::{Anchor, PaneId},
+};
 use egui::Ui;
 use nnbfl::{
     bflyt::{file::BflytSection, list::Layout, pane::Pane},
@@ -131,6 +134,12 @@ pub enum UiAction {
     RenamePane {
         target_idx: PaneId,
         name: String,
+    },
+
+    AddPane {
+        parent: Option<PaneId>,
+        anchor: Anchor,
+        kind: NewPaneKind,
     },
 
     MovePane {

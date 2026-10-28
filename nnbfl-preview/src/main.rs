@@ -9,6 +9,7 @@ mod error;
 mod font;
 mod game_config;
 mod keybinds;
+mod pane_factory;
 mod pane_tree;
 mod render;
 mod renderer;
@@ -1218,7 +1219,7 @@ impl App {
         let target_idx = match &edit {
             edit_history::PaneEdit::Delete { target_idx } => Some(*target_idx),
             edit_history::PaneEdit::Duplicate { source_idx } => Some(*source_idx),
-            edit_history::PaneEdit::Insert { .. } => None,
+            edit_history::PaneEdit::Add { parent, .. } => *parent,
             edit_history::PaneEdit::Move { source_idx, .. } => Some(*source_idx),
             edit_history::PaneEdit::Rename { target_idx, .. } => Some(*target_idx),
         };
@@ -1615,6 +1616,16 @@ impl ApplicationHandler for App {
                 UiAction::DuplicatePane(source_idx) => {
                     self.perform_pane_edit(edit_history::PaneEdit::Duplicate { source_idx })
                 }
+
+                UiAction::AddPane {
+                    parent,
+                    anchor,
+                    kind,
+                } => self.perform_pane_edit(edit_history::PaneEdit::Add {
+                    parent,
+                    anchor,
+                    kind,
+                }),
 
                 UiAction::MovePane {
                     source_idx,

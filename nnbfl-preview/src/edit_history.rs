@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use crate::pane_tree::{Anchor, PaneId};
+use crate::{
+    pane_factory::{self, NewPaneKind},
+    pane_tree::{Anchor, PaneId},
+};
 use nnbfl::{
     bflyt::{
         file::{BflytSection, ControlSourceElement, GroupElement},
@@ -31,10 +34,10 @@ pub enum PaneEdit {
     Duplicate {
         source_idx: PaneId,
     },
-    Insert {
-        parent_idx: Option<PaneId>,
-        position: usize,
-        node: Box<PaneNode>,
+    Add {
+        parent: Option<PaneId>,
+        anchor: Anchor,
+        kind: NewPaneKind,
     },
     Move {
         source_idx: PaneId,
@@ -81,13 +84,35 @@ impl PaneEdit {
                 Some(AppliedCommand::Inserted(new_idx))
             }
 
-            PaneEdit::Insert {
-                parent_idx,
-                position,
-                node,
+            PaneEdit::Add {
+                parent,
+                anchor,
+                kind,
             } => {
-                let idx = tree.insert_node_at(parent_idx, position, *node);
-                Some(AppliedCommand::Inserted(idx))
+                if !tree.can_add(parent, kind) {
+                    return None;
+                }
+
+                let meta_before = LayoutMeta::of(tree);
+                let name = tree.unique_name(kind.name_prefix(), &HashSet::new());
+                let section = pane_factory::new_pane_section(
+                    kind,
+                    &name,
+                    tree.material_list.get_or_insert_default(),
+                );
+
+                let node = tree.new_node(section, parent);
+                let position = tree.anchor_position(parent, anchor)?;
+                let idx = tree.insert_node_at(parent, position, node);
+                tree.mark_pane_dirty(idx);
+
+                Some(AppliedCommand::Batch(vec![
+                    AppliedCommand::ReplaceLayoutMeta {
+                        before: Box::new(meta_before),
+                        after: Box::new(LayoutMeta::of(tree)),
+                    },
+                    AppliedCommand::Inserted(idx),
+                ]))
             }
 
             PaneEdit::Move {

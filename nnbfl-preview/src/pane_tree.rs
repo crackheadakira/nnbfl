@@ -1,5 +1,5 @@
-use crate::archive::file_stem;
 use crate::renderer::textured_quad::BatchKey;
+use crate::{archive::file_stem, pane_factory::NewPaneKind};
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
@@ -1026,7 +1026,7 @@ impl PaneTree {
         Some((parent, anchor))
     }
 
-    fn anchor_position(&self, parent: Option<PaneId>, anchor: Anchor) -> Option<usize> {
+    pub fn anchor_position(&self, parent: Option<PaneId>, anchor: Anchor) -> Option<usize> {
         let siblings = self.siblings(parent)?;
         let index_of = |id| siblings.iter().position(|n| n.pane_idx == id);
 
@@ -1036,6 +1036,16 @@ impl PaneTree {
             Anchor::Before(id) => index_of(id).unwrap_or(siblings.len()),
             Anchor::After(id) => index_of(id).map_or(siblings.len(), |i| i + 1),
         })
+    }
+
+    pub fn can_add(&self, parent: Option<PaneId>, kind: NewPaneKind) -> bool {
+        let fonts = self.font_list.as_ref().is_some_and(|f| !f.fonts.is_empty());
+
+        (fonts || !kind.needs_font())
+            && parent.is_some_and(|p| {
+                self.find_by_idx(p)
+                    .is_some_and(|n| n.parts_source.is_none())
+            })
     }
 
     pub fn can_move(&self, source_idx: PaneId, new_parent: Option<PaneId>, anchor: Anchor) -> bool {
@@ -1227,6 +1237,39 @@ impl PaneTree {
                 .iter_mut()
                 .flat_map(|g| &mut g.child_names),
         )
+    }
+
+    pub fn new_node(&mut self, section: BflytSection, parent: Option<PaneId>) -> PaneNode {
+        let pane_idx = self.alloc_id();
+        let depth = parent
+            .and_then(|p| self.find_by_idx(p))
+            .map_or(0, |p| p.depth + 1);
+
+        let placement = PanePlacement {
+            position: Vector2f::default(),
+            size: section
+                .get_base_pane()
+                .map_or_else(Vector2f::default, |b| b.size),
+            center: Vector2f::default(),
+            rotation: Vector3f::default(),
+            visible: true,
+        };
+
+        let mut node = assemble_node(
+            &section,
+            &placement,
+            Vector2f::default(),
+            pane_idx,
+            PaneVisuals::default(),
+            NodeOrigin {
+                depth,
+                parts_source: None,
+                is_parts_root: false,
+            },
+        );
+
+        node.dirty = DirtyFlags::all();
+        node
     }
 
     pub fn alloc_id(&mut self) -> PaneId {
@@ -1471,17 +1514,6 @@ impl<'a> Builder<'a> {
             parent_scale,
         );
 
-        let corners = Corners::compute(
-            center,
-            size,
-            &base.position.position_x,
-            &base.position.position_y,
-            base.rotation,
-        );
-
-        let label = section.pane_name();
-        let kind = section.kind_name().to_string();
-
         let pane_idx = PaneId(self.next_pane_idx);
         self.next_pane_idx += 1;
 
@@ -1505,79 +1537,22 @@ impl<'a> Builder<'a> {
             visible: is_visible,
         };
 
-        let PaneVisuals {
-            textured_quad,
-            window_quads,
-            glyph_quads,
-        } = build_pane_visuals(section, &placement, pane_idx, &sources, self.glyphs);
-
-        let color = if is_visible {
-            section.section_color()
-        } else {
-            [0.0; 4]
-        };
+        let visuals = build_pane_visuals(section, &placement, pane_idx, &sources, self.glyphs);
 
         let is_parts_root = base.pane_name == "RootPane" && !self.parts_chain.is_empty();
 
-        let plain_quad = Quad {
-            corners: corners.to_array(),
-            width: size.x,
-            height: size.y,
-            color,
-            has_textured: matches!(
-                section,
-                BflytSection::PicturePane(_)
-                    | BflytSection::WindowPane(_)
-                    | BflytSection::TextBoxPane(_)
-            ),
-            is_parts_root,
+        let mut node = assemble_node(
+            section,
+            &placement,
+            anchor,
             pane_idx,
-        };
-
-        let handle_capabilities = match section {
-            BflytSection::WindowPane(win) => match win.flag.window_kind {
-                WindowKind::HorizontalNoContent | WindowKind::Horizontal => {
-                    vec![HandleCapability::ScaleHorizontal, HandleCapability::Rotate]
-                }
-                _ => vec![
-                    HandleCapability::Rotate,
-                    HandleCapability::ScaleHorizontal,
-                    HandleCapability::ScaleVertical,
-                ],
+            visuals,
+            NodeOrigin {
+                depth,
+                parts_source: self.parts_chain.last().cloned(),
+                is_parts_root,
             },
-            _ => vec![
-                HandleCapability::Rotate,
-                HandleCapability::ScaleHorizontal,
-                HandleCapability::ScaleVertical,
-            ],
-        };
-
-        let mut node = PaneNode {
-            section: section.clone(),
-            kind,
-            label,
-            depth,
-            visible: is_visible,
-            parts_source: self.parts_chain.last().cloned(),
-            is_parts_overridden: false,
-            pane_idx,
-            world_pos: pos,
-            world_size: size,
-            world_center: center,
-            parent_anchor: anchor,
-            world_corners: corners,
-            world_rotation: base.rotation,
-            textured_quad,
-            animation: PaneAnimation::default(),
-            window_quads,
-            glyph_quads,
-            plain_quad,
-            dirty: DirtyFlags::empty(),
-            children: Vec::new(),
-            parts_children: Vec::new(),
-            user_data: None,
-            handle_capabilities,
-        };
+        );
 
         if let BflytSection::PartsPane(parts) = section {
             self.resolve_parts(parts, &mut node, is_visible);
@@ -1869,6 +1844,94 @@ pub struct PanePlacement {
     pub center: Vector2f,
     pub rotation: Vector3f,
     pub visible: bool,
+}
+
+pub struct NodeOrigin {
+    pub depth: usize,
+    pub parts_source: Option<String>,
+    pub is_parts_root: bool,
+}
+
+pub fn assemble_node(
+    section: &BflytSection,
+    placement: &PanePlacement,
+    anchor: Vector2f,
+    pane_idx: PaneId,
+    visuals: PaneVisuals,
+    origin: NodeOrigin,
+) -> PaneNode {
+    let default_base = Pane::default();
+    let base = section.get_base_pane().unwrap_or(&default_base);
+
+    let corners = Corners::compute(
+        placement.center,
+        placement.size,
+        &base.position.position_x,
+        &base.position.position_y,
+        placement.rotation,
+    );
+
+    let plain_quad = Quad {
+        corners: corners.to_array(),
+        width: placement.size.x,
+        height: placement.size.y,
+        color: if placement.visible {
+            section.section_color()
+        } else {
+            [0.0; 4]
+        },
+        has_textured: matches!(
+            section,
+            BflytSection::PicturePane(_)
+                | BflytSection::WindowPane(_)
+                | BflytSection::TextBoxPane(_)
+        ),
+        is_parts_root: origin.is_parts_root,
+        pane_idx,
+    };
+
+    let handle_capabilities = match section {
+        BflytSection::WindowPane(win)
+            if matches!(
+                win.flag.window_kind,
+                WindowKind::HorizontalNoContent | WindowKind::Horizontal
+            ) =>
+        {
+            vec![HandleCapability::ScaleHorizontal, HandleCapability::Rotate]
+        }
+        _ => vec![
+            HandleCapability::Rotate,
+            HandleCapability::ScaleHorizontal,
+            HandleCapability::ScaleVertical,
+        ],
+    };
+
+    PaneNode {
+        section: section.clone(),
+        kind: section.kind_name().to_string(),
+        label: section.pane_name(),
+        depth: origin.depth,
+        visible: placement.visible,
+        parts_source: origin.parts_source,
+        is_parts_overridden: false,
+        pane_idx,
+        world_pos: placement.position,
+        world_size: placement.size,
+        world_center: placement.center,
+        parent_anchor: anchor,
+        world_corners: corners,
+        world_rotation: placement.rotation,
+        textured_quad: visuals.textured_quad,
+        animation: PaneAnimation::default(),
+        window_quads: visuals.window_quads,
+        glyph_quads: visuals.glyph_quads,
+        plain_quad,
+        dirty: DirtyFlags::empty(),
+        children: Vec::new(),
+        parts_children: Vec::new(),
+        user_data: None,
+        handle_capabilities,
+    }
 }
 
 #[derive(Default)]
