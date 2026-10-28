@@ -716,7 +716,7 @@ fn corner_vertex(data: &PaneQuadData, corner: usize, tint: [f32; 4]) -> Vertex {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum BatchKey {
+pub enum BatchKey {
     Plain,
     Textured {
         texture_name: String,
@@ -727,6 +727,31 @@ enum BatchKey {
         is_detailed: bool,
         detailed_combiner_hash: [i32; 6],
     },
+}
+
+impl BatchKey {
+    pub fn of(tq: &TexturedQuad) -> Self {
+        let mut detailed_combiner_hash = [0i32; 6];
+        if tq.is_detailed {
+            for (i, hash) in detailed_combiner_hash.iter_mut().enumerate() {
+                *hash = tq.detailed_combiner_material.stage_bits[i][0]
+                    ^ tq.detailed_combiner_material.stage_bits[i][1]
+                    ^ tq.detailed_combiner_material.stage_bits[i][2];
+            }
+        }
+
+        // better batch key needed, material idx defeats puprpose of batching, but for now
+        // helps avoid bad collisions.
+        BatchKey::Textured {
+            texture_name: tq.texture_name.clone(),
+            sampler: tq.sampler_0,
+            material_idx: tq.material_idx,
+            combine_mode: tq.standard_material.combine_mode,
+            combine_mode2: tq.standard_material.combine_mode2,
+            is_detailed: tq.is_detailed,
+            detailed_combiner_hash,
+        }
+    }
 }
 
 struct Batch {
@@ -967,28 +992,7 @@ impl PaneRenderer {
     fn batch_key_for(data: &PaneQuadData) -> BatchKey {
         match data {
             PaneQuadData::Plain(_) => BatchKey::Plain,
-            PaneQuadData::Textured(tq) => {
-                let mut detailed_combiner_hash = [0i32; 6];
-                if tq.is_detailed {
-                    for (i, hash) in detailed_combiner_hash.iter_mut().enumerate() {
-                        *hash = tq.detailed_combiner_material.stage_bits[i][0]
-                            ^ tq.detailed_combiner_material.stage_bits[i][1]
-                            ^ tq.detailed_combiner_material.stage_bits[i][2];
-                    }
-                }
-
-                // better batch key needed, material idx defeats puprpose of batching, but for now
-                // helps avoid bad collisions.
-                BatchKey::Textured {
-                    texture_name: tq.texture_name.clone(),
-                    sampler: tq.sampler_0,
-                    material_idx: tq.material_idx,
-                    combine_mode: tq.standard_material.combine_mode,
-                    combine_mode2: tq.standard_material.combine_mode2,
-                    is_detailed: tq.is_detailed,
-                    detailed_combiner_hash,
-                }
-            }
+            PaneQuadData::Textured(tq) => BatchKey::of(tq),
         }
     }
 

@@ -7,8 +7,7 @@ use nnbfl::{
 
 use crate::{
     RenderContext,
-    anim_state::all_quads_mut,
-    pane_tree::{DirtyFlags, PaneNode},
+    pane_tree::PaneNode,
     renderer::textured_quad::PaneQuadData,
     traits::Displaying,
     ui::{
@@ -698,29 +697,12 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
 
     if let Some(layout) = ctx.layout_tabs.items.get_mut(ctx.layout_tabs.active_index) {
         let mut materials_changed = false;
-        if let Some(material_list) = layout.tree.material_list.as_mut() {
-            let changed = ctx.ui_state.material_editor.draw_with(ui, material_list);
-
-            // TODO: clean this up perchance?
-
-            if changed {
-                materials_changed = true;
-                layout.tree.for_each_mut(|node| {
-                    let mut is_dirty = false;
-
-                    for tq in all_quads_mut(node) {
-                        if tq.material_idx as usize
-                            == ctx.ui_state.material_editor.selected_material
-                        {
-                            is_dirty = true;
-                        }
-                    }
-
-                    if is_dirty {
-                        node.dirty.insert(DirtyFlags::MATERIAL);
-                    }
-                });
-            }
+        if let Some(material_list) = layout.tree.material_list.as_mut()
+            && ctx.ui_state.material_editor.draw_with(ui, material_list)
+        {
+            materials_changed = true;
+            let material = ctx.ui_state.material_editor.selected_material as u16;
+            layout.tree.mark_material_dirty(material);
         }
 
         if let Some(idx) = ctx.ui_state.pane_tree_view.selected_pane {
@@ -732,7 +714,7 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
             if let Some(node) = layout.tree.find_by_idx_mut(idx)
                 && editor.draw_with(ui, (node, name_error.as_deref()))
             {
-                node.dirty.insert(DirtyFlags::MATERIAL);
+                layout.tree.mark_pane_dirty(idx);
                 materials_changed = true;
             }
 
@@ -745,7 +727,9 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
         }
 
         if materials_changed {
-            layout.tree.recompute_dirty_materials();
+            layout
+                .tree
+                .recompute_dirty_materials(&mut ctx.layout_tabs.glyphs);
             layout.tree.update_animation_visuals();
         }
 

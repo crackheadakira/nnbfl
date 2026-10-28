@@ -175,6 +175,20 @@ impl LayoutMeta {
     }
 }
 
+fn changed_materials(a: &Option<MaterialList>, b: &Option<MaterialList>) -> Vec<u16> {
+    let a = a.as_ref().map_or(&[][..], |l| &l.materials);
+    let b = b.as_ref().map_or(&[][..], |l| &l.materials);
+
+    if a.len() != b.len() {
+        return (0..a.len().max(b.len()) as u16).collect();
+    }
+
+    (0..a.len())
+        .filter(|&i| format!("{:?}", a[i]) != format!("{:?}", b[i]))
+        .map(|i| i as u16)
+        .collect()
+}
+
 pub struct PendingRemoval {
     parent_idx: Option<PaneId>,
     position: usize,
@@ -272,6 +286,7 @@ impl AppliedCommand {
                 node.label = before.label.clone();
                 node.user_data = before.user_data.clone();
                 node.dirty = DirtyFlags::all();
+                tree.mark_pane_dirty(pane_idx);
 
                 if renamed {
                     tree.rebuild_maps();
@@ -285,11 +300,16 @@ impl AppliedCommand {
             }
 
             AppliedCommand::ReplaceLayoutMeta { before, after } => {
+                let changed = changed_materials(&tree.material_list, &before.material_list);
+
                 tree.user_data = before.user_data.clone();
                 tree.group = before.group.clone();
                 tree.control_source = before.control_source.clone();
                 tree.material_list = before.material_list.clone();
-                tree.for_each_mut(|node| node.dirty.insert(DirtyFlags::MATERIAL));
+
+                for material in changed {
+                    tree.mark_material_dirty(material);
+                }
 
                 Some(AppliedCommand::ReplaceLayoutMeta {
                     before: after,

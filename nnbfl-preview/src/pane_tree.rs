@@ -1,4 +1,5 @@
 use crate::archive::file_stem;
+use crate::renderer::textured_quad::BatchKey;
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
@@ -259,6 +260,17 @@ impl PaneNode {
         }
     }
 
+    pub fn material_indices(&self) -> Vec<u16> {
+        match &self.section {
+            BflytSection::PicturePane(pic) => vec![pic.material_index],
+            BflytSection::TextBoxPane(txt) => vec![txt.material_index],
+            BflytSection::WindowPane(win) => std::iter::once(win.content.material_index)
+                .chain(win.frames.iter().map(|f| f.material_index))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     pub fn descendants(&self) -> Vec<PaneId> {
         fn collect_all(node: &PaneNode, out: &mut Vec<PaneId>) {
             for child in node.all_children() {
@@ -489,60 +501,6 @@ impl PaneNode {
             });
     }
 
-    pub fn recompute_dirty_material(&mut self, material_list: &MaterialList, bntxs: &[&Bntx]) {
-        if self.dirty.contains(DirtyFlags::MATERIAL)
-            && let Some(quad) = &mut self.textured_quad
-            && let BflytSection::PicturePane(pic) = &self.section
-        {
-            let should_recompute = self.parts_source.is_none()
-                || (self.is_parts_overridden && self.parts_source.is_some());
-
-            if should_recompute
-                && let Some(mat) = material_list.materials.get(pic.material_index as usize)
-                && let Some(tq) = TexturedQuad::derive_from_material(
-                    MaterialPaneData {
-                        base_section: &pic.base,
-                        corner_tints: vertex_corners_color_to_corner_tints(
-                            &pic.top_left_vertex_color,
-                            &pic.top_right_vertex_color,
-                            &pic.bottom_left_vertex_color,
-                            &pic.bottom_right_vertex_color,
-                        ),
-                        piece_id: quad.piece_id,
-                        material_idx: pic.material_index,
-                        texture_uvs: &pic.texture_uvs,
-                        rotation: self.world_rotation,
-                    },
-                    mat,
-                    Vector2f::new(quad.x, quad.y),
-                    Vector2f::new(quad.width, quad.height),
-                    quad.corners,
-                    self.visible,
-                    self.pane_idx,
-                    None,
-                )
-            {
-                *quad = tq;
-            };
-        }
-
-        if self.dirty.contains(DirtyFlags::MATERIAL)
-            && let BflytSection::WindowPane(win) = &self.section
-            && !self.window_quads.is_empty()
-        {
-            self.window_quads = derive_from_window(
-                win,
-                material_list,
-                self.world_corners.to_array(),
-                self.visible,
-                self.pane_idx,
-                bntxs,
-            );
-        }
-
-        self.dirty.remove(DirtyFlags::MATERIAL);
-    }
-
     pub fn compute_uvs(texture_uvs: &[TextureUv]) -> UvMatrix4x3x2 {
         let get_uv_set = |layer: usize| -> [[f32; 2]; 4] {
             if let Some(uv_set) = texture_uvs.get(layer) {
@@ -623,6 +581,10 @@ pub struct PaneTree {
 
     /// Indices in [`PaneNode::child_at`] order, from the roots
     pub path_map: HashMap<PaneId, Vec<usize>>,
+    /// The panes drawing with each material of this layout's list
+    pub material_users: HashMap<u16, Vec<PaneId>>,
+    material_dirty: HashSet<PaneId>,
+    needs_rebatch: bool,
 
     pub next_id: u32,
 }
@@ -769,22 +731,77 @@ impl PaneTree {
         */
     }
 
-    pub fn recompute_dirty_materials(&mut self) {
-        let material_list = std::mem::take(&mut self.material_list);
-        let main_bntx = std::mem::take(&mut self.main_bntx);
-        let sub_bntxs = std::mem::take(&mut self.sub_bntxs);
+    pub fn mark_material_dirty(&mut self, material: u16) {
+        if let Some(users) = self.material_users.get(&material) {
+            self.material_dirty.extend(users);
+        }
+    }
 
-        let bntx_refs: Vec<_> = main_bntx.iter().chain(sub_bntxs.iter()).collect();
+    pub fn mark_pane_dirty(&mut self, pane: PaneId) {
+        self.material_dirty.insert(pane);
+    }
 
-        if let Some(ref list) = material_list {
-            self.for_each_mut(|node| {
-                node.recompute_dirty_material(list, &bntx_refs);
-            });
+    pub fn recompute_dirty_materials(&mut self, glyphs: &mut GlyphData) {
+        puffin::profile_function!();
+        for pane in std::mem::take(&mut self.material_dirty) {
+            if let Some(rebatch) = self.rebuild_node_visuals(pane, glyphs) {
+                self.needs_rebatch |= rebatch;
+            }
+        }
+    }
+
+    pub fn take_rebatch(&mut self) -> bool {
+        std::mem::take(&mut self.needs_rebatch)
+    }
+
+    pub fn rebuild_node_visuals(&mut self, pane: PaneId, glyphs: &mut GlyphData) -> Option<bool> {
+        let node = self.find_by_idx(pane)?;
+
+        if node.parts_source.is_some() && !node.is_parts_overridden {
+            return Some(false);
         }
 
-        self.material_list = material_list;
-        self.main_bntx = main_bntx;
-        self.sub_bntxs = sub_bntxs;
+        let bntxs: Vec<&Bntx> = self.all_bntxs().collect();
+        let sources = VisualSources {
+            material_list: self.material_list.as_ref(),
+            font_list: self.font_list.as_ref(),
+            bntxs: &bntxs,
+        };
+
+        let placement = PanePlacement {
+            position: node.world_pos,
+            size: node.world_size,
+            center: node.world_center,
+            rotation: node.world_rotation,
+            visible: node.visible,
+        };
+
+        let visuals = build_pane_visuals(&node.section, &placement, pane, &sources, glyphs);
+
+        let node = self.find_by_idx_mut(pane)?;
+        let keys = |quads: &mut dyn Iterator<Item = &TexturedQuad>| -> Vec<BatchKey> {
+            quads.map(BatchKey::of).collect()
+        };
+
+        let rebatch = keys(
+            &mut node
+                .textured_quad
+                .iter()
+                .chain(&node.window_quads)
+                .chain(&node.glyph_quads),
+        ) != keys(
+            &mut visuals
+                .textured_quad
+                .iter()
+                .chain(&visuals.window_quads)
+                .chain(&visuals.glyph_quads),
+        );
+
+        node.textured_quad = visuals.textured_quad;
+        node.window_quads = visuals.window_quads;
+        node.glyph_quads = visuals.glyph_quads;
+
+        Some(rebatch)
     }
 
     pub fn collect_render_quads<'a>(&'a mut self) -> Vec<PaneQuadData<'a>> {
@@ -1019,6 +1036,7 @@ impl PaneTree {
         self.parent_map.clear();
         self.label_map.clear();
         self.path_map.clear();
+        self.material_users.clear();
 
         fn walk(
             node: &PaneNode,
@@ -1058,6 +1076,17 @@ impl PaneTree {
                 &mut self.label_map,
                 &mut self.path_map,
             );
+        }
+
+        for node in self.roots.iter().flat_map(|root| root.iter()) {
+            if node.parts_source.is_none() || node.is_parts_overridden {
+                for material in node.material_indices() {
+                    self.material_users
+                        .entry(material)
+                        .or_default()
+                        .push(node.pane_idx);
+                }
+            }
         }
     }
 
@@ -1266,6 +1295,9 @@ impl PaneTree {
             sub_bntxs,
             parent_map: HashMap::new(),
             label_map: HashMap::new(),
+            material_users: HashMap::new(),
+            material_dirty: HashSet::new(),
+            needs_rebatch: false,
             next_id,
             user_data: file.user_data,
             texture_list: file.texture_list,
@@ -1396,33 +1428,31 @@ impl<'a> Builder<'a> {
         let pane_idx = PaneId(self.next_pane_idx);
         self.next_pane_idx += 1;
 
-        let textured_quad = if let BflytSection::PicturePane(pic) = section {
-            self.build_textured_quad(pic, pos, size, center, base.rotation, is_visible, pane_idx)
-        } else {
-            None
+        let bntxs: Vec<&Bntx> = self
+            .main_bntx
+            .into_iter()
+            .chain(self.sub_bntxs.iter())
+            .collect();
+
+        let sources = VisualSources {
+            material_list: self.sub_material_list.as_ref().or(self.material_list),
+            font_list: self.font_list,
+            bntxs: &bntxs,
         };
 
-        let window_quads = if let BflytSection::WindowPane(win) = section {
-            self.build_window_quads(win, size, center, base.rotation, is_visible, pane_idx)
-        } else {
-            Vec::new()
+        let placement = PanePlacement {
+            position: pos,
+            size,
+            center,
+            rotation: base.rotation,
+            visible: is_visible,
         };
 
-        let glyph_quads = if let BflytSection::TextBoxPane(txt) = section {
-            build_text_glyph_quads(
-                txt,
-                center,
-                size,
-                base.rotation,
-                is_visible,
-                pane_idx,
-                self.font_list,
-                self.sub_material_list.as_ref().or(self.material_list),
-                self.glyphs,
-            )
-        } else {
-            Vec::new()
-        };
+        let PaneVisuals {
+            textured_quad,
+            window_quads,
+            glyph_quads,
+        } = build_pane_visuals(section, &placement, pane_idx, &sources, self.glyphs);
 
         let color = if is_visible {
             section.section_color()
@@ -1717,21 +1747,37 @@ impl<'a> Builder<'a> {
                         };
 
                         if let BflytSection::PicturePane(pic) = override_section {
-                            let tq = builder.build_textured_quad(
-                                pic,
-                                node.world_pos,
-                                node.world_size,
-                                node.world_center,
-                                node.section
+                            let bntxs: Vec<&Bntx> = builder
+                                .main_bntx
+                                .into_iter()
+                                .chain(builder.sub_bntxs.iter())
+                                .collect();
+
+                            let sources = VisualSources {
+                                material_list: builder
+                                    .sub_material_list
+                                    .as_ref()
+                                    .or(builder.material_list),
+                                font_list: builder.font_list,
+                                bntxs: &bntxs,
+                            };
+
+                            let placement = PanePlacement {
+                                position: node.world_pos,
+                                size: node.world_size,
+                                center: node.world_center,
+                                rotation: node
+                                    .section
                                     .get_base_pane()
                                     .map(|b| b.rotation)
-                                    .unwrap_or(Vector3f::default()),
-                                node.visible,
-                                node.pane_idx,
-                            );
+                                    .unwrap_or_default(),
+                                visible: node.visible,
+                            };
 
-                            node.textured_quad = tq;
+                            node.textured_quad =
+                                picture_quad(pic, &placement, node.pane_idx, &sources);
                         }
+
                         return;
                     }
 
@@ -1746,98 +1792,137 @@ impl<'a> Builder<'a> {
 
         self.parts_chain.pop();
     }
+}
 
-    fn build_textured_quad(
-        &self,
-        pic: &PicturePane,
-        position: Vector2f,
-        size: Vector2f,
-        center: Vector2f,
-        rotation: Vector3f,
-        is_visible: bool,
-        pane_idx: PaneId,
-    ) -> Option<TexturedQuad> {
-        puffin::profile_function!();
-        if self.main_bntx.is_none() && self.sub_bntxs.is_empty() {
-            return None;
-        }
+pub struct VisualSources<'a> {
+    pub material_list: Option<&'a MaterialList>,
+    pub font_list: Option<&'a FontList>,
+    pub bntxs: &'a [&'a Bntx],
+}
 
-        let material_list = self.sub_material_list.as_ref().or(self.material_list)?;
-        let mat = material_list.materials.get(pic.material_index as usize)?;
+pub struct PanePlacement {
+    pub position: Vector2f,
+    pub size: Vector2f,
+    pub center: Vector2f,
+    pub rotation: Vector3f,
+    pub visible: bool,
+}
 
-        let corners = Corners::compute(
-            center,
-            size,
-            &pic.base.position.position_x,
-            &pic.base.position.position_y,
-            rotation,
-        );
+#[derive(Default)]
+pub struct PaneVisuals {
+    pub textured_quad: Option<TexturedQuad>,
+    pub window_quads: Vec<TexturedQuad>,
+    pub glyph_quads: Vec<TexturedQuad>,
+}
 
-        TexturedQuad::derive_from_material(
-            MaterialPaneData {
-                base_section: &pic.base,
-                corner_tints: vertex_corners_color_to_corner_tints(
-                    &pic.top_left_vertex_color,
-                    &pic.top_right_vertex_color,
-                    &pic.bottom_left_vertex_color,
-                    &pic.bottom_right_vertex_color,
-                ),
-                piece_id: 0,
-                material_idx: pic.material_index,
-                texture_uvs: &pic.texture_uvs,
-                rotation,
-            },
-            mat,
-            position,
-            size,
-            corners.to_array(),
-            is_visible,
-            pane_idx,
-            None,
-        )
+pub fn build_pane_visuals(
+    section: &BflytSection,
+    placement: &PanePlacement,
+    pane_idx: PaneId,
+    sources: &VisualSources,
+    glyphs: &mut GlyphData,
+) -> PaneVisuals {
+    puffin::profile_function!();
+    match section {
+        BflytSection::PicturePane(pic) => PaneVisuals {
+            textured_quad: picture_quad(pic, placement, pane_idx, sources),
+            ..Default::default()
+        },
+        BflytSection::WindowPane(win) => PaneVisuals {
+            window_quads: window_quads(win, placement, pane_idx, sources),
+            ..Default::default()
+        },
+        BflytSection::TextBoxPane(txt) => PaneVisuals {
+            glyph_quads: build_text_glyph_quads(
+                txt,
+                placement.center,
+                placement.size,
+                placement.rotation,
+                placement.visible,
+                pane_idx,
+                sources.font_list,
+                sources.material_list,
+                glyphs,
+            ),
+            ..Default::default()
+        },
+        _ => PaneVisuals::default(),
+    }
+}
+
+fn picture_quad(
+    pic: &PicturePane,
+    placement: &PanePlacement,
+    pane_idx: PaneId,
+    sources: &VisualSources,
+) -> Option<TexturedQuad> {
+    if sources.bntxs.is_empty() {
+        return None;
     }
 
-    fn build_window_quads(
-        &self,
-        win: &WindowPane,
-        size: Vector2f,
-        center: Vector2f,
-        rotation: Vector3f,
-        is_visible: bool,
-        pane_idx: PaneId,
-    ) -> Vec<TexturedQuad> {
-        puffin::profile_function!();
-        if self.main_bntx.is_none() && self.sub_bntxs.is_empty() {
-            return Vec::new();
-        }
+    let mat = sources
+        .material_list?
+        .materials
+        .get(pic.material_index as usize)?;
 
-        let Some(material_list) = self.sub_material_list.as_ref().or(self.material_list) else {
-            return Vec::new();
-        };
+    let corners = Corners::compute(
+        placement.center,
+        placement.size,
+        &pic.base.position.position_x,
+        &pic.base.position.position_y,
+        placement.rotation,
+    );
 
-        let corners = Corners::compute(
-            center,
-            size,
-            &win.base.position.position_x,
-            &win.base.position.position_y,
-            rotation,
-        );
+    TexturedQuad::derive_from_material(
+        MaterialPaneData {
+            base_section: &pic.base,
+            corner_tints: vertex_corners_color_to_corner_tints(
+                &pic.top_left_vertex_color,
+                &pic.top_right_vertex_color,
+                &pic.bottom_left_vertex_color,
+                &pic.bottom_right_vertex_color,
+            ),
+            piece_id: 0,
+            material_idx: pic.material_index,
+            texture_uvs: &pic.texture_uvs,
+            rotation: placement.rotation,
+        },
+        mat,
+        placement.position,
+        placement.size,
+        corners.to_array(),
+        placement.visible,
+        pane_idx,
+        None,
+    )
+}
 
-        let bntx_refs: Vec<_> = self
-            .main_bntx
-            .into_iter()
-            .chain(self.sub_bntxs.iter())
-            .collect();
+fn window_quads(
+    win: &WindowPane,
+    placement: &PanePlacement,
+    pane_idx: PaneId,
+    sources: &VisualSources,
+) -> Vec<TexturedQuad> {
+    let (false, Some(material_list)) = (sources.bntxs.is_empty(), sources.material_list) else {
+        return Vec::new();
+    };
 
-        derive_from_window(
-            win,
-            material_list,
-            corners.to_array(),
-            is_visible,
-            pane_idx,
-            &bntx_refs,
-        )
-    }
+    let corners = Corners::compute(
+        placement.center,
+        placement.size,
+        &win.base.position.position_x,
+        &win.base.position.position_y,
+        placement.rotation,
+    );
+
+    derive_from_window(
+        win,
+        material_list,
+        corners.to_array(),
+        placement.visible,
+        pane_idx,
+        sources.bntxs,
+    )
 }
 
 fn resolve_rect(

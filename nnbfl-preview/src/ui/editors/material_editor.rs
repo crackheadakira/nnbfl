@@ -13,7 +13,6 @@ use crate::ui::{DrawUi, DrawUiWith};
 #[derive(Default)]
 pub struct MaterialEditor {
     pub selected_material: usize,
-    pub pending_upload: bool,
     pub is_editor_visible: bool,
 }
 

@@ -10,7 +10,6 @@ use nnbfl::ui2d::types::{Vector2f, Vector3f};
 use nnbfl::ui2d::userdata::UserDataContent;
 
 use crate::pane_tree::{DirtyFlags, PaneTree};
-use crate::renderer::textured_quad::TexturedQuad;
 use crate::ui::timeline::{PendingKeyEdit, PendingSlopeEdit, TimelineTrack};
 
 fn eval_hermite(keys: &[nnbfl::bflan::curves::HermiteKey], frame: f32) -> f32 {
@@ -429,15 +428,6 @@ pub fn transform_uv_srt(srt: &MaterialTextureSrt, uv: [f32; 2]) -> [f32; 2] {
         rotated_u + srt.translate_u + 0.5,
         rotated_v + srt.translate_v + 0.5,
     ]
-}
-
-pub fn all_quads_mut(
-    node: &mut crate::pane_tree::PaneNode,
-) -> impl Iterator<Item = &mut TexturedQuad> {
-    node.textured_quad
-        .iter_mut()
-        .chain(node.window_quads.iter_mut())
-        .chain(node.glyph_quads.iter_mut())
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

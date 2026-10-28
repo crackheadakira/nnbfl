@@ -176,15 +176,6 @@ impl GpuState {
         puffin::GlobalProfiler::lock().new_frame();
         puffin::profile_function!();
 
-        if ctx.ui_state.material_editor.pending_upload
-            && let Some(layout) = ctx.layout_tabs.active_mut()
-        {
-            puffin::profile_scope!("material_recompute");
-            ctx.ui_state.material_editor.pending_upload = false;
-            layout.tree.recompute_dirty_materials();
-            layout.tree.update_animation_visuals();
-        }
-
         if ctx.layout_tabs.glyphs.atlas.is_dirty() {
             ctx.layout_tabs
                 .glyphs
@@ -319,6 +310,17 @@ impl GpuState {
             }
 
             let layout_size = layout.tree.layout_size;
+
+            if layout.tree.take_rebatch() {
+                let render_quads = layout.tree.collect_render_quads();
+                self.pane_renderer.upload_quads(
+                    &self.device,
+                    &render_quads,
+                    &self.texture_cache,
+                    layout_size,
+                    &ctx.ui_state.visiblity_flags,
+                );
+            }
 
             let mut render_quads = layout.tree.collect_render_quads();
 
@@ -1238,7 +1240,8 @@ impl App {
     }
 
     fn after_structural_edit(&mut self) {
-        let Some(layout) = self.tabs.active_mut() else {
+        let tabs = &mut self.tabs;
+        let Some(layout) = tabs.items.get_mut(tabs.active_index) else {
             return;
         };
 
@@ -1251,8 +1254,9 @@ impl App {
         }
 
         layout.tree.recompute_dirty();
-        layout.tree.recompute_dirty_materials();
+        layout.tree.recompute_dirty_materials(&mut tabs.glyphs);
         layout.tree.update_animation_visuals();
+        layout.tree.take_rebatch();
 
         let Some(gpu) = &mut self.gpu else { return };
 
