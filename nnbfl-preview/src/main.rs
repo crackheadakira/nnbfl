@@ -45,7 +45,7 @@ use winit::{
 use crate::{
     archive::{DocStore, EntryPath, LayoutSource, anim_owner, file_stem},
     archive_browser::{ArchiveEntry, ArchiveScan},
-    edit_history::EditHistory,
+    edit_history::{AnimSession, EditCtx, EditHistory},
     error::LoadError,
     font::glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
     pane_tree::{Anchor, PaneId, PaneTree},
@@ -273,10 +273,18 @@ impl GpuState {
 
         egui_state.handle_platform_output(window, full_output.platform_output.clone());
 
+        let editing =
+            egui_ctx.input(|i| i.pointer.any_down()) || egui_ctx.egui_wants_keyboard_input();
+
+        if !editing && let Some(layout) = ctx.layout_tabs.active_mut() {
+            layout.commit_anim_session();
+        }
+
         if let Some(layout) = ctx.layout_tabs.active_mut()
             && let Some(pending_key_edit) = layout.timeline.pending_key_edit.take()
         {
             puffin::profile_scope!("pending_key_edit");
+            layout.begin_anim_session();
             layout
                 .timeline
                 .anim_player
@@ -287,6 +295,7 @@ impl GpuState {
             && let Some(pending_slope_edit) = layout.timeline.pending_slope_edit.take()
         {
             puffin::profile_scope!("pending_slope_edit");
+            layout.begin_anim_session();
             layout
                 .timeline
                 .anim_player
@@ -537,12 +546,54 @@ pub struct LayoutData {
     pub file_name: String,
     pub version: VersionFormat,
     pub history: EditHistory,
+    anim_session: Option<AnimSession>,
 
     pub timeline: TimelineState,
 }
 
 impl LayoutData {
     const EDIT_HISTORY_LIMIT: usize = 20;
+
+    pub fn edit_ctx(&mut self) -> (&mut EditHistory, EditCtx<'_>) {
+        (
+            &mut self.history,
+            EditCtx {
+                tree: &mut self.tree,
+                timeline: &mut self.timeline,
+            },
+        )
+    }
+
+    fn begin_anim_session(&mut self) {
+        if self.anim_session.is_some() {
+            return;
+        }
+
+        let player = &self.timeline.anim_player;
+
+        if let Some(anim) = player.active
+            && let Some(instance) = player.anims.get(anim)
+        {
+            self.anim_session = Some(AnimSession {
+                anim,
+                baseline: instance.bflan.anim_info.clone(),
+            });
+        }
+    }
+
+    fn commit_anim_session(&mut self) {
+        let Some(session) = self.anim_session.take() else {
+            return;
+        };
+
+        if let Some(instance) = self.timeline.anim_player.anims.get(session.anim)
+            && instance.bflan.anim_info != session.baseline
+        {
+            let after = instance.bflan.anim_info.clone();
+            self.history
+                .record_anim(session.anim, session.baseline, after);
+        }
+    }
 
     pub fn bake_bflyt(&self) -> Bflyt {
         let mut nodes = Vec::new();
@@ -751,6 +802,7 @@ impl LayoutData {
             file_name: layout_name,
             version,
             history: EditHistory::new(Self::EDIT_HISTORY_LIMIT),
+            anim_session: None,
         };
 
         Ok((layout_data, anim_names))
@@ -1197,6 +1249,10 @@ impl App {
     }
 
     fn switch_active_tab(&mut self) {
+        for layout in &mut self.tabs.items {
+            layout.commit_anim_session();
+        }
+
         self.ui_state.anim_names = self.tabs.active_anim_names();
         self.ui_state.pane_tree_view.select(None);
 
@@ -1298,7 +1354,9 @@ impl App {
             return;
         }
 
-        let resulting = layout.history.perform_all(&mut layout.tree, edits);
+        layout.commit_anim_session();
+        let (history, mut edit) = layout.edit_ctx();
+        let resulting = history.perform_all(&mut edit, edits);
         self.ui_state.pane_tree_view.select_many(resulting);
 
         self.after_structural_edit();
@@ -1719,7 +1777,10 @@ impl ApplicationHandler for App {
 
                 UiAction::Undo => {
                     if let Some(layout) = self.tabs.active_mut() {
-                        let resulting = layout.history.undo(&mut layout.tree);
+                        layout.commit_anim_session();
+                        let (history, mut edit) = layout.edit_ctx();
+
+                        let resulting = history.undo(&mut edit);
                         self.ui_state.pane_tree_view.select_many(resulting);
                         self.after_structural_edit();
                     }
@@ -1727,7 +1788,10 @@ impl ApplicationHandler for App {
 
                 UiAction::Redo => {
                     if let Some(layout) = self.tabs.active_mut() {
-                        let resulting = layout.history.redo(&mut layout.tree);
+                        layout.commit_anim_session();
+                        let (history, mut edit) = layout.edit_ctx();
+
+                        let resulting = history.redo(&mut edit);
                         self.ui_state.pane_tree_view.select_many(resulting);
                         self.after_structural_edit();
                     }

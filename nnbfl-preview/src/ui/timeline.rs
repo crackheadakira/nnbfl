@@ -168,6 +168,16 @@ impl Default for TimelineState {
     }
 }
 
+impl TimelineState {
+    pub fn reset_tracks(&mut self) {
+        self.selected_key = None;
+        self.pending_key_edit = None;
+        self.pending_slope_edit = None;
+        self.hidden_tracks.clear();
+        self.expanded_anim_panes.clear();
+    }
+}
+
 fn clamp_to_rect(rect: egui::Rect, p: egui::Pos2) -> egui::Pos2 {
     let (x_lo, x_hi) = (rect.min.x.min(rect.max.x), rect.min.x.max(rect.max.x));
     let (y_lo, y_hi) = (rect.min.y.min(rect.max.y), rect.min.y.max(rect.max.y));

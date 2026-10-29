@@ -339,6 +339,10 @@ impl AnimPlayer {
         true
     }
 
+    pub fn invalidate(&mut self) {
+        self.last_applied = None;
+    }
+
     pub fn is_playing(&self) -> bool {
         self.active.map(|i| self.anims[i].playing).unwrap_or(false)
     }

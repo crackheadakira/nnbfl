@@ -3,11 +3,13 @@ use std::collections::HashSet;
 use crate::{
     pane_factory::{self, NewPaneKind},
     pane_tree::{Anchor, PaneId},
+    ui::timeline::TimelineState,
 };
 use nnbfl::{
+    bflan::anim_info::{AnimContent, AnimInfo, AnimType, PaneAnimInfo},
     bflyt::{
         file::{BflytSection, ControlSourceElement, GroupElement},
-        list::MaterialList,
+        list::{MATERIAL_NAME_LEN, Material, MaterialList},
     },
     ui2d::{
         types::{Vector2f, Vector3f},
@@ -25,6 +27,11 @@ pub struct PaneTransform {
     pub translation: Vector3f,
     pub size: Vector2f,
     pub rotation_z: f32,
+}
+
+pub struct EditCtx<'a> {
+    pub tree: &'a mut PaneTree,
+    pub timeline: &'a mut TimelineState,
 }
 
 pub enum PaneEdit {
@@ -51,11 +58,12 @@ pub enum PaneEdit {
 }
 
 impl PaneEdit {
-    pub fn apply(self, tree: &mut PaneTree) -> Option<AppliedCommand> {
+    pub fn apply(self, ctx: &mut EditCtx) -> Option<AppliedCommand> {
+        let tree = &mut *ctx.tree;
+
         match self {
             PaneEdit::Delete { target_idx } => {
                 let (parent_idx, position) = tree.sibling_position(target_idx)?;
-                let meta_before = LayoutMeta::of(tree);
                 let node = tree.remove_node(target_idx)?;
 
                 let names: HashSet<String> = node
@@ -64,19 +72,64 @@ impl PaneEdit {
                     .map(|n| n.label.trim_end_matches('\0').to_string())
                     .collect();
 
+                let mut commands = vec![AppliedCommand::Removed(Box::new(PendingRemoval {
+                    parent_idx,
+                    position,
+                    node,
+                }))];
+
+                let AppliedCommand::Removed(removal) = &commands[0] else {
+                    unreachable!()
+                };
+
+                let mut orphans: Vec<u16> = removal
+                    .node
+                    .iter()
+                    .filter(|n| n.parts_source.is_none() || n.is_parts_overridden)
+                    .flat_map(PaneNode::material_indices)
+                    .filter(|index| !tree.material_users.contains_key(index))
+                    .collect();
+
+                orphans.sort_unstable();
+                orphans.dedup();
+
+                let mut material_names = HashSet::new();
+
+                for &index in orphans.iter().rev() {
+                    if let Some(material) = tree.remove_material(index) {
+                        material_names
+                            .insert(material.material_name.trim_end_matches('\0').to_string());
+                        commands.push(AppliedCommand::RemovedMaterial {
+                            index,
+                            material: Box::new(material),
+                        });
+                    }
+                }
+
+                commands.extend(edit_anims(ctx.timeline, ctx.tree, |info| {
+                    let before = info.contents.len();
+
+                    info.contents.retain(|content| {
+                        let name = content.name.trim_end_matches('\0');
+
+                        !(is_pane_content(content) && names.contains(name)
+                            || content.anim_type == AnimType::Material
+                                && material_names.contains(name))
+                    });
+
+                    info.contents.len() != before
+                }));
+
+                let tree = &mut *ctx.tree;
+                let meta_before = LayoutMeta::of(tree);
                 tree.drop_references(&names);
 
-                Some(AppliedCommand::Batch(vec![
-                    AppliedCommand::Removed(Box::new(PendingRemoval {
-                        parent_idx,
-                        position,
-                        node,
-                    })),
-                    AppliedCommand::ReplaceLayoutMeta {
-                        before: Box::new(meta_before),
-                        after: Box::new(LayoutMeta::of(tree)),
-                    },
-                ]))
+                commands.push(AppliedCommand::ReplaceLayoutMeta {
+                    before: Box::new(meta_before),
+                    after: Box::new(LayoutMeta::of(tree)),
+                });
+
+                Some(AppliedCommand::Batch(commands))
             }
 
             PaneEdit::Duplicate { source_idx } => {
@@ -142,25 +195,180 @@ impl PaneEdit {
                 let pane_before = PaneSnapshot::of(node);
                 let old = pane_before.label.trim_end_matches('\0').to_string();
                 let meta_before = LayoutMeta::of(tree);
+                let material_renames = material_renames(tree, target_idx, &old, &name);
 
                 tree.find_by_idx_mut(target_idx)?.label = name.clone();
                 tree.rename_references(&old, &name);
+
+                if let Some(list) = &mut tree.material_list {
+                    for (index, _, new) in &material_renames {
+                        list.materials[*index as usize].material_name = new.clone();
+                    }
+                }
+
+                for (index, _, _) in &material_renames {
+                    tree.mark_material_dirty(*index);
+                }
+
                 tree.rebuild_maps();
 
-                Some(AppliedCommand::Batch(vec![
+                let pane_after = PaneSnapshot::of(tree.find_by_idx(target_idx)?);
+                let meta_after = LayoutMeta::of(tree);
+
+                let mut commands = vec![
                     AppliedCommand::ReplacePane {
                         pane_idx: target_idx,
                         before: Box::new(pane_before),
-                        after: Box::new(PaneSnapshot::of(tree.find_by_idx(target_idx)?)),
+                        after: Box::new(pane_after),
                     },
                     AppliedCommand::ReplaceLayoutMeta {
                         before: Box::new(meta_before),
-                        after: Box::new(LayoutMeta::of(tree)),
+                        after: Box::new(meta_after),
                     },
-                ]))
+                ];
+
+                commands.extend(edit_anims(ctx.timeline, ctx.tree, |info| {
+                    let mut changed = false;
+
+                    for content in &mut info.contents {
+                        let current = content.name.trim_end_matches('\0');
+
+                        let new = if is_pane_content(content) && current == old {
+                            Some(name.clone())
+                        } else if content.anim_type == AnimType::Material {
+                            material_renames
+                                .iter()
+                                .find(|(_, from, _)| from == current)
+                                .map(|(_, _, to)| to.clone())
+                        } else {
+                            None
+                        };
+
+                        if let Some(new) = new {
+                            content.name = new;
+                            changed = true;
+                        }
+                    }
+
+                    changed
+                }));
+
+                Some(AppliedCommand::Batch(commands))
             }
         }
     }
+}
+
+fn is_pane_content(content: &AnimContent) -> bool {
+    matches!(content.anim_type, AnimType::Pane | AnimType::PaneExt)
+}
+
+fn material_renames(
+    tree: &PaneTree,
+    pane: PaneId,
+    old: &str,
+    new: &str,
+) -> Vec<(u16, String, String)> {
+    let Some(node) = tree.find_by_idx(pane) else {
+        return Vec::new();
+    };
+
+    let Some(list) = &tree.material_list else {
+        return Vec::new();
+    };
+
+    let taken = |name: &str| {
+        list.materials
+            .iter()
+            .any(|m| m.material_name.trim_end_matches('\0') == name)
+    };
+
+    let mut renames: Vec<(u16, String, String)> = Vec::new();
+
+    for index in node.material_indices() {
+        let Some(material) = list.materials.get(index as usize) else {
+            continue;
+        };
+
+        let current = material.material_name.trim_end_matches('\0');
+        let own = tree
+            .material_users
+            .get(&index)
+            .is_some_and(|users| users == &[pane]);
+
+        let Some(rest) = current.strip_prefix(old) else {
+            continue;
+        };
+
+        if !own || !(rest.is_empty() || rest.starts_with('_')) {
+            continue;
+        }
+
+        let renamed = format!("{new}{rest}");
+
+        if renamed.len() <= MATERIAL_NAME_LEN
+            && !taken(&renamed)
+            && !renames.iter().any(|(i, _, n)| *i == index || *n == renamed)
+        {
+            renames.push((index, current.to_string(), renamed));
+        }
+    }
+
+    renames
+}
+
+fn edit_anims(
+    timeline: &mut TimelineState,
+    tree: &mut PaneTree,
+    mut edit: impl FnMut(&mut PaneAnimInfo) -> bool,
+) -> Vec<AppliedCommand> {
+    let mut commands = Vec::new();
+    let mut reshaped = false;
+
+    for (anim, instance) in timeline.anim_player.anims.iter_mut().enumerate() {
+        let before = instance.bflan.anim_info.clone();
+
+        if edit(&mut instance.bflan.anim_info) {
+            reshaped |= !same_tracks(&before, &instance.bflan.anim_info);
+
+            commands.push(AppliedCommand::ReplaceAnimInfo {
+                anim,
+                before: Box::new(before),
+                after: Box::new(instance.bflan.anim_info.clone()),
+            });
+        }
+    }
+
+    if !commands.is_empty() {
+        anims_changed(timeline, tree, reshaped);
+    }
+
+    commands
+}
+
+fn anims_changed(timeline: &mut TimelineState, tree: &mut PaneTree, reshaped: bool) {
+    timeline.anim_player.invalidate();
+    tree.animation_binding_revision = tree.animation_binding_revision.wrapping_add(1);
+
+    if reshaped {
+        timeline.reset_tracks();
+    }
+}
+
+fn same_tracks(a: &PaneAnimInfo, b: &PaneAnimInfo) -> bool {
+    let shape = |info: &AnimInfo| match info {
+        AnimInfo::Standard { targets, .. } => targets.len(),
+        AnimInfo::ExtendedUserData { data, .. } => data.len(),
+    };
+
+    a.contents.len() == b.contents.len()
+        && a.contents.iter().zip(&b.contents).all(|(a, b)| {
+            a.infos.len() == b.infos.len()
+                && a.infos
+                    .iter()
+                    .zip(&b.infos)
+                    .all(|(a, b)| shape(a) == shape(b))
+        })
 }
 
 #[derive(Clone)]
@@ -241,11 +449,25 @@ pub enum AppliedCommand {
         before: Box<LayoutMeta>,
         after: Box<LayoutMeta>,
     },
+    RemovedMaterial {
+        index: u16,
+        material: Box<Material>,
+    },
+    InsertedMaterial {
+        index: u16,
+    },
+    ReplaceAnimInfo {
+        anim: usize,
+        before: Box<PaneAnimInfo>,
+        after: Box<PaneAnimInfo>,
+    },
     Batch(Vec<AppliedCommand>),
 }
 
 impl AppliedCommand {
-    pub fn invert(self, tree: &mut PaneTree) -> Option<AppliedCommand> {
+    pub fn invert(self, ctx: &mut EditCtx) -> Option<AppliedCommand> {
+        let tree = &mut *ctx.tree;
+
         match self {
             AppliedCommand::Inserted(pane_idx) => {
                 let (parent_idx, position) = tree.sibling_position(pane_idx)?;
@@ -341,11 +563,41 @@ impl AppliedCommand {
                 })
             }
 
+            AppliedCommand::RemovedMaterial { index, material } => {
+                tree.insert_material(index, *material);
+                Some(AppliedCommand::InsertedMaterial { index })
+            }
+
+            AppliedCommand::InsertedMaterial { index } => {
+                let material = tree.remove_material(index)?;
+                Some(AppliedCommand::RemovedMaterial {
+                    index,
+                    material: Box::new(material),
+                })
+            }
+
+            AppliedCommand::ReplaceAnimInfo {
+                anim,
+                before,
+                after,
+            } => {
+                let instance = ctx.timeline.anim_player.anims.get_mut(anim)?;
+                let reshaped = !same_tracks(&instance.bflan.anim_info, &before);
+                instance.bflan.anim_info = (*before).clone();
+                anims_changed(ctx.timeline, ctx.tree, reshaped);
+
+                Some(AppliedCommand::ReplaceAnimInfo {
+                    anim,
+                    before: after,
+                    after: before,
+                })
+            }
+
             AppliedCommand::Batch(commands) => {
                 let mut inverses = Vec::with_capacity(commands.len());
 
                 for command in commands.into_iter().rev() {
-                    inverses.push(command.invert(tree)?);
+                    inverses.push(command.invert(ctx)?);
                 }
 
                 Some(AppliedCommand::Batch(inverses))
@@ -360,7 +612,10 @@ impl AppliedCommand {
             AppliedCommand::Transformed { pane_idx, .. } => vec![*pane_idx],
             AppliedCommand::Moved { pane_idx, .. } => vec![*pane_idx],
             AppliedCommand::ReplacePane { pane_idx, .. } => vec![*pane_idx],
-            AppliedCommand::ReplaceLayoutMeta { .. } => Vec::new(),
+            AppliedCommand::ReplaceLayoutMeta { .. }
+            | AppliedCommand::RemovedMaterial { .. }
+            | AppliedCommand::InsertedMaterial { .. }
+            | AppliedCommand::ReplaceAnimInfo { .. } => Vec::new(),
             AppliedCommand::Batch(commands) => {
                 let mut panes = Vec::new();
 
@@ -374,6 +629,11 @@ impl AppliedCommand {
             }
         }
     }
+}
+
+pub struct AnimSession {
+    pub anim: usize,
+    pub baseline: PaneAnimInfo,
 }
 
 pub struct EditHistory {
@@ -391,14 +651,14 @@ impl EditHistory {
         }
     }
 
-    pub fn perform(&mut self, tree: &mut PaneTree, edit: PaneEdit) -> Vec<PaneId> {
-        self.perform_all(tree, vec![edit])
+    pub fn perform(&mut self, ctx: &mut EditCtx, edit: PaneEdit) -> Vec<PaneId> {
+        self.perform_all(ctx, vec![edit])
     }
 
-    pub fn perform_all(&mut self, tree: &mut PaneTree, edits: Vec<PaneEdit>) -> Vec<PaneId> {
+    pub fn perform_all(&mut self, ctx: &mut EditCtx, edits: Vec<PaneEdit>) -> Vec<PaneId> {
         let mut applied: Vec<AppliedCommand> = edits
             .into_iter()
-            .filter_map(|edit| edit.apply(tree))
+            .filter_map(|edit| edit.apply(ctx))
             .collect();
 
         let command = match applied.len() {
@@ -413,12 +673,12 @@ impl EditHistory {
         panes
     }
 
-    pub fn undo(&mut self, tree: &mut PaneTree) -> Vec<PaneId> {
+    pub fn undo(&mut self, ctx: &mut EditCtx) -> Vec<PaneId> {
         let Some(applied) = self.undo_stack.pop() else {
             return Vec::new();
         };
 
-        let Some(inverse) = applied.invert(tree) else {
+        let Some(inverse) = applied.invert(ctx) else {
             return Vec::new();
         };
 
@@ -428,12 +688,12 @@ impl EditHistory {
         panes
     }
 
-    pub fn redo(&mut self, tree: &mut PaneTree) -> Vec<PaneId> {
+    pub fn redo(&mut self, ctx: &mut EditCtx) -> Vec<PaneId> {
         let Some(applied) = self.redo_stack.pop() else {
             return Vec::new();
         };
 
-        let Some(inverse) = applied.invert(tree) else {
+        let Some(inverse) = applied.invert(ctx) else {
             return Vec::new();
         };
 
@@ -470,6 +730,14 @@ impl EditHistory {
             pane_idx,
             before,
             after,
+        });
+    }
+
+    pub fn record_anim(&mut self, anim: usize, before: PaneAnimInfo, after: PaneAnimInfo) {
+        self.record(AppliedCommand::ReplaceAnimInfo {
+            anim,
+            before: Box::new(before),
+            after: Box::new(after),
         });
     }
 }

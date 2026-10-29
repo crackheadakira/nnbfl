@@ -10,7 +10,9 @@ use nnbfl::{
     bflyt::{
         file::{Bflyt, BflytNode, BflytSection, ControlSourceElement, GroupElement, PaneElement},
         flags::WindowKind,
-        list::{CaptureTextureList, FontList, MaterialList, MaterialTextureSrt, TextureList},
+        list::{
+            CaptureTextureList, FontList, Material, MaterialList, MaterialTextureSrt, TextureList,
+        },
         pane::{
             BasePaneUsageFlags, HorizontalPosition, PANE_NAME_LEN, Pane, PartsPane,
             PartsPaneBasicInfo, PicturePane, TextAlignment, TextBoxPane, TextureUv,
@@ -1061,6 +1063,48 @@ impl PaneTree {
             .collect()
     }
 
+    pub fn remove_material(&mut self, index: u16) -> Option<Material> {
+        let list = self.material_list.as_mut()?;
+
+        if index as usize >= list.materials.len() {
+            return None;
+        }
+
+        let material = list.materials.remove(index as usize);
+        self.remap_materials(|i| if i > index { i - 1 } else { i });
+
+        Some(material)
+    }
+
+    pub fn insert_material(&mut self, index: u16, material: Material) {
+        self.remap_materials(|i| if i >= index { i + 1 } else { i });
+
+        let list = self.material_list.get_or_insert_default();
+        let index = (index as usize).min(list.materials.len());
+        list.materials.insert(index, material);
+    }
+
+    fn remap_materials(&mut self, remap: impl Fn(u16) -> u16) {
+        let mut touched = Vec::new();
+
+        self.for_each_mut(|node| {
+            if node.parts_source.is_some() && !node.is_parts_overridden {
+                return;
+            }
+
+            if remap_section_materials(&mut node.section, &remap) {
+                node.dirty = DirtyFlags::all();
+                touched.push(node.pane_idx);
+            }
+        });
+
+        for pane in touched {
+            self.mark_pane_dirty(pane);
+        }
+
+        self.rebuild_maps();
+    }
+
     pub fn can_add(&self, parent: Option<PaneId>, kind: NewPaneKind) -> bool {
         let fonts = self.font_list.as_ref().is_some_and(|f| !f.fonts.is_empty());
 
@@ -1867,6 +1911,38 @@ pub struct PanePlacement {
     pub center: Vector2f,
     pub rotation: Vector3f,
     pub visible: bool,
+}
+
+fn remap_section_materials(section: &mut BflytSection, remap: &impl Fn(u16) -> u16) -> bool {
+    let mut changed = false;
+
+    let mut set = |index: &mut u16| {
+        let new = remap(*index);
+        changed |= new != *index;
+
+        *index = new;
+    };
+
+    match section {
+        BflytSection::PicturePane(pic) => set(&mut pic.material_index),
+        BflytSection::TextBoxPane(txt) => set(&mut txt.material_index),
+        BflytSection::WindowPane(win) => {
+            set(&mut win.content.material_index);
+            for frame in &mut win.frames {
+                set(&mut frame.material_index);
+            }
+        }
+        BflytSection::PartsPane(parts) => {
+            for property in &mut parts.properties {
+                if let Some(overridden) = &mut property.o_section {
+                    changed |= remap_section_materials(overridden, remap);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    changed
 }
 
 pub struct NodeOrigin {

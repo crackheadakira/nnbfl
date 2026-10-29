@@ -58,10 +58,10 @@ impl DrawUiWith<ContextMenuState<'_>, Option<ContextMenuAction>> for ContextMenu
                 ui.separator();
 
                 let hidden = state.is_hidden;
-                
+
                 if ui.button(if hidden { "Show" } else { "Hide" }).clicked() {
                     let targets = state.targets.clone();
-                    
+
                     if hidden {
                         out_action = Some(ContextMenuAction::ShowPanes(targets));
                     } else {
