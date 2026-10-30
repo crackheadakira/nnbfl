@@ -1,4 +1,5 @@
 pub mod archive_browser;
+pub mod array_editor;
 pub mod context_menu;
 pub mod dialogs;
 pub mod editors;

@@ -8,7 +8,10 @@ use nnbfl::{
 
 use crate::{
     pane_tree::{PaneId, PaneNode},
-    ui::{DrawUi, DrawUiWith},
+    ui::{
+        DrawUi, DrawUiWith,
+        array_editor::{ArrayEditor, ArrayLayout, optional},
+    },
 };
 
 #[derive(Debug, Clone, Default)]
@@ -92,22 +95,12 @@ impl DrawUiWith<(&mut PaneNode, Option<&str>)> for PaneEditor {
                     ui.label(format!("Layout File Name: {}", pp.o_layout_name));
                 }
 
-                ui.horizontal(|ui| {
-                    ui.heading("User Data");
-
-                    if pane.user_data.is_none() && ui.button("➕ Add").clicked() {
-                        pane.user_data = Some(Default::default());
-                        changed |= true;
-                    }
+                changed |= optional(ui, "User Data", &mut pane.user_data, |ui, array| {
+                    ArrayEditor::new("user_data", &mut array.user_data)
+                        .item_label(|_, entry| entry.o_name.clone())
+                        .show(ui, |ui, _, entry| entry.draw(ui))
+                        .changed
                 });
-
-                if let Some(user_data_array) = &mut pane.user_data {
-                    for user_data in user_data_array.user_data.iter_mut() {
-                        changed |= user_data.draw(ui);
-
-                        ui.add_space(8.0);
-                    }
-                }
 
                 if let BflytSection::PicturePane(pic) = &mut pane.section {
                     changed |= pic
@@ -194,66 +187,21 @@ impl DrawUi for UserData {
         changed |= match &mut self.content {
             UserDataContent::String(string) => ui.add(egui::TextEdit::singleline(string)).changed(),
             UserDataContent::S32(items) => {
-                ui.horizontal(|ui| {
-                    let mut vec_changed = false;
-
-                    for item in items.iter_mut() {
-                        let mut val_str = item.to_string();
-                        let response =
-                            ui.add(egui::TextEdit::singleline(&mut val_str).desired_width(40.0));
-
-                        if response.changed()
-                            && let Ok(parsed) = val_str.parse::<i32>()
-                        {
-                            *item = parsed;
-                            vec_changed = true;
-                        }
-                    }
-
-                    if ui.button("➕").clicked() {
-                        items.push(0);
-                        vec_changed = true;
-                    }
-
-                    if !items.is_empty() && ui.button("🗑").clicked() {
-                        items.pop();
-                        vec_changed = true;
-                    }
-
-                    vec_changed
-                })
-                .inner
+                ArrayEditor::new("s32", items)
+                    .layout(ArrayLayout::Inline)
+                    .show(ui, |ui, _, item| {
+                        ui.add(egui::DragValue::new(item)).changed()
+                    })
+                    .changed
             }
 
             UserDataContent::Float(items) => {
-                ui.horizontal(|ui| {
-                    let mut vec_changed = false;
-
-                    for item in items.iter_mut() {
-                        let mut val_str = item.to_string();
-                        let response =
-                            ui.add(egui::TextEdit::singleline(&mut val_str).desired_width(50.0));
-
-                        if response.changed()
-                            && let Ok(parsed) = val_str.parse::<f32>()
-                        {
-                            *item = parsed;
-                            vec_changed = true;
-                        }
-                    }
-
-                    if ui.button("➕").clicked() {
-                        items.push(0.0);
-                        vec_changed = true;
-                    }
-                    if !items.is_empty() && ui.button("🗑").clicked() {
-                        items.pop();
-                        vec_changed = true;
-                    }
-
-                    vec_changed
-                })
-                .inner
+                ArrayEditor::new("f32", items)
+                    .layout(ArrayLayout::Inline)
+                    .show(ui, |ui, _, item| {
+                        ui.add(egui::DragValue::new(item).speed(0.01)).changed()
+                    })
+                    .changed
             }
 
             UserDataContent::SystemData(items) => {
@@ -309,23 +257,14 @@ impl DrawUi for SystemData {
         match self {
             Self::Layout(layout) => {
                 if let LayoutData::AnimTagName(names) = layout {
-                    ui.horizontal(|ui| {
-                        ui.weak("Animation Tag Names");
-
-                        if ui.button("➕").clicked() {
-                            names.push("".to_owned());
-                            changed = true;
-                        }
-
-                        if !names.is_empty() && ui.button("🗑").clicked() {
-                            names.pop();
-                            changed = true;
-                        }
-                    });
-
-                    for name in names.iter_mut() {
-                        changed |= ui.add(egui::TextEdit::singleline(name)).changed();
-                    }
+                    changed |= ArrayEditor::new("anim_tag_names", names)
+                        .title("Animation Tag Names")
+                        .layout(ArrayLayout::Inline)
+                        .show(ui, |ui, _, name| {
+                            ui.add(egui::TextEdit::singleline(name).desired_width(120.0))
+                                .changed()
+                        })
+                        .changed;
                 }
             }
 

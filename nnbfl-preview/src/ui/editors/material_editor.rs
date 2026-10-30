@@ -8,7 +8,10 @@ use nnbfl::{
     ui2d::types::{Color4f, Color4u8, Vector2f},
 };
 
-use crate::ui::{DrawUi, DrawUiWith};
+use crate::ui::{
+    DrawUi, DrawUiWith,
+    array_editor::{ArrayEditor, ArrayLayout, optional},
+};
 
 #[derive(Default)]
 pub struct MaterialEditor {
@@ -129,441 +132,357 @@ impl DrawUi for Material {
         });
 
         ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Texture Maps");
-
-            if ui.button("➕ Add Entry").clicked() {
-                self.tex_maps.push(Default::default());
-                changed |= true;
-            }
-        });
-
-        for (idx, tex_map) in self.tex_maps.iter_mut().enumerate() {
-            ui.label(&tex_map.texture_name);
-
-            ui.horizontal(|ui| {
-                changed |= tex_map.u_options.draw_with(ui, ("U", idx));
-                changed |= tex_map.v_options.draw_with(ui, ("V", idx));
-            });
-
-            if let Some(tex_ext) = self.tex_extensions.get_mut(idx) {
+        let tex_count = self.tex_maps.len();
+        let maps = ArrayEditor::new("tex_maps", &mut self.tex_maps)
+            .title("Texture Maps")
+            .item_label(|i, map| format!("Texture {} · {}", i + 1, map.texture_name))
+            .show(ui, |ui, idx, tex_map| {
+                let mut changed = false;
                 ui.horizontal(|ui| {
-                    changed |= ui
-                        .checkbox(
-                            &mut tex_ext.is_capture_texture,
-                            format!("Is Texture {} Capture", idx + 1),
-                        )
-                        .clicked();
-
-                    changed |= ui
-                        .checkbox(
-                            &mut tex_ext.is_vector_texture,
-                            format!("Is Texture {} Vector", idx + 1),
-                        )
-                        .clicked();
-                });
-            }
-
-            ui.add_space(12.0);
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Texture SRTs");
-
-            if self.tex_srts.len() < self.tex_maps.len() && ui.button("➕ Add Entry").clicked() {
-                self.tex_srts.push(Default::default());
-                changed |= true;
-            }
-        });
-
-        ui.horizontal_wrapped(|ui| {
-            for (idx, tex_srt) in self.tex_srts.iter_mut().enumerate() {
-                ui.vertical(|ui| {
-                    ui.weak(format!("Texture {}", idx + 1));
-
-                    egui::Grid::new(format!("tex_srt_grid_{idx}"))
-                        .num_columns(2)
-                        .spacing([12.0, 6.0])
-                        .show(ui, |ui| {
-                            ui.label("Rotate");
-                            changed |= ui
-                                .add(egui::DragValue::new(&mut tex_srt.rotate).speed(0.1))
-                                .changed();
-                            ui.end_row();
-
-                            ui.label("Translate U");
-                            changed |= ui
-                                .add(egui::DragValue::new(&mut tex_srt.translate_u).speed(0.5))
-                                .changed();
-                            ui.end_row();
-
-                            ui.label("Translate V");
-                            changed |= ui
-                                .add(egui::DragValue::new(&mut tex_srt.translate_v).speed(0.5))
-                                .changed();
-                            ui.end_row();
-
-                            ui.label("Scale U");
-                            changed |= ui
-                                .add(egui::DragValue::new(&mut tex_srt.scale_u).speed(0.01))
-                                .changed();
-                            ui.end_row();
-
-                            ui.label("Scale V");
-                            changed |= ui
-                                .add(egui::DragValue::new(&mut tex_srt.scale_v).speed(0.01))
-                                .changed();
-                            ui.end_row();
-                        });
+                    changed |= tex_map.u_options.draw_with(ui, ("U", idx));
+                    changed |= tex_map.v_options.draw_with(ui, ("V", idx));
                 });
 
-                ui.add_space(24.0);
-            }
-        });
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Texture Coordinate Generators");
-
-            if self.tex_coord_gens.len() < self.tex_maps.len()
-                && ui.button("➕ Add Entry").clicked()
-            {
-                self.tex_coord_gens.push(Default::default());
-                changed |= true;
-            }
-        });
-
-        for (idx, tex_coord_gen) in self.tex_coord_gens.iter_mut().enumerate() {
-            egui::ComboBox::new(
-                format!("tex_coord_gen_{idx}"),
-                format!("Texture {} Source", idx + 1),
-            )
-            .selected_text(format!("{:?}", tex_coord_gen.tex_gen_source))
-            .show_ui(ui, |ui| {
-                use nnbfl::bflyt::list::TexGenSrc;
-
-                changed |= ui
-                    .selectable_value(
-                        &mut tex_coord_gen.tex_gen_source,
-                        TexGenSrc::Tex0,
-                        "Texture 0",
-                    )
-                    .clicked();
-
-                changed |= ui
-                    .selectable_value(
-                        &mut tex_coord_gen.tex_gen_source,
-                        TexGenSrc::Tex1,
-                        "Texture 1",
-                    )
-                    .clicked();
-
-                changed |= ui
-                    .selectable_value(
-                        &mut tex_coord_gen.tex_gen_source,
-                        TexGenSrc::Tex2,
-                        "Texture 2",
-                    )
-                    .clicked();
-
-                changed |= ui
-                    .selectable_value(
-                        &mut tex_coord_gen.tex_gen_source,
-                        TexGenSrc::OrthogonalProjection,
-                        "Orthogonal Projection",
-                    )
-                    .clicked();
-
-                changed |= ui
-                    .selectable_value(
-                        &mut tex_coord_gen.tex_gen_source,
-                        TexGenSrc::PaneBasedOrthogonalProjection,
-                        "Pane Based Orthogonal Projection",
-                    )
-                    .clicked();
-
-                changed |= ui
-                    .selectable_value(
-                        &mut tex_coord_gen.tex_gen_source,
-                        TexGenSrc::PaneBasedPerspectiveProjection,
-                        "Pane Based Perspective Projection",
-                    )
-                    .clicked();
-
-                changed |= ui
-                    .selectable_value(
-                        &mut tex_coord_gen.tex_gen_source,
-                        TexGenSrc::PerspectiveProjection,
-                        "Perspective Projection",
-                    )
-                    .clicked();
-
-                changed |= ui
-                    .selectable_value(
-                        &mut tex_coord_gen.tex_gen_source,
-                        TexGenSrc::BrickRepeat,
-                        "Brick Repeat",
-                    )
-                    .clicked();
-            });
-
-            ui.add_space(12.0);
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Projection Texture Generators");
-
-            if self.projection_tex_gens.len() < self.tex_maps.len()
-                && ui.button("➕ Add Entry").clicked()
-            {
-                self.projection_tex_gens.push(Default::default());
-                changed |= true;
-            }
-        });
-
-        for (idx, proj_tex_gen) in self.projection_tex_gens.iter_mut().enumerate() {
-            ui.weak(format!("Texture {}", idx + 1));
-
-            changed |= ui
-                .checkbox(
-                    &mut proj_tex_gen.flags.fitting_layout_size,
-                    "Fitting Layout Size",
-                )
-                .changed();
-
-            changed |= ui
-                .checkbox(
-                    &mut proj_tex_gen.flags.fitting_pane_size,
-                    "Fitting Pane Size",
-                )
-                .changed();
-
-            changed |= ui
-                .checkbox(
-                    &mut proj_tex_gen.flags.adjust_projection_scale_rotate,
-                    "Adjust Projection, Scale & Rotate",
-                )
-                .changed();
-
-            proj_tex_gen.translation.draw_with(ui, "Translation");
-
-            ui.add_space(4.0);
-
-            proj_tex_gen.scale.draw_with(ui, "Scale");
-
-            ui.add_space(12.0);
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Texture Environment Unit Combiners");
-
-            if self.tev_combiners.len() < (self.tex_maps.len() / 2)
-                && ui.button("➕ Add Entry").clicked()
-            {
-                self.tev_combiners.push(Default::default());
-                changed |= true;
-            }
-        });
-
-        for (idx, tev_combiner) in self.tev_combiners.iter_mut().enumerate() {
-            ui.weak(format!("Combiner {}", idx + 1));
-
-            changed |= tev_combiner.alpha_mode.draw_with(ui, ("Alpha Mode", idx));
-            changed |= tev_combiner.rgb_mode.draw_with(ui, ("RGB Mode", idx));
-
-            ui.add_space(12.0);
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Alpha Compare");
-
-            if self.alpha_compare.is_none() && ui.button("➕ Add").clicked() {
-                self.alpha_compare = Some(Default::default());
-                changed |= true;
-            }
-        });
-
-        if let Some(alpha_compare) = self.alpha_compare.as_mut() {
-            ui.label("Reference Value");
-            changed |= ui
-                .add(
-                    egui::DragValue::new(&mut alpha_compare.alpha_compare_ref_value)
-                        .speed(0.5)
-                        .range(0.0..=1.0),
-                )
-                .changed();
-
-            egui::ComboBox::new("mat_editor_alpha_compare_op", "Compare Operand")
-                .selected_text(format!("{:?}", alpha_compare.compare))
-                .show_ui(ui, |ui| {
-                    use nnbfl::bflyt::list::AlphaCompare;
-
-                    changed |= ui
-                        .selectable_value(&mut alpha_compare.compare, AlphaCompare::Never, "Never")
-                        .clicked();
-
-                    changed |= ui
-                        .selectable_value(&mut alpha_compare.compare, AlphaCompare::Less, "Less")
-                        .clicked();
-
-                    changed |= ui
-                        .selectable_value(
-                            &mut alpha_compare.compare,
-                            AlphaCompare::LessThanEqual,
-                            "Less Than Equal",
-                        )
-                        .clicked();
-
-                    changed |= ui
-                        .selectable_value(&mut alpha_compare.compare, AlphaCompare::Equal, "Equal")
-                        .clicked();
-
-                    changed |= ui
-                        .selectable_value(
-                            &mut alpha_compare.compare,
-                            AlphaCompare::NotEqual,
-                            "Not Equal",
-                        )
-                        .clicked();
-
-                    changed |= ui
-                        .selectable_value(
-                            &mut alpha_compare.compare,
-                            AlphaCompare::GreaterThanEqual,
-                            "Greater Than Equal",
-                        )
-                        .clicked();
-
-                    changed |= ui
-                        .selectable_value(
-                            &mut alpha_compare.compare,
-                            AlphaCompare::Greater,
-                            "Greater",
-                        )
-                        .clicked();
-
-                    changed |= ui
-                        .selectable_value(
-                            &mut alpha_compare.compare,
-                            AlphaCompare::Always,
-                            "Always",
-                        )
-                        .clicked();
-                });
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Blend Mode");
-
-            if self.blend_mode.is_none() && ui.button("➕ Add").clicked() {
-                self.blend_mode = Some(Default::default());
-                changed |= true;
-            }
-        });
-
-        if let Some(blend_mode) = self.blend_mode.as_mut() {
-            changed |= blend_mode.draw_with(ui, "blend_mode");
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Alpha Blend Mode");
-
-            if self.blend_mode_alpha.is_none() && ui.button("➕ Add").clicked() {
-                self.blend_mode_alpha = Some(Default::default());
-                changed |= true;
-            }
-        });
-
-        if let Some(blend_mode_alpha) = self.blend_mode_alpha.as_mut() {
-            changed |= blend_mode_alpha.draw_with(ui, "blend_mode_alpha");
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Indirect Matrix");
-
-            if self.indirect_matrix.is_none() && ui.button("➕ Add").clicked() {
-                self.indirect_matrix = Some(Default::default());
-                changed |= true;
-            }
-        });
-
-        if let Some(indirect_matrix) = self.indirect_matrix.as_mut() {
-            ui.label("Rotation");
-            changed |= ui
-                .add(egui::DragValue::new(&mut indirect_matrix.rotation).speed(0.5))
-                .changed();
-
-            changed |= indirect_matrix.scale.draw_with(ui, "Scale");
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Font Shadow Color");
-
-            if self.font_shadow_color.is_none() && ui.button("➕ Add").clicked() {
-                self.font_shadow_color = Some(Default::default());
-                changed |= true;
-            }
-        });
-
-        if let Some(font_shadow_color) = self.font_shadow_color.as_mut() {
-            changed |= font_shadow_color.black_color.draw_with(ui, "Black Color");
-            changed |= font_shadow_color.white_color.draw_with(ui, "White Color");
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Detailed Combiner");
-
-            if self.detailed_combiner.is_none() && ui.button("➕ Add").clicked() {
-                self.detailed_combiner = Some(Default::default());
-                changed |= true;
-            }
-        });
-
-        if let Some(detailed_combiner) = self.detailed_combiner.as_mut() {
-            changed |= detailed_combiner.color1.draw_with(ui, "Color 1");
-            changed |= detailed_combiner.color2.draw_with(ui, "Color 2");
-            changed |= detailed_combiner.color3.draw_with(ui, "Color 3");
-            changed |= detailed_combiner.color4.draw_with(ui, "Color 4");
-            changed |= detailed_combiner.color5.draw_with(ui, "Color 5");
-
-            ui.horizontal(|ui| {
-                ui.weak("Combiners");
-
-                if ui.button("➕ Add Entry").clicked() {
-                    detailed_combiner.entries.push(Default::default());
-                    changed |= true;
+                if let Some(tex_ext) = self.tex_extensions.get_mut(idx) {
+                    ui.horizontal(|ui| {
+                        changed |= ui
+                            .checkbox(&mut tex_ext.is_capture_texture, "Capture Texture")
+                            .changed();
+                        changed |= ui
+                            .checkbox(&mut tex_ext.is_vector_texture, "Vector Texture")
+                            .changed();
+                    });
                 }
+
+                changed
             });
 
-            ui.horizontal_wrapped(|ui| {
-                for (i, entry) in detailed_combiner.entries.iter_mut().enumerate() {
-                    ui.vertical(|ui| {
-                        ui.set_min_width(150.0);
+        changed |= maps.changed;
 
-                        ui.weak(format!("Combiner {}", i + 1));
+        if let Some(op) = maps.op {
+            let grow = !self.tex_extensions.is_empty() && self.tex_extensions.len() == tex_count;
 
-                        ui.label("Alpha Config");
-                        changed |= entry.alpha_config.draw(ui);
+            op.mirror(&mut self.tex_extensions, grow);
+            op.mirror(&mut self.tex_srts, false);
+            op.mirror(&mut self.tex_coord_gens, false);
+            op.mirror(&mut self.projection_tex_gens, false);
+        }
 
-                        ui.add_space(12.0);
+        let tex_count = self.tex_maps.len();
 
-                        ui.label("Color Config");
-                        changed |= entry.color_config.draw(ui);
+        ui.separator();
+        changed |= ArrayEditor::new("tex_srts", &mut self.tex_srts)
+            .title("Texture SRTs")
+            .max(tex_count)
+            .layout(ArrayLayout::Cards)
+            .item_label(texture_label)
+            .show(ui, |ui, idx, tex_srt| {
+                let mut changed = false;
+                egui::Grid::new(format!("tex_srt_grid_{idx}"))
+                    .num_columns(2)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        for (label, value, speed) in [
+                            ("Rotate", &mut tex_srt.rotate, 0.1),
+                            ("Translate U", &mut tex_srt.translate_u, 0.5),
+                            ("Translate V", &mut tex_srt.translate_v, 0.5),
+                            ("Scale U", &mut tex_srt.scale_u, 0.01),
+                            ("Scale V", &mut tex_srt.scale_v, 0.01),
+                        ] {
+                            ui.label(label);
+                            changed |= ui.add(egui::DragValue::new(value).speed(speed)).changed();
+                            ui.end_row();
+                        }
                     });
 
-                    ui.add_space(24.0);
-                }
-            });
-        }
+                changed
+            })
+            .changed;
+
+        ui.separator();
+        changed |= ArrayEditor::new("tex_coord_gens", &mut self.tex_coord_gens)
+            .title("Texture Coordinate Generators")
+            .max(tex_count)
+            .item_label(texture_label)
+            .show(ui, |ui, idx, tex_coord_gen| {
+                let mut changed = false;
+                egui::ComboBox::new(
+                    format!("tex_coord_gen_{idx}"),
+                    format!("Texture {} Source", idx + 1),
+                )
+                .selected_text(format!("{:?}", tex_coord_gen.tex_gen_source))
+                .show_ui(ui, |ui| {
+                    use nnbfl::bflyt::list::TexGenSrc;
+
+                    changed |= ui
+                        .selectable_value(
+                            &mut tex_coord_gen.tex_gen_source,
+                            TexGenSrc::Tex0,
+                            "Texture 0",
+                        )
+                        .clicked();
+
+                    changed |= ui
+                        .selectable_value(
+                            &mut tex_coord_gen.tex_gen_source,
+                            TexGenSrc::Tex1,
+                            "Texture 1",
+                        )
+                        .clicked();
+
+                    changed |= ui
+                        .selectable_value(
+                            &mut tex_coord_gen.tex_gen_source,
+                            TexGenSrc::Tex2,
+                            "Texture 2",
+                        )
+                        .clicked();
+
+                    changed |= ui
+                        .selectable_value(
+                            &mut tex_coord_gen.tex_gen_source,
+                            TexGenSrc::OrthogonalProjection,
+                            "Orthogonal Projection",
+                        )
+                        .clicked();
+
+                    changed |= ui
+                        .selectable_value(
+                            &mut tex_coord_gen.tex_gen_source,
+                            TexGenSrc::PaneBasedOrthogonalProjection,
+                            "Pane Based Orthogonal Projection",
+                        )
+                        .clicked();
+
+                    changed |= ui
+                        .selectable_value(
+                            &mut tex_coord_gen.tex_gen_source,
+                            TexGenSrc::PaneBasedPerspectiveProjection,
+                            "Pane Based Perspective Projection",
+                        )
+                        .clicked();
+
+                    changed |= ui
+                        .selectable_value(
+                            &mut tex_coord_gen.tex_gen_source,
+                            TexGenSrc::PerspectiveProjection,
+                            "Perspective Projection",
+                        )
+                        .clicked();
+
+                    changed |= ui
+                        .selectable_value(
+                            &mut tex_coord_gen.tex_gen_source,
+                            TexGenSrc::BrickRepeat,
+                            "Brick Repeat",
+                        )
+                        .clicked();
+                });
+
+                changed
+            })
+            .changed;
+
+        ui.separator();
+        changed |= ArrayEditor::new("projection_tex_gens", &mut self.projection_tex_gens)
+            .title("Projection Texture Generators")
+            .max(tex_count)
+            .item_label(texture_label)
+            .show(ui, |ui, _, proj_tex_gen| {
+                let mut changed = false;
+                changed |= ui
+                    .checkbox(
+                        &mut proj_tex_gen.flags.fitting_layout_size,
+                        "Fitting Layout Size",
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut proj_tex_gen.flags.fitting_pane_size,
+                        "Fitting Pane Size",
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut proj_tex_gen.flags.adjust_projection_scale_rotate,
+                        "Adjust Projection, Scale & Rotate",
+                    )
+                    .changed();
+
+                changed |= proj_tex_gen.translation.draw_with(ui, "Translation");
+                ui.add_space(4.0);
+                changed |= proj_tex_gen.scale.draw_with(ui, "Scale");
+                changed
+            })
+            .changed;
+
+        ui.separator();
+        changed |= ArrayEditor::new("tev_combiners", &mut self.tev_combiners)
+            .title("Texture Environment Unit Combiners")
+            .max(tex_count / 2)
+            .item_label(|i, _| format!("Combiner {}", i + 1))
+            .show(ui, |ui, idx, tev_combiner| {
+                tev_combiner.alpha_mode.draw_with(ui, ("Alpha Mode", idx))
+                    | tev_combiner.rgb_mode.draw_with(ui, ("RGB Mode", idx))
+            })
+            .changed;
+
+        ui.separator();
+        changed |= optional(
+            ui,
+            "Alpha Compare",
+            &mut self.alpha_compare,
+            |ui, alpha_compare| {
+                let mut changed = false;
+                ui.label("Reference Value");
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut alpha_compare.alpha_compare_ref_value)
+                            .speed(0.5)
+                            .range(0.0..=1.0),
+                    )
+                    .changed();
+
+                egui::ComboBox::new("mat_editor_alpha_compare_op", "Compare Operand")
+                    .selected_text(format!("{:?}", alpha_compare.compare))
+                    .show_ui(ui, |ui| {
+                        use nnbfl::bflyt::list::AlphaCompare;
+
+                        changed |= ui
+                            .selectable_value(
+                                &mut alpha_compare.compare,
+                                AlphaCompare::Never,
+                                "Never",
+                            )
+                            .clicked();
+
+                        changed |= ui
+                            .selectable_value(
+                                &mut alpha_compare.compare,
+                                AlphaCompare::Less,
+                                "Less",
+                            )
+                            .clicked();
+
+                        changed |= ui
+                            .selectable_value(
+                                &mut alpha_compare.compare,
+                                AlphaCompare::LessThanEqual,
+                                "Less Than Equal",
+                            )
+                            .clicked();
+
+                        changed |= ui
+                            .selectable_value(
+                                &mut alpha_compare.compare,
+                                AlphaCompare::Equal,
+                                "Equal",
+                            )
+                            .clicked();
+
+                        changed |= ui
+                            .selectable_value(
+                                &mut alpha_compare.compare,
+                                AlphaCompare::NotEqual,
+                                "Not Equal",
+                            )
+                            .clicked();
+
+                        changed |= ui
+                            .selectable_value(
+                                &mut alpha_compare.compare,
+                                AlphaCompare::GreaterThanEqual,
+                                "Greater Than Equal",
+                            )
+                            .clicked();
+
+                        changed |= ui
+                            .selectable_value(
+                                &mut alpha_compare.compare,
+                                AlphaCompare::Greater,
+                                "Greater",
+                            )
+                            .clicked();
+
+                        changed |= ui
+                            .selectable_value(
+                                &mut alpha_compare.compare,
+                                AlphaCompare::Always,
+                                "Always",
+                            )
+                            .clicked();
+                    });
+                changed
+            },
+        );
+
+        ui.separator();
+        changed |= optional(ui, "Blend Mode", &mut self.blend_mode, |ui, blend_mode| {
+            blend_mode.draw_with(ui, "blend_mode")
+        });
+
+        ui.separator();
+        changed |= optional(
+            ui,
+            "Alpha Blend Mode",
+            &mut self.blend_mode_alpha,
+            |ui, blend_mode| blend_mode.draw_with(ui, "blend_mode_alpha"),
+        );
+
+        ui.separator();
+        changed |= optional(
+            ui,
+            "Indirect Matrix",
+            &mut self.indirect_matrix,
+            |ui, indirect_matrix| {
+                ui.label("Rotation");
+                ui.add(egui::DragValue::new(&mut indirect_matrix.rotation).speed(0.5))
+                    .changed()
+                    | indirect_matrix.scale.draw_with(ui, "Scale")
+            },
+        );
+
+        ui.separator();
+        changed |= optional(
+            ui,
+            "Font Shadow Color",
+            &mut self.font_shadow_color,
+            |ui, shadow| {
+                shadow.black_color.draw_with(ui, "Black Color")
+                    | shadow.white_color.draw_with(ui, "White Color")
+            },
+        );
+
+        ui.separator();
+        changed |= optional(
+            ui,
+            "Detailed Combiner",
+            &mut self.detailed_combiner,
+            |ui, detailed| {
+                let mut changed = false;
+                changed |= detailed.color1.draw_with(ui, "Color 1");
+                changed |= detailed.color2.draw_with(ui, "Color 2");
+                changed |= detailed.color3.draw_with(ui, "Color 3");
+                changed |= detailed.color4.draw_with(ui, "Color 4");
+                changed |= detailed.color5.draw_with(ui, "Color 5");
+
+                changed |= ArrayEditor::new("detailed_entries", &mut detailed.entries)
+                    .title("Combiners")
+                    .layout(ArrayLayout::Cards)
+                    .item_label(|i, _| format!("Combiner {}", i + 1))
+                    .show(ui, |ui, _, entry| {
+                        ui.set_min_width(150.0);
+                        ui.label("Alpha Config");
+                        let alpha = entry.alpha_config.draw(ui);
+                        ui.add_space(12.0);
+                        ui.label("Color Config");
+                        alpha | entry.color_config.draw(ui)
+                    })
+                    .changed;
+
+                changed
+            },
+        );
 
         changed
     }
@@ -1176,4 +1095,8 @@ impl DrawUi for DetailedCombinerAlphaStageConfig {
 
         changed
     }
+}
+
+fn texture_label<T>(i: usize, _: &T) -> String {
+    format!("Texture {}", i + 1)
 }
