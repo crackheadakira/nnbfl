@@ -2,12 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use nnbfl::{
     bflan::anim_info::AnimType,
-    bflyt::{list::MATERIAL_NAME_LEN, pane::PANE_NAME_LEN},
+    bflyt::{file::BflytSection, list::MATERIAL_NAME_LEN, pane::PANE_NAME_LEN},
 };
 
 use crate::{
     edit_history::{AppliedCommand, EditCtx, LayoutMeta, edit_anims},
-    pane_tree::{Anchor, PaneId, PaneNode, PaneTree, remap_section_materials},
+    pane_tree::{Anchor, PaneId, PaneNode, PaneTree, remap_section_materials, take_parts_content},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -319,6 +319,7 @@ pub fn apply(
 
     let parent = tree.parent_map.get(&source).copied().flatten()?;
     let mut clone = tree.find_by_idx(source)?.clone();
+    take_parts_content(&mut clone);
     tree.reindex_clone(&mut clone);
 
     let pane_names: HashMap<&str, &str> = names
@@ -390,6 +391,17 @@ pub fn apply(
 
     let position = tree.anchor_position(Some(parent), Anchor::After(source))?;
     let idx = tree.insert_node_at(Some(parent), position, clone);
+
+    let parts_panes: Vec<PaneId> = tree
+        .find_by_idx(idx)?
+        .iter()
+        .filter(|n| n.parts_source.is_none() && matches!(n.section, BflytSection::PartsPane(_)))
+        .map(|n| n.pane_idx)
+        .collect();
+
+    for pane in parts_panes {
+        tree.rebuild_parts(pane, None, ctx.glyphs);
+    }
 
     let copies: Vec<PaneId> = tree.find_by_idx(idx)?.iter().map(|n| n.pane_idx).collect();
 

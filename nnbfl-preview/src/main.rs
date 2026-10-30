@@ -471,6 +471,11 @@ impl LayoutTabs {
         self.items.get_mut(self.active_index)
     }
 
+    pub fn active_with_glyphs(&mut self) -> Option<(&mut LayoutData, &mut GlyphData)> {
+        let layout = self.items.get_mut(self.active_index)?;
+        Some((layout, &mut self.glyphs))
+    }
+
     pub fn active_timeline(&self) -> Option<&TimelineState> {
         self.active().map(|layout| &layout.timeline)
     }
@@ -551,12 +556,16 @@ impl LayoutData {
     const EDIT_HISTORY_LIMIT: usize = 200;
     const EDIT_HISTORY_BUDGET: usize = 256 * 1024 * 1024;
 
-    pub fn edit_ctx(&mut self) -> (&mut EditHistory, EditCtx<'_>) {
+    pub fn edit_ctx<'a>(
+        &'a mut self,
+        glyphs: &'a mut GlyphData,
+    ) -> (&'a mut EditHistory, EditCtx<'a>) {
         (
             &mut self.history,
             EditCtx {
                 tree: &mut self.tree,
                 timeline: &mut self.timeline,
+                glyphs,
             },
         )
     }
@@ -1459,7 +1468,7 @@ impl App {
     }
 
     fn perform_pane_edits(&mut self, edits: impl FnOnce(&PaneTree) -> Vec<edit_history::PaneEdit>) {
-        let Some(layout) = self.tabs.active_mut() else {
+        let Some((layout, glyphs)) = self.tabs.active_with_glyphs() else {
             return;
         };
 
@@ -1484,7 +1493,7 @@ impl App {
         }
 
         layout.commit_sessions();
-        let (history, mut edit) = layout.edit_ctx();
+        let (history, mut edit) = layout.edit_ctx(glyphs);
         let touches_panes = edits.iter().any(|edit| !edit.is_material());
         let resulting = history.perform_all(&mut edit, edits);
 
@@ -1966,9 +1975,9 @@ impl ApplicationHandler for App {
                 }
 
                 UiAction::Undo => {
-                    if let Some(layout) = self.tabs.active_mut() {
+                    if let Some((layout, glyphs)) = self.tabs.active_with_glyphs() {
                         layout.commit_sessions();
-                        let (history, mut edit) = layout.edit_ctx();
+                        let (history, mut edit) = layout.edit_ctx(glyphs);
 
                         let resulting = history.undo(&mut edit);
                         self.ui_state.pane_tree_view.select_many(resulting);
@@ -1977,14 +1986,14 @@ impl ApplicationHandler for App {
                 }
 
                 UiAction::JumpToHistory(target) => {
-                    if let Some(layout) = self.tabs.active_mut() {
+                    if let Some((layout, glyphs)) = self.tabs.active_with_glyphs() {
                         layout.commit_sessions();
 
                         let mut resulting = Vec::new();
 
                         loop {
                             let position = layout.history.position();
-                            let (history, mut edit) = layout.edit_ctx();
+                            let (history, mut edit) = layout.edit_ctx(glyphs);
 
                             if position > target {
                                 resulting = history.undo(&mut edit);
@@ -2001,9 +2010,9 @@ impl ApplicationHandler for App {
                 }
 
                 UiAction::Redo => {
-                    if let Some(layout) = self.tabs.active_mut() {
+                    if let Some((layout, glyphs)) = self.tabs.active_with_glyphs() {
                         layout.commit_sessions();
-                        let (history, mut edit) = layout.edit_ctx();
+                        let (history, mut edit) = layout.edit_ctx(glyphs);
 
                         let resulting = history.redo(&mut edit);
                         self.ui_state.pane_tree_view.select_many(resulting);

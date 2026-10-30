@@ -1373,22 +1373,9 @@ impl PaneTree {
     }
 
     pub fn parts_content_ids(&self, pane: PaneId) -> Vec<PaneId> {
-        fn build_order(node: &PaneNode, out: &mut Vec<PaneId>) {
-            out.push(node.pane_idx);
-            for child in node.parts_children.iter().chain(&node.children) {
-                build_order(child, out);
-            }
-        }
-
-        let mut out = Vec::new();
-
-        if let Some(node) = self.find_by_idx(pane) {
-            for child in &node.parts_children {
-                build_order(child, &mut out);
-            }
-        }
-
-        out
+        self.find_by_idx(pane)
+            .map(parts_build_order)
+            .unwrap_or_default()
     }
 
     pub fn rebuild_parts(
@@ -2592,4 +2579,37 @@ pub fn material_name_error(
         }
         _ => None,
     }
+}
+
+pub fn parts_build_order(node: &PaneNode) -> Vec<PaneId> {
+    fn walk(node: &PaneNode, out: &mut Vec<PaneId>) {
+        out.push(node.pane_idx);
+
+        for child in node.parts_children.iter().chain(&node.children) {
+            walk(child, out);
+        }
+    }
+
+    let mut out = Vec::new();
+
+    for child in &node.parts_children {
+        walk(child, &mut out);
+    }
+
+    out
+}
+
+pub fn take_parts_content(node: &mut PaneNode) -> Vec<(PaneId, Vec<PaneId>)> {
+    let mut taken = Vec::new();
+
+    if !node.parts_children.is_empty() {
+        taken.push((node.pane_idx, parts_build_order(node)));
+        node.parts_children.clear();
+    }
+
+    for child in &mut node.children {
+        taken.extend(take_parts_content(child));
+    }
+
+    taken
 }

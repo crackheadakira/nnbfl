@@ -19,7 +19,8 @@ use nnbfl::{
 };
 
 use crate::{
-    pane_tree::{DirtyFlags, PaneNode, PaneTree},
+    font::glyph_atlas::GlyphData,
+    pane_tree::{DirtyFlags, PaneNode, PaneTree, take_parts_content},
     renderer::textured_quad::TexturedQuad,
     traits::Displaying,
 };
@@ -34,6 +35,7 @@ pub struct PaneTransform {
 pub struct EditCtx<'a> {
     pub tree: &'a mut PaneTree,
     pub timeline: &'a mut TimelineState,
+    pub glyphs: &'a mut GlyphData,
 }
 
 pub enum PaneEdit {
@@ -115,21 +117,16 @@ impl PaneEdit {
                     .map(|n| n.label.trim_end_matches('\0').to_string())
                     .collect();
 
-                let mut commands = vec![AppliedCommand::Removed(Box::new(PendingRemoval::new(
-                    parent_idx, position, node,
-                )))];
-
-                let AppliedCommand::Removed(removal) = &commands[0] else {
-                    unreachable!()
-                };
-
-                let mut orphans: Vec<u16> = removal
-                    .node
+                let mut orphans: Vec<u16> = node
                     .iter()
                     .filter(|n| n.parts_source.is_none() || n.is_parts_overridden)
                     .flat_map(PaneNode::material_indices)
                     .filter(|index| !tree.material_users.contains_key(index))
                     .collect();
+
+                let mut commands = vec![AppliedCommand::Removed(Box::new(PendingRemoval::new(
+                    parent_idx, position, node,
+                )))];
 
                 orphans.sort_unstable();
                 orphans.dedup();
@@ -550,15 +547,19 @@ pub struct PendingRemoval {
     parent_idx: Option<PaneId>,
     position: usize,
     node: PaneNode,
+    parts: Vec<(PaneId, Vec<PaneId>)>,
 }
 
 impl PendingRemoval {
     fn new(parent_idx: Option<PaneId>, position: usize, mut node: PaneNode) -> Self {
+        let parts = take_parts_content(&mut node);
         strip_visuals(&mut node);
+
         Self {
             parent_idx,
             position,
             node,
+            parts,
         }
     }
 }
@@ -602,7 +603,8 @@ fn node_size(node: &PaneNode) -> usize {
     let quads =
         node.textured_quad.is_some() as usize + node.window_quads.len() + node.glyph_quads.len();
 
-    size_of::<PaneNode>()
+    // being conservative by multiplying by 2 cuz actual memory seemed to outweigh the serialized calc
+    2 * size_of::<PaneNode>()
         + serialized_size(&node.section)
         + node.label.len()
         + node.user_data.as_ref().map_or(0, serialized_size)
@@ -688,8 +690,14 @@ impl AppliedCommand {
             }
 
             AppliedCommand::Removed(removal) => {
-                let pane_idx =
-                    tree.insert_node_at(removal.parent_idx, removal.position, removal.node);
+                let PendingRemoval {
+                    parent_idx,
+                    position,
+                    node,
+                    parts,
+                } = *removal;
+
+                let pane_idx = tree.insert_node_at(parent_idx, position, node);
 
                 let restored: Vec<PaneId> = tree
                     .find_by_idx(pane_idx)
@@ -702,6 +710,10 @@ impl AppliedCommand {
                     }
 
                     tree.mark_pane_dirty(pane);
+                }
+
+                for (pane, ids) in parts {
+                    tree.rebuild_parts(pane, Some(ids), ctx.glyphs);
                 }
 
                 Some(AppliedCommand::Inserted(pane_idx))
@@ -868,7 +880,14 @@ impl AppliedCommand {
                 | AppliedCommand::Transformed { .. }
                 | AppliedCommand::Moved { .. }
                 | AppliedCommand::InsertedMaterial { .. } => 0,
-                AppliedCommand::Removed(removal) => node_size(&removal.node),
+                AppliedCommand::Removed(removal) => {
+                    node_size(&removal.node)
+                        + removal
+                            .parts
+                            .iter()
+                            .map(|(_, ids)| (ids.len() + 1) * size_of::<PaneId>())
+                            .sum::<usize>()
+                }
                 AppliedCommand::ReplacePane { before, after, .. } => {
                     snapshot_size(before) + snapshot_size(after)
                 }
@@ -943,7 +962,9 @@ struct Step {
 
 impl Step {
     fn new(label: String, command: AppliedCommand) -> Self {
-        let size = size_of::<Self>() + label.len() + command.approx_size();
+        let estimate = size_of::<Self>() + label.len() + command.approx_size();
+        let size = estimate + estimate / 4;
+
         Self {
             label,
             command,
