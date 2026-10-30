@@ -599,6 +599,8 @@ pub struct PaneTree {
 
     pub next_id: u32,
     pub parts_cache: HashMap<String, Option<Bflyt>>,
+    pub texture_changes: Vec<String>,
+    pub bntx_edited: bool,
 }
 
 impl PaneTree {
@@ -1520,6 +1522,8 @@ impl PaneTree {
             needs_rebatch: false,
             next_id,
             parts_cache: blarc_cache,
+            texture_changes: Vec::new(),
+            bntx_edited: false,
             user_data: file.user_data,
             texture_list: file.texture_list,
             font_list: file.font_list,

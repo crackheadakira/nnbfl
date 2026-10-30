@@ -20,7 +20,7 @@ pollster = "0.4"
 log = "0.4"
 env_logger = "0.11"
 rfd = "0.17"
-tomolib = "1.7"
+tomolib = { version = "1.7", features = ["image-encode-gpu"] }
 rayon = "1.12"
 
 szs = { git = "https://github.com/snailspeed3/RiiStudio/", rev = "8af2650ca7d13b3447b5d1712acc5dba5b1024ea", version = "0.3.7" }

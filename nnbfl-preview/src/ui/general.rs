@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{
     ops::duplicate::{DuplicateNames, DuplicateOptions},
     pane_factory::NewPaneKind,
@@ -12,6 +14,7 @@ use nnbfl::{
 use crate::{
     RenderContext,
     edit_history::EditHistory,
+    font::glyph_atlas::GLYPH_ATLAS_TEXTURE_NAME,
     pane_tree::PaneNode,
     renderer::textured_quad::PaneQuadData,
     traits::Displaying,
@@ -20,7 +23,10 @@ use crate::{
         archive_browser::ArchiveBrowser,
         context_menu::{ContextMenu, ContextMenuAction, ContextMenuState},
         dialogs::duplicate::DuplicateDialog,
-        editors::{GroupEditor, MaterialEditor, MaterialEditorContext, PaneEditor, TextureEditor},
+        editors::{
+            GroupEditor, MaterialEditor, MaterialEditorContext, PaneEditor, TextureEditState,
+            TextureEditor,
+        },
         shortcuts::Shortcuts,
         tree_view::TreeView,
     },
@@ -164,6 +170,17 @@ pub enum UiAction {
     RenameMaterial {
         index: u16,
         name: String,
+    },
+    ImportTexture {
+        template: String,
+        name: String,
+        png: std::path::PathBuf,
+        resize: bool,
+    },
+    ReplaceTexture {
+        name: String,
+        png: std::path::PathBuf,
+        resize: bool,
     },
 
     Undo,
@@ -776,6 +793,18 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
             });
     };
 
+    let taken_textures: HashSet<String> = if ctx.ui_state.texture_editor.is_editor_visible {
+        ctx.layout_tabs
+            .items
+            .iter()
+            .flat_map(|tab| tab.tree.all_bntxs())
+            .flat_map(|bntx| bntx.textures.iter().map(|t| t.name.clone()))
+            .chain([GLYPH_ATLAS_TEXTURE_NAME.to_string()])
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
     if let Some(layout) = ctx.layout_tabs.items.get_mut(ctx.layout_tabs.active_index) {
         let mut materials_changed = false;
 
@@ -871,13 +900,17 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
             layout.tree.update_animation_visuals();
         }
 
-        ctx.ui_state.texture_editor.draw_with(
+        if let Some(action) = ctx.ui_state.texture_editor.draw_with(
             ui,
-            (
-                layout.tree.main_bntx.as_ref(),
-                &ctx.layout_tabs.glyphs.atlas,
-            ),
-        );
+            TextureEditState {
+                main_bntx: layout.tree.main_bntx.as_ref(),
+                atlas: &ctx.layout_tabs.glyphs.atlas,
+                editable: layout.bntx_source.is_some(),
+                taken: &taken_textures,
+            },
+        ) {
+            ctx.ui_state.pending_action = Some(action);
+        }
 
         ctx.ui_state.group_editor.draw_with(ui, &mut layout.tree);
 

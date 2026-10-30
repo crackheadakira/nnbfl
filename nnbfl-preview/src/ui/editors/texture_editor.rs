@@ -1,27 +1,232 @@
-use tomolib::formats::bntx::Bntx;
+use std::{collections::HashSet, path::PathBuf};
+
+use tomolib::formats::bntx::{Bntx, Texture, image::can_encode};
 
 use crate::{
     font::glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphAtlas},
     renderer::texture::PreviewCallback,
-    ui::DrawUiWith,
+    texture_import::{png_size, texture_name_error},
+    ui::{DrawUiWith, general::UiAction},
 };
 
 #[derive(Default)]
 pub struct TextureEditor {
     pub is_editor_visible: bool,
     pub selected_texture: Option<String>,
+    import: Option<ImportForm>,
+    replace: Option<PickedPng>,
 }
 
-impl DrawUiWith<(Option<&Bntx>, &GlyphAtlas), ()> for TextureEditor {
-    fn draw_with(&mut self, ui: &mut egui::Ui, state: (Option<&Bntx>, &GlyphAtlas)) {
-        let main_bntx = state.0;
-        let atlas = state.1;
+struct PickedPng {
+    texture: String,
+    path: PathBuf,
+    size: Result<(u32, u32), String>,
+}
+
+struct ImportForm {
+    template: String,
+    name: String,
+    png: Option<PickedPng>,
+    resize: bool,
+}
+
+pub struct TextureEditState<'a> {
+    pub main_bntx: Option<&'a Bntx>,
+    pub atlas: &'a GlyphAtlas,
+    pub editable: bool,
+    pub taken: &'a HashSet<String>,
+}
+
+fn pick_png(texture: &str) -> Option<PickedPng> {
+    let path = rfd::FileDialog::new()
+        .set_title("Choose a PNG")
+        .add_filter("PNG image", &["png"])
+        .pick_file()?;
+
+    Some(PickedPng {
+        texture: texture.to_string(),
+        size: png_size(&path),
+        path,
+    })
+}
+
+impl TextureEditor {
+    fn edit_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        tex: &Texture,
+        taken: &HashSet<String>,
+    ) -> Option<UiAction> {
+        let mut action = None;
+        let target = (tex.info.width, tex.info.height);
+
+        if !can_encode(&tex.info) {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!("{} textures can't be encoded", tex.info.format.name()),
+            );
+        }
+
+        ui.horizontal(|ui| {
+            if ui.button("Replace texture...").clicked()
+                && let Some(picked) = pick_png(&tex.name)
+            {
+                if picked.size.as_ref().is_ok_and(|size| *size == target) {
+                    action = Some(UiAction::ReplaceTexture {
+                        name: tex.name.clone(),
+                        png: picked.path,
+                        resize: false,
+                    });
+                } else {
+                    self.replace = Some(picked);
+                }
+            }
+
+            if ui.button("Import as new texture…").clicked() {
+                self.import = Some(ImportForm {
+                    template: tex.name.clone(),
+                    name: format!("{}_New", tex.name),
+                    png: None,
+                    resize: true,
+                });
+            }
+        });
+
+        if let Some(picked) = self.replace.take_if(|p| p.texture == tex.name) {
+            let mut keep = true;
+
+            match &picked.size {
+                Ok((w, h)) => {
+                    ui.label(format!(
+                        "{} is {w}x{h}, the texture is {}x{}",
+                        picked.path.display(),
+                        target.0,
+                        target.1
+                    ));
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Resize and replace").clicked() {
+                            action = Some(UiAction::ReplaceTexture {
+                                name: tex.name.clone(),
+                                png: picked.path.clone(),
+                                resize: true,
+                            });
+
+                            keep = false;
+                        }
+
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                }
+                Err(err) => {
+                    ui.colored_label(ui.visuals().error_fg_color, err);
+                    keep = !ui.button("Dismiss").clicked();
+                }
+            }
+
+            if keep {
+                self.replace = Some(picked);
+            }
+        }
+
+        let mut close = false;
+        if let Some(form) = self.import.as_mut().filter(|f| f.template == tex.name) {
+            ui.add_space(8.0);
+            ui.strong(format!("New texture like {}", tex.name));
+
+            let name_error = texture_name_error(&form.name, |name| taken.contains(name));
+            ui.horizontal(|ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut form.name);
+            });
+
+            if let Some(error) = &name_error {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+
+            ui.horizontal(|ui| {
+                if ui.button("Choose PNG…").clicked()
+                    && let Some(picked) = pick_png(&tex.name)
+                {
+                    form.png = Some(picked);
+                }
+
+                match &form.png {
+                    None => {
+                        ui.weak("No PNG chosen");
+                    }
+                    Some(PickedPng {
+                        path,
+                        size: Ok((w, h)),
+                        ..
+                    }) => {
+                        ui.label(format!("{} ({w}x{h})", path.display()));
+                    }
+                    Some(PickedPng { size: Err(err), .. }) => {
+                        ui.colored_label(ui.visuals().error_fg_color, err);
+                    }
+                }
+            });
+
+            let mismatch = form
+                .png
+                .as_ref()
+                .and_then(|p| p.size.as_ref().ok())
+                .is_some_and(|size| *size != target);
+
+            if mismatch {
+                ui.checkbox(
+                    &mut form.resize,
+                    format!("Resize to {}x{}", target.0, target.1),
+                );
+            }
+
+            let ready = name_error.is_none()
+                && form.png.as_ref().is_some_and(|p| p.size.is_ok())
+                && (!mismatch || form.resize);
+
+            ui.horizontal(|ui| {
+                if ui.add_enabled(ready, egui::Button::new("Import")).clicked()
+                    && let Some(png) = &form.png
+                {
+                    action = Some(UiAction::ImportTexture {
+                        template: tex.name.clone(),
+                        name: form.name.clone(),
+                        png: png.path.clone(),
+                        resize: mismatch,
+                    });
+                    self.selected_texture = Some(form.name.clone());
+                    close = true;
+                }
+
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
+            });
+        }
+
+        if close {
+            self.import = None;
+        }
+
+        action
+    }
+}
+
+impl DrawUiWith<TextureEditState<'_>, Option<UiAction>> for TextureEditor {
+    fn draw_with(&mut self, ui: &mut egui::Ui, state: TextureEditState) -> Option<UiAction> {
+        let main_bntx = state.main_bntx;
+        let atlas = state.atlas;
+        let mut action = None;
+        let mut open = self.is_editor_visible;
 
         egui::Window::new("Texture Editor")
             .collapsible(false)
             .resizable(true)
             .default_size([560.0, 400.0])
-            .open(&mut self.is_editor_visible)
+            .open(&mut open)
             .fade_out(false)
             .show(ui, |ui| {
                 egui::Panel::left("texture_editor_list")
@@ -136,6 +341,23 @@ impl DrawUiWith<(Option<&Bntx>, &GlyphAtlas), ()> for TextureEditor {
                                         ui.end_row();
                                     });
 
+                                if !is_atlas
+                                    && let Some(tex) = main_bntx
+                                        .into_iter()
+                                        .flat_map(|bntx| bntx.textures.iter())
+                                        .find(|tex| tex.name == selected_name)
+                                {
+                                    ui.add_space(8.0);
+
+                                    if state.editable {
+                                        action = self.edit_controls(ui, tex, state.taken);
+                                    } else {
+                                        ui.weak(
+                                            "Textures can only be edited in layouts opened from an archive",
+                                        );
+                                    }
+                                }
+
                                 ui.add_space(8.0);
                                 ui.separator();
                                 ui.add_space(4.0);
@@ -158,5 +380,8 @@ impl DrawUiWith<(Option<&Bntx>, &GlyphAtlas), ()> for TextureEditor {
                             });
                     });
             });
+
+        self.is_editor_visible = open;
+        action
     }
 }

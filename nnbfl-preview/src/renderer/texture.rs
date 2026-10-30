@@ -235,6 +235,12 @@ impl TextureCache {
         self.textures.insert(name.to_string(), gpu_tex);
     }
 
+    pub fn remove(&mut self, name: &str) {
+        if let Some(gpu_tex) = self.textures.remove(name) {
+            gpu_tex._texture.destroy();
+        }
+    }
+
     pub fn clear(&mut self) {
         self.textures.retain(|name, gpu_tex| {
             if name == GLYPH_ATLAS_TEXTURE_NAME {

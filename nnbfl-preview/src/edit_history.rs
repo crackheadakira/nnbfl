@@ -1,5 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 
+use tomolib::formats::bntx::Texture;
+
 use crate::{
     ops::duplicate::{self, DuplicateNames, DuplicateOptions},
     pane_factory::{self, NewPaneKind},
@@ -72,16 +74,25 @@ pub enum PaneEdit {
         index: u16,
         name: String,
     },
+    ImportTexture {
+        texture: Box<Texture>,
+    },
+    ReplaceTexture {
+        index: usize,
+        texture: Box<Texture>,
+    },
 }
 
 impl PaneEdit {
-    pub fn is_material(&self) -> bool {
-        matches!(
+    pub fn touches_panes(&self) -> bool {
+        !matches!(
             self,
             PaneEdit::AddMaterial
                 | PaneEdit::DuplicateMaterial { .. }
                 | PaneEdit::DeleteMaterial { .. }
                 | PaneEdit::RenameMaterial { .. }
+                | PaneEdit::ImportTexture { .. }
+                | PaneEdit::ReplaceTexture { .. }
         )
     }
 
@@ -97,7 +108,9 @@ impl PaneEdit {
             PaneEdit::AddMaterial
             | PaneEdit::DuplicateMaterial { .. }
             | PaneEdit::DeleteMaterial { .. }
-            | PaneEdit::RenameMaterial { .. } => None,
+            | PaneEdit::RenameMaterial { .. }
+            | PaneEdit::ImportTexture { .. }
+            | PaneEdit::ReplaceTexture { .. } => None,
         }
     }
 }
@@ -221,6 +234,33 @@ impl PaneEdit {
                     pane_idx: source_idx,
                     old_parent,
                     old_anchor,
+                })
+            }
+
+            PaneEdit::ImportTexture { texture } => {
+                let textures = &mut tree.main_bntx.as_mut()?.textures;
+                let index = textures.len();
+                tree.texture_changes.push(texture.name.clone());
+                textures.push((*texture).clone());
+                tree.bntx_edited = true;
+
+                Some(AppliedCommand::ReplaceBntxTexture {
+                    index,
+                    before: None,
+                    after: Some(texture),
+                })
+            }
+
+            PaneEdit::ReplaceTexture { index, texture } => {
+                let slot = tree.main_bntx.as_mut()?.textures.get_mut(index)?;
+                let before = std::mem::replace(slot, (*texture).clone());
+                tree.texture_changes.push(texture.name.clone());
+                tree.bntx_edited = true;
+
+                Some(AppliedCommand::ReplaceBntxTexture {
+                    index,
+                    before: Some(Box::new(before)),
+                    after: Some(texture),
                 })
             }
 
@@ -673,6 +713,11 @@ pub enum AppliedCommand {
         before: Box<Option<TextureList>>,
         after: Box<Option<TextureList>>,
     },
+    ReplaceBntxTexture {
+        index: usize,
+        before: Option<Box<Texture>>,
+        after: Option<Box<Texture>>,
+    },
     Batch(Vec<AppliedCommand>),
 }
 
@@ -853,6 +898,37 @@ impl AppliedCommand {
                 })
             }
 
+            AppliedCommand::ReplaceBntxTexture {
+                index,
+                before,
+                after,
+            } => {
+                let textures = &mut tree.main_bntx.as_mut()?.textures;
+
+                match (&before, &after) {
+                    (Some(texture), Some(_)) => *textures.get_mut(index)? = (**texture).clone(),
+                    (Some(texture), None) => {
+                        textures.insert(index.min(textures.len()), (**texture).clone())
+                    }
+                    (None, Some(_)) => {
+                        if index < textures.len() {
+                            textures.remove(index);
+                        }
+                    }
+                    (None, None) => {}
+                }
+
+                tree.texture_changes
+                    .extend(before.iter().chain(&after).map(|t| t.name.clone()));
+                tree.bntx_edited = true;
+
+                Some(AppliedCommand::ReplaceBntxTexture {
+                    index,
+                    before: after,
+                    after: before,
+                })
+            }
+
             AppliedCommand::ReplaceTextureList { before, after } => {
                 tree.texture_list = (*before).clone();
                 Some(AppliedCommand::ReplaceTextureList {
@@ -904,6 +980,11 @@ impl AppliedCommand {
                 AppliedCommand::ReplaceTextureList { before, after } => {
                     serialized_size(before) + serialized_size(after)
                 }
+                AppliedCommand::ReplaceBntxTexture { before, after, .. } => before
+                    .iter()
+                    .chain(after)
+                    .map(|t| size_of::<Texture>() + t.image_data.len() + t.mip_offsets.len() * 8)
+                    .sum(),
                 AppliedCommand::Batch(commands) => {
                     commands.iter().map(AppliedCommand::approx_size).sum()
                 }
@@ -922,7 +1003,8 @@ impl AppliedCommand {
             | AppliedCommand::InsertedMaterial { .. }
             | AppliedCommand::ReplaceAnimInfo { .. }
             | AppliedCommand::ReplaceMaterial { .. }
-            | AppliedCommand::ReplaceTextureList { .. } => Vec::new(),
+            | AppliedCommand::ReplaceTextureList { .. }
+            | AppliedCommand::ReplaceBntxTexture { .. } => Vec::new(),
             AppliedCommand::Batch(commands) => {
                 let mut panes = Vec::new();
 
@@ -1153,6 +1235,8 @@ fn describe(edits: &[PaneEdit], tree: &PaneTree) -> String {
         PaneEdit::Delete { .. } | PaneEdit::DeleteMaterial { .. } => "Delete",
         PaneEdit::Duplicate { .. } | PaneEdit::DuplicateMaterial { .. } => "Duplicate",
         PaneEdit::Add { .. } | PaneEdit::AddMaterial => "Add",
+        PaneEdit::ImportTexture { .. } => "Import",
+        PaneEdit::ReplaceTexture { .. } => "Replace",
         PaneEdit::Move { .. } => "Reorder",
         PaneEdit::Rename { .. } | PaneEdit::RenameMaterial { .. } => "Rename",
     };
@@ -1175,6 +1259,10 @@ fn describe(edits: &[PaneEdit], tree: &PaneTree) -> String {
                 format!("Duplicate material {}", material(index))
             }
             PaneEdit::DeleteMaterial { index } => format!("Delete material {}", material(index)),
+            PaneEdit::ImportTexture { texture } => format!("Import texture {}", texture.name),
+            PaneEdit::ReplaceTexture { texture, .. } => {
+                format!("Replace texture {}", texture.name)
+            }
             PaneEdit::RenameMaterial { index, name: new } => {
                 format!("Rename material {} to {new}", material(index))
             }

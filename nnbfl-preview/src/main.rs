@@ -14,6 +14,7 @@ mod pane_factory;
 mod pane_tree;
 mod render;
 mod renderer;
+mod texture_import;
 mod traits;
 mod ui;
 
@@ -545,6 +546,7 @@ pub struct LayoutData {
     pub file_name: String,
     pub version: VersionFormat,
     pub history: EditHistory,
+    pub bntx_source: Option<EntryPath>,
     anim_session: Option<AnimSession>,
     material_session: Option<MaterialSession>,
     pane_session: Option<PaneSession>,
@@ -859,7 +861,7 @@ impl LayoutData {
                 |(mut bntxs, mut bflans), (path, magic_file)| {
                     match magic_file {
                         MagicFiles::Bntx(_, bytes) => match Bntx::parse(&bytes) {
-                            Ok(bntx) => bntxs.push(bntx),
+                            Ok(bntx) => bntxs.push((path, bntx)),
                             Err(e) => log::error!("TextureCache: failed to parse BNTX: {e}"),
                         },
                         MagicFiles::Bflan(file_name, bytes) => {
@@ -917,13 +919,18 @@ impl LayoutData {
             y: bflyt.layout.parts_height,
         };
 
+        let bntx_source = discovered_bntxs
+            .first()
+            .map(|(path, _)| path.clone())
+            .filter(|_| source.is_some());
+
         let tree = PaneTree::from_bflyt(
             bflyt,
             layout_dir,
             layout_name.clone(),
             archive_scan_entries,
             &archive_layouts,
-            discovered_bntxs,
+            discovered_bntxs.into_iter().map(|(_, bntx)| bntx).collect(),
             glyphs,
         );
 
@@ -936,6 +943,7 @@ impl LayoutData {
             file_name: layout_name,
             version,
             history: EditHistory::new(Self::EDIT_HISTORY_LIMIT, Self::EDIT_HISTORY_BUDGET),
+            bntx_source,
             anim_session: None,
             material_session: None,
             pane_session: None,
@@ -1494,7 +1502,7 @@ impl App {
 
         layout.commit_sessions();
         let (history, mut edit) = layout.edit_ctx(glyphs);
-        let touches_panes = edits.iter().any(|edit| !edit.is_material());
+        let touches_panes = edits.iter().any(|edit| edit.touches_panes());
         let resulting = history.perform_all(&mut edit, edits);
 
         if touches_panes {
@@ -1514,7 +1522,114 @@ impl App {
         self.ui_state.material_editor.selected_material = index.min(count.saturating_sub(1));
     }
 
+    fn import_texture(
+        &mut self,
+        template: &str,
+        new_name: Option<String>,
+        png: &Path,
+        resize: bool,
+    ) {
+        let Some(layout) = self.tabs.active() else {
+            return;
+        };
+
+        let result = (|| {
+            if layout.bntx_source.is_none() {
+                return Err(
+                    "Textures can only be edited in layouts opened from an archive".to_string(),
+                );
+            }
+
+            let textures = &layout
+                .tree
+                .main_bntx
+                .as_ref()
+                .ok_or("This layout has no BNTX")?
+                .textures;
+
+            let index = textures
+                .iter()
+                .position(|t| t.name == template)
+                .ok_or_else(|| format!("Texture {template} is not in the BNTX"))?;
+
+            let template = &textures[index];
+            let image =
+                texture_import::load_png(png, (template.info.width, template.info.height), resize)?;
+
+            let name = new_name.clone().unwrap_or_else(|| template.name.clone());
+            let texture = Box::new(texture_import::encode_like(&image, template, &name)?);
+
+            Ok(match new_name {
+                Some(_) => edit_history::PaneEdit::ImportTexture { texture },
+                None => edit_history::PaneEdit::ReplaceTexture { index, texture },
+            })
+        })();
+
+        match result {
+            Ok(edit) => self.perform_pane_edit(edit),
+            Err(err) => self.ui_state.error_message = Some(err),
+        }
+    }
+
+    fn sync_textures(&mut self) {
+        let tabs = &mut self.tabs;
+        let Some(layout) = tabs.items.get_mut(tabs.active_index) else {
+            return;
+        };
+
+        let changed = std::mem::take(&mut layout.tree.texture_changes);
+        if changed.is_empty() {
+            return;
+        }
+
+        let shared = layout
+            .source
+            .as_ref()
+            .map(|s| s.doc)
+            .zip(layout.bntx_source.clone());
+
+        let bntx = layout.tree.main_bntx.clone();
+
+        if let Some((doc, entry)) = shared {
+            for (index, tab) in tabs.items.iter_mut().enumerate() {
+                if index != tabs.active_index
+                    && tab.source.as_ref().is_some_and(|s| s.doc == doc)
+                    && tab.bntx_source.as_ref() == Some(&entry)
+                {
+                    tab.tree.main_bntx = bntx.clone();
+                    tab.tree.bntx_edited = true;
+
+                    let users: Vec<u16> = tab.tree.material_users.keys().copied().collect();
+                    for material in users {
+                        tab.tree.mark_material_dirty(material);
+                    }
+                }
+            }
+        }
+
+        if let (Some(gpu), Some(bntx)) = (&mut self.gpu, &bntx) {
+            for name in &changed {
+                gpu.texture_cache.remove(name);
+            }
+
+            gpu.texture_cache
+                .load_from_bntx(&gpu.device, &gpu.queue, bntx);
+        }
+
+        let tabs = &mut self.tabs;
+
+        if let Some(layout) = tabs.items.get_mut(tabs.active_index) {
+            let users: Vec<u16> = layout.tree.material_users.keys().copied().collect();
+
+            for material in users {
+                layout.tree.mark_material_dirty(material);
+            }
+        }
+    }
+
     fn after_structural_edit(&mut self) {
+        self.sync_textures();
+
         let tabs = &mut self.tabs;
         let Some(layout) = tabs.items.get_mut(tabs.active_index) else {
             return;
@@ -1586,6 +1701,20 @@ impl App {
             let bflyt = tab.bake_bflyt().write_file().buffer;
             if raw(&source.layout).as_ref() != Some(&bflyt) {
                 edits.insert(source.layout.clone(), bflyt);
+            }
+
+            if tab.tree.bntx_edited
+                && let (Some(path), Some(bntx)) = (&tab.bntx_source, &tab.tree.main_bntx)
+                && !edits.contains_key(path)
+            {
+                match bntx.write() {
+                    Ok(bytes) => {
+                        if raw(path).as_ref() != Some(&bytes) {
+                            edits.insert(path.clone(), bytes);
+                        }
+                    }
+                    Err(err) => problems.push(format!("The BNTX can't be written: {err}")),
+                }
             }
 
             for anim in &tab.timeline.anim_player.anims {
@@ -1854,6 +1983,17 @@ impl ApplicationHandler for App {
                 UiAction::SaveFile => self.save_active(false),
                 UiAction::SaveFileAs => self.save_active(true),
                 UiAction::ExportBflyt => self.export_bflyt(),
+
+                UiAction::ImportTexture {
+                    template,
+                    name,
+                    png,
+                    resize,
+                } => self.import_texture(&template, Some(name), &png, resize),
+
+                UiAction::ReplaceTexture { name, png, resize } => {
+                    self.import_texture(&name, None, &png, resize)
+                }
 
                 UiAction::StartArchiveScan => {
                     if let Some(dir) = self.ui_state.archive_browser.layout_dir.clone() {
