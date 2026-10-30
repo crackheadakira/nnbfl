@@ -62,7 +62,7 @@ pub const BINDINGS: &[KeyBind] = &[
         key: Key::F,
         modifiers: Modifiers::NONE,
         action: Action::FitTimeline,
-        description: "Reset the timeline's zoom/pan",
+        description: "Frame the selected curve in the timeline, or all curves",
     },
     KeyBind {
         key: Key::Delete,
@@ -170,8 +170,7 @@ fn apply(action: Action, state: &mut UiState, timeline: Option<&mut TimelineStat
 
         Action::FitTimeline => {
             if let Some(timeline) = timeline {
-                timeline.zoom = 1.0;
-                timeline.pan_frame = 0.0;
+                timeline.frame_view();
             }
         }
 
