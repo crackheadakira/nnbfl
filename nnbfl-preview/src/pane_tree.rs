@@ -1,7 +1,7 @@
 use crate::renderer::textured_quad::BatchKey;
 use crate::{archive::file_stem, pane_factory::NewPaneKind};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::Path,
 };
 
@@ -598,6 +598,7 @@ pub struct PaneTree {
     needs_rebatch: bool,
 
     pub next_id: u32,
+    pub parts_cache: HashMap<String, Option<Bflyt>>,
 }
 
 impl PaneTree {
@@ -1371,6 +1372,88 @@ impl PaneTree {
         }
     }
 
+    pub fn parts_content_ids(&self, pane: PaneId) -> Vec<PaneId> {
+        fn build_order(node: &PaneNode, out: &mut Vec<PaneId>) {
+            out.push(node.pane_idx);
+            for child in node.parts_children.iter().chain(&node.children) {
+                build_order(child, out);
+            }
+        }
+
+        let mut out = Vec::new();
+
+        if let Some(node) = self.find_by_idx(pane) {
+            for child in &node.parts_children {
+                build_order(child, &mut out);
+            }
+        }
+
+        out
+    }
+
+    pub fn rebuild_parts(
+        &mut self,
+        pane: PaneId,
+        ids: Option<Vec<PaneId>>,
+        glyphs: &mut GlyphData,
+    ) -> Option<Vec<PaneId>> {
+        let node = self.find_by_idx(pane)?;
+
+        let BflytSection::PartsPane(parts) = &node.section else {
+            return None;
+        };
+
+        let parts = parts.clone();
+        let (center, depth, visible) = (node.world_center, node.depth, node.visible);
+
+        let mut chain = Vec::new();
+        let mut current = Some(pane);
+
+        while let Some(id) = current {
+            if let Some(source) = self.find_by_idx(id).and_then(|n| n.parts_source.clone())
+                && chain.last() != Some(&source)
+            {
+                chain.push(source);
+            }
+
+            current = self.parent_map.get(&id).copied().flatten();
+        }
+
+        chain.reverse();
+
+        let sub_material_list = chain
+            .last()
+            .and_then(|name| self.parts_cache.get(name))
+            .and_then(|layout| layout.as_ref())
+            .and_then(|layout| layout.material_list.clone());
+
+        let mut builder = Builder {
+            material_list: self.material_list.as_ref(),
+            sub_material_list,
+            font_list: self.font_list.as_ref(),
+            archive_entries: None,
+            archive_layouts: &[],
+            blarc_dir: None,
+            blarc_cache: &mut self.parts_cache,
+            main_bntx: self.main_bntx.as_ref(),
+            sub_bntxs: &mut self.sub_bntxs,
+            parts_chain: chain,
+            next_pane_idx: self.next_id,
+            reuse_ids: ids.unwrap_or_default().into(),
+            active_all_files: Vec::new(),
+            active_sarc_key: None,
+            active_sarc_bntxs_parsed: false,
+            glyphs,
+        };
+
+        let content = builder.expand_parts(&parts, center, depth, visible);
+        self.next_id = builder.next_pane_idx;
+
+        self.find_by_idx_mut(pane)?.parts_children = content;
+        self.rebuild_maps();
+        Some(self.parts_content_ids(pane))
+    }
+
     pub fn from_bflyt(
         file: Bflyt,
         blarc_dir: Option<&Path>,
@@ -1411,6 +1494,7 @@ impl PaneTree {
             sub_bntxs: &mut sub_bntxs,
             parts_chain: Vec::new(),
             next_pane_idx: 0,
+            reuse_ids: VecDeque::new(),
             active_all_files: Vec::new(),
             active_sarc_key: None,
             active_sarc_bntxs_parsed: false,
@@ -1448,6 +1532,7 @@ impl PaneTree {
             material_dirty: HashSet::new(),
             needs_rebatch: false,
             next_id,
+            parts_cache: blarc_cache,
             user_data: file.user_data,
             texture_list: file.texture_list,
             font_list: file.font_list,
@@ -1473,6 +1558,7 @@ struct Builder<'a> {
     sub_bntxs: &'a mut Vec<Bntx>,
     parts_chain: Vec<String>,
     next_pane_idx: u32,
+    reuse_ids: VecDeque<PaneId>,
 
     active_sarc_key: Option<(std::path::PathBuf, Vec<usize>)>,
     active_all_files: Vec<MagicFiles>,
@@ -1564,8 +1650,10 @@ impl<'a> Builder<'a> {
             parent_scale,
         );
 
-        let pane_idx = PaneId(self.next_pane_idx);
-        self.next_pane_idx += 1;
+        let pane_idx = self.reuse_ids.pop_front().unwrap_or_else(|| {
+            self.next_pane_idx += 1;
+            PaneId(self.next_pane_idx - 1)
+        });
 
         let bntxs: Vec<&Bntx> = self
             .main_bntx
@@ -1605,7 +1693,8 @@ impl<'a> Builder<'a> {
         );
 
         if let BflytSection::PartsPane(parts) = section {
-            self.resolve_parts(parts, &mut node, is_visible);
+            let content = self.expand_parts(parts, node.world_center, node.depth, is_visible);
+            node.parts_children.extend(content);
         }
 
         Some(node)
@@ -1661,21 +1750,22 @@ impl<'a> Builder<'a> {
         Some(final_files)
     }
 
-    fn resolve_parts(
+    fn expand_parts(
         &mut self,
         parts: &PartsPane,
-        parent_node: &mut PaneNode,
+        center: Vector2f,
+        depth: usize,
         parent_visible: bool,
-    ) {
+    ) -> Vec<PaneNode> {
         puffin::profile_function!();
         let layout_name = parts.o_layout_name.trim_end_matches('\0');
         if layout_name.is_empty() {
-            return;
+            return Vec::new();
         }
 
         if self.parts_chain.len() >= MAX_PARTS_DEPTH {
             log::warn!("PartsPane: Depth went beyond max");
-            return;
+            return Vec::new();
         }
 
         if self
@@ -1684,7 +1774,7 @@ impl<'a> Builder<'a> {
             .any(|l| l.eq_ignore_ascii_case(layout_name))
         {
             log::warn!("PartsPane: '{layout_name}' includes itself, not expanded");
-            return;
+            return Vec::new();
         }
 
         if !self.blarc_cache.contains_key(layout_name) {
@@ -1752,7 +1842,7 @@ impl<'a> Builder<'a> {
 
         let Some(Some(sub_bflyt)) = self.blarc_cache.get(layout_name) else {
             log::warn!("PartsPane: could not load '{layout_name}'");
-            return;
+            return Vec::new();
         };
 
         let scale = Vector2f {
@@ -1773,11 +1863,11 @@ impl<'a> Builder<'a> {
 
         let mut sub_children = self.build_nodes(
             &sub_nodes,
-            parent_node.world_center,
+            center,
             sub_size * scale,
             scale,
             parent_visible,
-            parent_node.depth + 1,
+            depth + 1,
         );
 
         self.sub_material_list = old_sub_material_list;
@@ -1876,9 +1966,8 @@ impl<'a> Builder<'a> {
             apply_override(&mut sub_children, prop_name, override_section, self);
         }
 
-        parent_node.parts_children.extend(sub_children);
-
         self.parts_chain.pop();
+        sub_children
     }
 }
 

@@ -95,56 +95,68 @@ impl DrawUiWith<(&mut PaneNode, Option<&str>, &[String])> for PaneEditor {
                     ui.label(format!("Layout File Name: {}", pp.o_layout_name));
                 }
 
-                changed |= optional(ui, "User Data", &mut pane.user_data, |ui, array| {
-                    ArrayEditor::new("user_data", &mut array.user_data)
-                        .item_label(|_, entry| entry.o_name.clone())
-                        .show(ui, |ui, _, entry| entry.draw(ui))
-                        .changed
-                });
-
-                if let BflytSection::PicturePane(pic) = &mut pane.section {
-                    changed |= pic
-                        .top_left_vertex_color
-                        .draw_with(ui, "Top Left Vertex Color");
-                    changed |= pic
-                        .top_right_vertex_color
-                        .draw_with(ui, "Top Right Vertex Color");
-                    changed |= pic
-                        .bottom_left_vertex_color
-                        .draw_with(ui, "Bottom Left Vertex Color");
-                    changed |= pic
-                        .bottom_right_vertex_color
-                        .draw_with(ui, "Bottom Right Vertex Color");
+                if let Some(source) = &pane.parts_source {
+                    ui.weak(format!(
+                        "From parts layout {source}; override editing comes later"
+                    ));
                 }
 
-                let editable = pane.parts_source.is_none() || pane.is_parts_overridden;
-                ui.add_enabled_ui(editable, |ui| match &mut pane.section {
-                    BflytSection::PicturePane(pic) => {
-                        changed |=
-                            material_combo(ui, "Material", &mut pic.material_index, materials);
-                    }
-                    BflytSection::TextBoxPane(txt) => {
-                        changed |=
-                            material_combo(ui, "Material", &mut txt.material_index, materials);
-                    }
-                    BflytSection::WindowPane(win) => {
-                        changed |= material_combo(
-                            ui,
-                            "Content Material",
-                            &mut win.content.material_index,
-                            materials,
-                        );
+                let editable = pane.parts_source.is_none();
 
-                        for (i, frame) in win.frames.iter_mut().enumerate() {
+                ui.add_enabled_ui(editable, |ui| {
+                    changed |= optional(ui, "User Data", &mut pane.user_data, |ui, array| {
+                        ArrayEditor::new("user_data", &mut array.user_data)
+                            .item_label(|_, entry| entry.o_name.clone())
+                            .show(ui, |ui, _, entry| entry.draw(ui))
+                            .changed
+                    });
+
+                    if let BflytSection::PicturePane(pic) = &mut pane.section {
+                        changed |= pic
+                            .top_left_vertex_color
+                            .draw_with(ui, "Top Left Vertex Color");
+
+                        changed |= pic
+                            .top_right_vertex_color
+                            .draw_with(ui, "Top Right Vertex Color");
+
+                        changed |= pic
+                            .bottom_left_vertex_color
+                            .draw_with(ui, "Bottom Left Vertex Color");
+
+                        changed |= pic
+                            .bottom_right_vertex_color
+                            .draw_with(ui, "Bottom Right Vertex Color");
+                    }
+
+                    match &mut pane.section {
+                        BflytSection::PicturePane(pic) => {
+                            changed |=
+                                material_combo(ui, "Material", &mut pic.material_index, materials);
+                        }
+                        BflytSection::TextBoxPane(txt) => {
+                            changed |=
+                                material_combo(ui, "Material", &mut txt.material_index, materials);
+                        }
+                        BflytSection::WindowPane(win) => {
                             changed |= material_combo(
                                 ui,
-                                &format!("Frame {} Material", i + 1),
-                                &mut frame.material_index,
+                                "Content Material",
+                                &mut win.content.material_index,
                                 materials,
                             );
+
+                            for (i, frame) in win.frames.iter_mut().enumerate() {
+                                changed |= material_combo(
+                                    ui,
+                                    &format!("Frame {} Material", i + 1),
+                                    &mut frame.material_index,
+                                    materials,
+                                );
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 });
             });
 
