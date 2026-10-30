@@ -1345,47 +1345,25 @@ impl PaneTree {
         id
     }
 
-    pub fn duplicate_node(&mut self, target_idx: PaneId) -> Option<PaneId> {
-        let parent_idx = self.parent_map.get(&target_idx).copied().flatten();
-        let mut clone = self.find_by_idx(target_idx)?.clone();
+    pub fn reindex_clone(&mut self, node: &mut PaneNode) {
+        node.pane_idx = self.alloc_id();
 
-        fn reindex(node: &mut PaneNode, tree: &mut PaneTree) {
-            node.pane_idx = tree.alloc_id();
+        node.plain_quad.pane_idx = node.pane_idx;
 
-            node.plain_quad.pane_idx = node.pane_idx;
-            for quad in node
-                .textured_quad
-                .iter_mut()
-                .chain(&mut node.window_quads)
-                .chain(&mut node.glyph_quads)
-            {
-                quad.pane_idx = node.pane_idx;
-            }
-            node.dirty = DirtyFlags::all();
-
-            for child in node.all_children_mut() {
-                reindex(child, tree);
-            }
+        for quad in node
+            .textured_quad
+            .iter_mut()
+            .chain(&mut node.window_quads)
+            .chain(&mut node.glyph_quads)
+        {
+            quad.pane_idx = node.pane_idx;
         }
 
-        reindex(&mut clone, self);
+        node.dirty = DirtyFlags::all();
 
-        fn rename(node: &mut PaneNode, tree: &PaneTree, taken: &mut HashSet<String>) {
-            node.label = tree.unique_name(&node.label, taken);
-            taken.insert(node.label.clone());
-
-            for child in &mut node.children {
-                rename(child, tree, taken);
-            }
+        for child in node.all_children_mut() {
+            self.reindex_clone(child);
         }
-        rename(&mut clone, self, &mut HashSet::new());
-
-        let position = self
-            .sibling_position(target_idx)
-            .map(|(_, pos)| pos + 1)
-            .unwrap_or(usize::MAX);
-
-        Some(self.insert_node_at(parent_idx, position, clone))
     }
 
     pub fn from_bflyt(
@@ -1913,7 +1891,10 @@ pub struct PanePlacement {
     pub visible: bool,
 }
 
-fn remap_section_materials(section: &mut BflytSection, remap: &impl Fn(u16) -> u16) -> bool {
+pub(crate) fn remap_section_materials(
+    section: &mut BflytSection,
+    remap: &impl Fn(u16) -> u16,
+) -> bool {
     let mut changed = false;
 
     let mut set = |index: &mut u16| {

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::{
+    ops::duplicate::{self, DuplicateNames, DuplicateOptions},
     pane_factory::{self, NewPaneKind},
     pane_tree::{Anchor, PaneId},
     ui::timeline::TimelineState,
@@ -40,6 +41,8 @@ pub enum PaneEdit {
     },
     Duplicate {
         source_idx: PaneId,
+        names: Option<DuplicateNames>,
+        options: DuplicateOptions,
     },
     Add {
         parent: Option<PaneId>,
@@ -132,9 +135,13 @@ impl PaneEdit {
                 Some(AppliedCommand::Batch(commands))
             }
 
-            PaneEdit::Duplicate { source_idx } => {
-                let new_idx = tree.duplicate_node(source_idx)?;
-                Some(AppliedCommand::Inserted(new_idx))
+            PaneEdit::Duplicate {
+                source_idx,
+                names,
+                options,
+            } => {
+                let names = names.or_else(|| duplicate::plan(tree, source_idx, None))?;
+                duplicate::apply(ctx, source_idx, names, options)
             }
 
             PaneEdit::Add {
@@ -300,7 +307,7 @@ fn material_renames(
             continue;
         };
 
-        if !own || !(rest.is_empty() || rest.starts_with('_')) {
+        if !own {
             continue;
         }
 
@@ -317,7 +324,7 @@ fn material_renames(
     renames
 }
 
-fn edit_anims(
+pub(crate) fn edit_anims(
     timeline: &mut TimelineState,
     tree: &mut PaneTree,
     mut edit: impl FnMut(&mut PaneAnimInfo) -> bool,
@@ -636,10 +643,16 @@ pub struct AnimSession {
     pub baseline: PaneAnimInfo,
 }
 
+struct Step {
+    label: String,
+    command: AppliedCommand,
+}
+
 pub struct EditHistory {
-    undo_stack: Vec<AppliedCommand>,
-    redo_stack: Vec<AppliedCommand>,
+    undo_stack: Vec<Step>,
+    redo_stack: Vec<Step>,
     limit: usize,
+    dropped: bool,
 }
 
 impl EditHistory {
@@ -648,6 +661,7 @@ impl EditHistory {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             limit,
+            dropped: false,
         }
     }
 
@@ -656,6 +670,8 @@ impl EditHistory {
     }
 
     pub fn perform_all(&mut self, ctx: &mut EditCtx, edits: Vec<PaneEdit>) -> Vec<PaneId> {
+        let label = describe(&edits, ctx.tree);
+
         let mut applied: Vec<AppliedCommand> = edits
             .into_iter()
             .filter_map(|edit| edit.apply(ctx))
@@ -668,56 +684,79 @@ impl EditHistory {
         };
 
         let panes = command.resulting_panes();
-        self.record(command);
+        self.record(label, command);
 
         panes
     }
 
     pub fn undo(&mut self, ctx: &mut EditCtx) -> Vec<PaneId> {
-        let Some(applied) = self.undo_stack.pop() else {
+        let Some(step) = self.undo_stack.pop() else {
             return Vec::new();
         };
 
-        let Some(inverse) = applied.invert(ctx) else {
+        let Some(inverse) = step.command.invert(ctx) else {
             return Vec::new();
         };
 
         let panes = inverse.resulting_panes();
-        self.redo_stack.push(inverse);
+        self.redo_stack.push(Step {
+            label: step.label,
+            command: inverse,
+        });
 
         panes
     }
 
     pub fn redo(&mut self, ctx: &mut EditCtx) -> Vec<PaneId> {
-        let Some(applied) = self.redo_stack.pop() else {
+        let Some(step) = self.redo_stack.pop() else {
             return Vec::new();
         };
 
-        let Some(inverse) = applied.invert(ctx) else {
+        let Some(inverse) = step.command.invert(ctx) else {
             return Vec::new();
         };
 
         let panes = inverse.resulting_panes();
-        self.push_undo(inverse);
+        self.push_undo(Step {
+            label: step.label,
+            command: inverse,
+        });
 
         panes
     }
 
-    fn push_undo(&mut self, applied: AppliedCommand) {
-        if self.undo_stack.len() >= self.limit {
-            self.undo_stack.remove(0);
-        }
-
-        self.undo_stack.push(applied);
+    pub fn position(&self) -> usize {
+        self.undo_stack.len()
     }
 
-    pub fn record(&mut self, applied: AppliedCommand) {
+    pub fn steps(&self) -> impl Iterator<Item = &str> {
+        self.undo_stack
+            .iter()
+            .chain(self.redo_stack.iter().rev())
+            .map(|step| step.label.as_str())
+    }
+
+    pub fn dropped(&self) -> bool {
+        self.dropped
+    }
+
+    fn push_undo(&mut self, step: Step) {
+        if self.undo_stack.len() >= self.limit {
+            self.undo_stack.remove(0);
+            self.dropped = true;
+        }
+
+        self.undo_stack.push(step);
+    }
+
+    pub fn record(&mut self, label: String, command: AppliedCommand) {
         self.redo_stack.clear();
-        self.push_undo(applied);
+        self.push_undo(Step { label, command });
     }
 
     pub fn record_transform(
         &mut self,
+        label: String,
         pane_idx: PaneId,
         before: PaneTransform,
         after: PaneTransform,
@@ -726,18 +765,66 @@ impl EditHistory {
             return;
         }
 
-        self.record(AppliedCommand::Transformed {
-            pane_idx,
-            before,
-            after,
-        });
+        self.record(
+            label,
+            AppliedCommand::Transformed {
+                pane_idx,
+                before,
+                after,
+            },
+        );
     }
 
-    pub fn record_anim(&mut self, anim: usize, before: PaneAnimInfo, after: PaneAnimInfo) {
-        self.record(AppliedCommand::ReplaceAnimInfo {
-            anim,
-            before: Box::new(before),
-            after: Box::new(after),
-        });
+    pub fn record_anim(
+        &mut self,
+        label: String,
+        anim: usize,
+        before: PaneAnimInfo,
+        after: PaneAnimInfo,
+    ) {
+        self.record(
+            label,
+            AppliedCommand::ReplaceAnimInfo {
+                anim,
+                before: Box::new(before),
+                after: Box::new(after),
+            },
+        );
+    }
+}
+
+fn describe(edits: &[PaneEdit], tree: &PaneTree) -> String {
+    let name = |id: &PaneId| {
+        tree.find_by_idx(*id)
+            .map(|n| n.label.trim_end_matches('\0').to_string())
+            .unwrap_or_default()
+    };
+
+    let verb = |edit: &PaneEdit| match edit {
+        PaneEdit::Delete { .. } => "Delete",
+        PaneEdit::Duplicate { .. } => "Duplicate",
+        PaneEdit::Add { .. } => "Add",
+        PaneEdit::Move { .. } => "Reorder",
+        PaneEdit::Rename { .. } => "Rename",
+    };
+
+    match edits {
+        [] => String::new(),
+        [edit] => match edit {
+            PaneEdit::Delete { target_idx: id }
+            | PaneEdit::Duplicate { source_idx: id, .. }
+            | PaneEdit::Move { source_idx: id, .. } => format!("{} {}", verb(edit), name(id)),
+            PaneEdit::Add { kind, .. } => format!("Add {}", kind.label()),
+            PaneEdit::Rename {
+                target_idx,
+                name: new,
+            } => {
+                format!("Rename {} to {new}", name(target_idx))
+            }
+        },
+        [first, rest @ ..] if rest.iter().all(|e| verb(e) == verb(first)) => {
+            format!("{} {} panes", verb(first), edits.len())
+        }
+        _ => format!("{} edits", edits.len()),
     }
 }

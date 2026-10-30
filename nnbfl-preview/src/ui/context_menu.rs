@@ -43,6 +43,7 @@ impl DrawUiWith<ContextMenuState<'_>, Option<ContextMenuAction>> for ContextMenu
             return out_action;
         };
 
+        let pane_idx = self.pane_idx;
         let pos = self.pos;
 
         let label = state.node.label.trim_end_matches("\0");
@@ -76,6 +77,10 @@ impl DrawUiWith<ContextMenuState<'_>, Option<ContextMenuAction>> for ContextMenu
                 } else {
                     if ui.button("Duplicate").clicked() {
                         out_action = Some(ContextMenuAction::Action(UiAction::DuplicatePanes(state.targets.clone())))
+                    }
+
+                    if ui.button("Duplicate…").clicked() {
+                        out_action = Some(ContextMenuAction::Action(UiAction::OpenDuplicateDialog(pane_idx)))
                     }
 
                     if ui

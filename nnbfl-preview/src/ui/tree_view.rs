@@ -71,6 +71,27 @@ impl TreeView {
         self.selected_pane = primary;
     }
 
+    pub fn reveal(&mut self, tree: &PaneTree, panes: &[PaneId]) {
+        for &pane in panes {
+            let mut parent = tree.parent_map.get(&pane).copied().flatten();
+
+            while let Some(id) = parent {
+                self.tree_state.set_openness(id, true);
+                parent = tree.parent_map.get(&id).copied().flatten();
+            }
+        }
+    }
+
+    pub fn collapse_empty(&mut self, tree: &PaneTree) {
+        for node in tree.iter() {
+            if node.all_children().next().is_none()
+                && self.tree_state.is_open(&node.pane_idx) == Some(true)
+            {
+                self.tree_state.set_openness(node.pane_idx, false);
+            }
+        }
+    }
+
     pub fn targets(&self, pane: PaneId) -> Vec<PaneId> {
         if self.selection.contains(&pane) {
             self.selection.clone()
@@ -220,7 +241,10 @@ impl TreeView {
         if !is_parts_content || node.all_children().next().is_some() {
             builder.node(
                 NodeBuilder::dir(i)
-                    .default_open(!(is_parts_content || is_parts_section))
+                    .default_open(
+                        !(is_parts_content || is_parts_section)
+                            && node.all_children().next().is_some(),
+                    )
                     .drop_allowed(!is_parts_content)
                     .activatable(!is_parts_content)
                     .height(24.0)
@@ -335,6 +359,11 @@ impl TreeView {
         if ui.button("Duplicate").clicked() {
             *node_ui.action = Some(UiAction::DuplicatePanes(targets.clone()));
 
+            ui.close();
+        }
+
+        if ui.button("Duplicate…").clicked() {
+            *node_ui.action = Some(UiAction::OpenDuplicateDialog(pane));
             ui.close();
         }
 

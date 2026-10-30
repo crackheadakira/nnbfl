@@ -1,4 +1,5 @@
 use crate::{
+    ops::duplicate::{DuplicateNames, DuplicateOptions},
     pane_factory::NewPaneKind,
     pane_tree::{Anchor, PaneId},
 };
@@ -10,6 +11,7 @@ use nnbfl::{
 
 use crate::{
     RenderContext,
+    edit_history::EditHistory,
     pane_tree::PaneNode,
     renderer::textured_quad::PaneQuadData,
     traits::Displaying,
@@ -17,6 +19,7 @@ use crate::{
         DrawUi, DrawUiWith,
         archive_browser::ArchiveBrowser,
         context_menu::{ContextMenu, ContextMenuAction, ContextMenuState},
+        dialogs::duplicate::DuplicateDialog,
         editors::{GroupEditor, MaterialEditor, PaneEditor, TextureEditor},
         shortcuts::Shortcuts,
         tree_view::TreeView,
@@ -52,6 +55,7 @@ pub struct UiState {
     pub pane_editor: PaneEditor,
     pub group_editor: GroupEditor,
     pub texture_editor: TextureEditor,
+    pub duplicate_dialog: DuplicateDialog,
     pub show_statistics_window: bool,
     pub enable_puffin: bool,
 }
@@ -131,6 +135,12 @@ pub enum UiAction {
 
     DeletePanes(Vec<PaneId>),
     DuplicatePanes(Vec<PaneId>),
+    OpenDuplicateDialog(PaneId),
+    DuplicateWithNames {
+        source: PaneId,
+        names: DuplicateNames,
+        options: DuplicateOptions,
+    },
     RenamePane {
         target_idx: PaneId,
         name: String,
@@ -150,6 +160,48 @@ pub enum UiAction {
 
     Undo,
     Redo,
+    JumpToHistory(usize),
+}
+
+fn draw_history(ui: &mut Ui, history: &EditHistory) -> Option<usize> {
+    let mut jump = None;
+
+    egui::CollapsingHeader::new("History")
+        .default_open(true)
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("edit_history")
+                .max_height(160.0)
+                .auto_shrink([false, true])
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    let position = history.position();
+
+                    let first = if history.dropped() {
+                        "Oldest kept step"
+                    } else {
+                        "Opened"
+                    };
+
+                    for (target, label) in std::iter::once(first).chain(history.steps()).enumerate()
+                    {
+                        let text = if target > position {
+                            egui::RichText::new(label).weak()
+                        } else {
+                            egui::RichText::new(label)
+                        };
+
+                        let current = target == position;
+
+                        if ui.selectable_label(current, text).clicked() && !current {
+                            jump = Some(target);
+                        }
+                    }
+                });
+        });
+
+    ui.separator();
+    jump
 }
 
 pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h: f32) {
@@ -504,6 +556,12 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
             .default_size(300.0)
             .resizable(true)
             .show(ui, |ui| {
+                if let Some(layout) = ctx.layout_tabs.active()
+                    && let Some(target) = draw_history(ui, &layout.history)
+                {
+                    ctx.ui_state.pending_action = Some(UiAction::JumpToHistory(target));
+                }
+
                 ui.horizontal(|ui| {
                     ui.selectable_value(
                         &mut ctx.ui_state.right_sidebar_tab,
@@ -752,6 +810,10 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
         );
 
         ctx.ui_state.group_editor.draw_with(ui, &mut layout.tree);
+
+        if let Some(action) = ctx.ui_state.duplicate_dialog.show(ui.ctx(), &layout.tree) {
+            ctx.ui_state.pending_action = Some(action);
+        }
     }
 
     if let Some(timeline) = ctx.layout_tabs.active_timeline_mut() {

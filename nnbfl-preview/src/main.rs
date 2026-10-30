@@ -9,6 +9,7 @@ mod error;
 mod font;
 mod game_config;
 mod keybinds;
+mod ops;
 mod pane_factory;
 mod pane_tree;
 mod render;
@@ -589,9 +590,10 @@ impl LayoutData {
         if let Some(instance) = self.timeline.anim_player.anims.get(session.anim)
             && instance.bflan.anim_info != session.baseline
         {
+            let label = format!("Edit keys in {}", instance.name);
             let after = instance.bflan.anim_info.clone();
             self.history
-                .record_anim(session.anim, session.baseline, after);
+                .record_anim(label, session.anim, session.baseline, after);
         }
     }
 
@@ -1036,6 +1038,14 @@ impl App {
             return;
         };
 
+        let verb = match drag.handle {
+            Handle::Body => "Move",
+            Handle::Rotation => "Rotate",
+            _ => "Resize",
+        };
+
+        let label = format!("{verb} {}", node.label.trim_end_matches('\0'));
+
         let before = edit_history::PaneTransform {
             translation: drag.start_translation,
             size: drag.start_size,
@@ -1050,7 +1060,7 @@ impl App {
 
         layout
             .history
-            .record_transform(drag.pane_idx, before, after);
+            .record_transform(label, drag.pane_idx, before, after);
     }
 
     fn try_select_at(&mut self, screen_pos: [f32; 2]) {
@@ -1340,7 +1350,7 @@ impl App {
             .filter(|edit| {
                 let target_idx = match edit {
                     edit_history::PaneEdit::Delete { target_idx } => Some(*target_idx),
-                    edit_history::PaneEdit::Duplicate { source_idx } => Some(*source_idx),
+                    edit_history::PaneEdit::Duplicate { source_idx, .. } => Some(*source_idx),
                     edit_history::PaneEdit::Add { parent, .. } => *parent,
                     edit_history::PaneEdit::Move { source_idx, .. } => Some(*source_idx),
                     edit_history::PaneEdit::Rename { target_idx, .. } => Some(*target_idx),
@@ -1373,6 +1383,10 @@ impl App {
         tree_view.hidden_panes.retain(exists);
 
         tree_view.retain(exists);
+
+        let selection = tree_view.selection.clone();
+        tree_view.reveal(&layout.tree, &selection);
+        tree_view.collapse_empty(&layout.tree);
 
         layout.tree.recompute_dirty();
         layout.tree.recompute_dirty_materials(&mut tabs.glyphs);
@@ -1737,11 +1751,35 @@ impl ApplicationHandler for App {
                         .collect()
                 }),
 
-                UiAction::DuplicatePanes(panes) => self.perform_pane_edits(|tree| {
-                    tree.selection_roots(&panes)
-                        .into_iter()
-                        .map(|source_idx| edit_history::PaneEdit::Duplicate { source_idx })
-                        .collect()
+                UiAction::DuplicatePanes(panes) => {
+                    let options = self.ui_state.duplicate_dialog.options;
+
+                    self.perform_pane_edits(|tree| {
+                        tree.selection_roots(&panes)
+                            .into_iter()
+                            .map(|source_idx| edit_history::PaneEdit::Duplicate {
+                                source_idx,
+                                names: None,
+                                options,
+                            })
+                            .collect()
+                    })
+                }
+
+                UiAction::OpenDuplicateDialog(source) => {
+                    if let Some(layout) = self.tabs.active() {
+                        self.ui_state.duplicate_dialog.open(&layout.tree, source);
+                    }
+                }
+
+                UiAction::DuplicateWithNames {
+                    source,
+                    names,
+                    options,
+                } => self.perform_pane_edit(edit_history::PaneEdit::Duplicate {
+                    source_idx: source,
+                    names: Some(names),
+                    options,
                 }),
 
                 UiAction::AddPane {
@@ -1781,6 +1819,30 @@ impl ApplicationHandler for App {
                         let (history, mut edit) = layout.edit_ctx();
 
                         let resulting = history.undo(&mut edit);
+                        self.ui_state.pane_tree_view.select_many(resulting);
+                        self.after_structural_edit();
+                    }
+                }
+
+                UiAction::JumpToHistory(target) => {
+                    if let Some(layout) = self.tabs.active_mut() {
+                        layout.commit_anim_session();
+
+                        let mut resulting = Vec::new();
+
+                        loop {
+                            let position = layout.history.position();
+                            let (history, mut edit) = layout.edit_ctx();
+
+                            if position > target {
+                                resulting = history.undo(&mut edit);
+                            } else if position < target && position < history.steps().count() {
+                                resulting = history.redo(&mut edit);
+                            } else {
+                                break;
+                            }
+                        }
+
                         self.ui_state.pane_tree_view.select_many(resulting);
                         self.after_structural_edit();
                     }
