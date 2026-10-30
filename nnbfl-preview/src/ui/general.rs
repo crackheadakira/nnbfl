@@ -7,12 +7,14 @@ use crate::{
 };
 use egui::Ui;
 use nnbfl::{
+    bflan::anim_info::AnimType,
     bflyt::{file::BflytSection, list::Layout, pane::Pane},
     ui2d::types::{Vector2f, Vector3f},
 };
 
 use crate::{
     RenderContext,
+    anim_edit::{Animatable, PaneBase},
     edit_history::EditHistory,
     font::glyph_atlas::GLYPH_ATLAS_TEXTURE_NAME,
     pane_tree::PaneNode,
@@ -181,6 +183,10 @@ pub enum UiAction {
         name: String,
         png: std::path::PathBuf,
         resize: bool,
+    },
+    EditAnim {
+        label: String,
+        info: Box<nnbfl::bflan::anim_info::PaneAnimInfo>,
     },
 
     Undo,
@@ -919,8 +925,28 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
         }
     }
 
-    if let Some(timeline) = ctx.layout_tabs.active_timeline_mut() {
-        timeline.draw(ui);
+    if let Some(layout) = ctx.layout_tabs.active_mut() {
+        let materials = layout
+            .tree
+            .material_list
+            .as_ref()
+            .map_or(0, |list| list.materials.len());
+
+        let key = (layout.tree.animation_binding_revision, materials);
+
+        if layout.timeline.animatable_key != Some(key) {
+            layout.timeline.animatable = animatable(&layout.tree);
+            layout.timeline.animatable_key = Some(key);
+        }
+
+        layout.timeline.draw(ui);
+
+        if let Some((label, info)) = layout.timeline.pending_anim_edit.take() {
+            ctx.ui_state.pending_action = Some(UiAction::EditAnim {
+                label,
+                info: Box::new(info),
+            });
+        }
     }
 
     if let Some(action) = ctx.ui_state.archive_browser.draw(ui) {
@@ -1170,4 +1196,46 @@ fn draw_prop_f32(ui: &mut Ui, label: &str, value: f32) {
     ui.strong(label);
     ui.label(format!("{:.2}", value));
     ui.end_row();
+}
+
+fn animatable(tree: &crate::pane_tree::PaneTree) -> Vec<Animatable> {
+    let mut out: Vec<Animatable> = tree
+        .roots
+        .iter()
+        .flat_map(|root| root.iter())
+        .filter(|n| n.parts_source.is_none())
+        .filter_map(|n| {
+            let base = n.section.get_base_pane()?;
+
+            Some(Animatable {
+                name: n.label.trim_end_matches('\0').to_string(),
+                anim_type: AnimType::Pane,
+                base: Some(PaneBase {
+                    translate: [base.translation.x, base.translation.y, base.translation.z],
+                    rotate: [base.rotation.x, base.rotation.y, base.rotation.z],
+                    scale: [base.scale.x, base.scale.y],
+                    size: [base.size.x, base.size.y],
+                    alpha: base.alpha as f32,
+                    visible: base.pane_flags.is_visible,
+                }),
+                layers: 0,
+            })
+        })
+        .collect();
+
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+
+    out.extend(
+        tree.material_list
+            .iter()
+            .flat_map(|list| &list.materials)
+            .map(|m| Animatable {
+                name: m.material_name.trim_end_matches('\0').to_string(),
+                anim_type: AnimType::Material,
+                base: None,
+                layers: m.tex_maps.len(),
+            }),
+    );
+
+    out
 }

@@ -77,6 +77,11 @@ pub enum PaneEdit {
     ImportTexture {
         texture: Box<Texture>,
     },
+    EditAnim {
+        anim: usize,
+        label: String,
+        info: Box<PaneAnimInfo>,
+    },
     ReplaceTexture {
         index: usize,
         texture: Box<Texture>,
@@ -93,6 +98,7 @@ impl PaneEdit {
                 | PaneEdit::RenameMaterial { .. }
                 | PaneEdit::ImportTexture { .. }
                 | PaneEdit::ReplaceTexture { .. }
+                | PaneEdit::EditAnim { .. }
         )
     }
 
@@ -110,7 +116,8 @@ impl PaneEdit {
             | PaneEdit::DeleteMaterial { .. }
             | PaneEdit::RenameMaterial { .. }
             | PaneEdit::ImportTexture { .. }
-            | PaneEdit::ReplaceTexture { .. } => None,
+            | PaneEdit::ReplaceTexture { .. }
+            | PaneEdit::EditAnim { .. } => None,
         }
     }
 }
@@ -234,6 +241,33 @@ impl PaneEdit {
                     pane_idx: source_idx,
                     old_parent,
                     old_anchor,
+                })
+            }
+
+            PaneEdit::EditAnim { anim, info, .. } => {
+                let instance = ctx.timeline.anim_player.anims.get_mut(anim)?;
+                let before = std::mem::replace(&mut instance.bflan.anim_info, (*info).clone());
+                let reshaped = !same_tracks(&before, &info);
+                let shrank = info.contents.len() < before.contents.len();
+
+                ctx.timeline.anim_player.invalidate();
+                tree.animation_binding_revision = tree.animation_binding_revision.wrapping_add(1);
+
+                if reshaped {
+                    ctx.timeline.selected_key = None;
+                    ctx.timeline.pending_key_edit = None;
+                    ctx.timeline.pending_slope_edit = None;
+                    ctx.timeline.hidden_tracks.clear();
+                }
+
+                if shrank {
+                    ctx.timeline.expanded_anim_panes.clear();
+                }
+
+                Some(AppliedCommand::ReplaceAnimInfo {
+                    anim,
+                    before: Box::new(before),
+                    after: info,
                 })
             }
 
@@ -1236,6 +1270,7 @@ fn describe(edits: &[PaneEdit], tree: &PaneTree) -> String {
         PaneEdit::Duplicate { .. } | PaneEdit::DuplicateMaterial { .. } => "Duplicate",
         PaneEdit::Add { .. } | PaneEdit::AddMaterial => "Add",
         PaneEdit::ImportTexture { .. } => "Import",
+        PaneEdit::EditAnim { .. } => "Edit",
         PaneEdit::ReplaceTexture { .. } => "Replace",
         PaneEdit::Move { .. } => "Reorder",
         PaneEdit::Rename { .. } | PaneEdit::RenameMaterial { .. } => "Rename",
@@ -1260,6 +1295,7 @@ fn describe(edits: &[PaneEdit], tree: &PaneTree) -> String {
             }
             PaneEdit::DeleteMaterial { index } => format!("Delete material {}", material(index)),
             PaneEdit::ImportTexture { texture } => format!("Import texture {}", texture.name),
+            PaneEdit::EditAnim { label, .. } => label.clone(),
             PaneEdit::ReplaceTexture { texture, .. } => {
                 format!("Replace texture {}", texture.name)
             }

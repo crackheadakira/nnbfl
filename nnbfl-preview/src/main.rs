@@ -1,3 +1,4 @@
+mod anim_edit;
 mod anim_state;
 mod archive;
 mod archive_browser;
@@ -291,6 +292,17 @@ impl GpuState {
                 .timeline
                 .anim_player
                 .apply_key_edit(&pending_key_edit);
+        }
+
+        if let Some(layout) = ctx.layout_tabs.active_mut()
+            && let Some(frame_count) = layout.timeline.pending_frame_count.take()
+        {
+            layout.begin_anim_session();
+            let player = &mut layout.timeline.anim_player;
+
+            if let Some(anim) = player.active.and_then(|i| player.anims.get_mut(i)) {
+                anim.bflan.anim_info.frame_count = frame_count;
+            }
         }
 
         if let Some(layout) = ctx.layout_tabs.active_mut()
@@ -1993,6 +2005,20 @@ impl ApplicationHandler for App {
 
                 UiAction::ReplaceTexture { name, png, resize } => {
                     self.import_texture(&name, None, &png, resize)
+                }
+
+                UiAction::EditAnim { label, info } => {
+                    if let Some(anim) = self
+                        .tabs
+                        .active()
+                        .and_then(|layout| layout.timeline.anim_player.active)
+                    {
+                        self.perform_pane_edit(edit_history::PaneEdit::EditAnim {
+                            anim,
+                            label,
+                            info,
+                        });
+                    }
                 }
 
                 UiAction::StartArchiveScan => {

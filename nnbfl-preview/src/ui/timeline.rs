@@ -1,8 +1,12 @@
 use std::collections::HashSet;
 
-use nnbfl::bflan::{anim_info::AnimInfo, curves::Curve};
+use nnbfl::bflan::{
+    anim_info::{AnimInfo, AnimInfoType, AnimType, PaneAnimInfo},
+    curves::Curve,
+};
 
 use crate::{
+    anim_edit::{self, Animatable},
     anim_state::{AnimInstance, AnimPlayer},
     ui::DrawUi,
 };
@@ -149,6 +153,13 @@ pub struct TimelineState {
     pub pan_frame: f32,
     pub panning: bool,
     pub frame_rate: f32,
+
+    pub pending_anim_edit: Option<(String, PaneAnimInfo)>,
+    pub pending_frame_count: Option<u16>,
+    pub animatable: Vec<Animatable>,
+    pub animatable_key: Option<(u64, usize)>,
+    pub edit_error: Option<String>,
+    texture_draft: String,
 }
 
 impl Default for TimelineState {
@@ -164,6 +175,12 @@ impl Default for TimelineState {
             pan_frame: 0.0,
             panning: false,
             frame_rate: 30.0,
+            pending_anim_edit: None,
+            pending_frame_count: None,
+            animatable: Vec::new(),
+            animatable_key: None,
+            edit_error: None,
+            texture_draft: String::new(),
         }
     }
 }
@@ -175,6 +192,85 @@ impl TimelineState {
         self.pending_slope_edit = None;
         self.hidden_tracks.clear();
         self.expanded_anim_panes.clear();
+    }
+
+    fn propose(
+        &mut self,
+        active_idx: usize,
+        label: String,
+        edit: impl FnOnce(&mut PaneAnimInfo) -> Result<(), String>,
+    ) {
+        let Some(anim) = self.anim_player.anims.get(active_idx) else {
+            return;
+        };
+
+        let mut info = anim.bflan.anim_info.clone();
+
+        match edit(&mut info) {
+            Ok(()) => {
+                self.pending_anim_edit = Some((label, info));
+                self.edit_error = None;
+            }
+            Err(err) => self.edit_error = Some(err),
+        }
+    }
+
+    fn track_menu(&mut self, ui: &mut egui::Ui, active_idx: usize, target: &Animatable) {
+        for kind in anim_edit::kinds_for(&target.anim_type) {
+            ui.menu_button(kind.label, |ui| {
+                let layers = if kind.layered {
+                    target.layers.max(1)
+                } else {
+                    1
+                };
+
+                for layer in 0..layers {
+                    let mut targets = |ui: &mut egui::Ui| {
+                        for raw in 0..kind.targets {
+                            let name = anim_edit::target_name(kind.info_type, raw);
+
+                            if ui.button(&name).clicked() {
+                                self.propose(
+                                    active_idx,
+                                    format!("Add {name} track to {}", target.name),
+                                    |info| {
+                                        anim_edit::add_track(info, target, kind, raw, layer as u8)
+                                    },
+                                );
+
+                                ui.close();
+                            }
+                        }
+                    };
+
+                    if layers > 1 {
+                        ui.menu_button(format!("Texture {}", layer + 1), targets);
+                    } else {
+                        targets(ui);
+                    }
+                }
+            });
+        }
+    }
+
+    fn animate_menu(&mut self, ui: &mut egui::Ui, active_idx: usize) {
+        let animatable = self.animatable.clone();
+
+        ui.menu_button("Animate…", |ui| {
+            for (anim_type, title) in [(AnimType::Pane, "Pane"), (AnimType::Material, "Material")] {
+                ui.menu_button(title, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(360.0)
+                        .show(ui, |ui| {
+                            for target in animatable.iter().filter(|t| t.anim_type == anim_type) {
+                                ui.menu_button(&target.name, |ui| {
+                                    self.track_menu(ui, active_idx, target)
+                                });
+                            }
+                        });
+                });
+            }
+        });
     }
 }
 
@@ -191,7 +287,7 @@ impl DrawUi<()> for TimelineState {
             return;
         };
 
-        let (frame_count, anim_name, anim_frame, rows, anim_groups) = {
+        let (frame_count, info_frames, anim_name, anim_frame, rows, anim_groups) = {
             let Some(anim) = self.anim_player.anims.get(active_idx) else {
                 return;
             };
@@ -201,6 +297,7 @@ impl DrawUi<()> for TimelineState {
 
             (
                 frame_count,
+                anim.bflan.anim_info.frame_count,
                 anim.name.clone(),
                 anim.frame,
                 rows,
@@ -235,6 +332,24 @@ impl DrawUi<()> for TimelineState {
                         for group in anim_groups {
                             ui.label(group);
                         }
+                    }
+
+                    ui.separator();
+                    ui.label("Frames:");
+
+                    let mut frames = info_frames;
+
+                    if ui
+                        .add(egui::DragValue::new(&mut frames).range(1..=u16::MAX))
+                        .changed()
+                    {
+                        self.pending_frame_count = Some(frames);
+                    }
+
+                    self.animate_menu(ui, active_idx);
+
+                    if let Some(error) = &self.edit_error {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -342,6 +457,46 @@ impl DrawUi<()> for TimelineState {
                                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                                 }
 
+                                header_response.context_menu(|ui| {
+                                    let anim_type = self
+                                        .anim_player
+                                        .anims
+                                        .get(active_idx)
+                                        .and_then(|a| a.bflan.anim_info.contents.get(*content_idx))
+                                        .map(|c| c.anim_type.clone());
+
+                                    let target = self
+                                        .animatable
+                                        .iter()
+                                        .find(|t| {
+                                            Some(&t.anim_type) == anim_type.as_ref()
+                                                && t.name == *label
+                                        })
+                                        .cloned();
+
+                                    if let Some(target) = target {
+                                        ui.menu_button("Add track", |ui| {
+                                            self.track_menu(ui, active_idx, &target)
+                                        });
+                                    }
+
+                                    if ui.button("Remove from animation").clicked() {
+                                        let content = *content_idx;
+
+                                        self.propose(
+                                            active_idx,
+                                            format!("Remove {label} from the animation"),
+                                            |info| {
+                                                anim_edit::remove_content(info, content).ok_or_else(
+                                                    || "It is no longer animated".into(),
+                                                )
+                                            },
+                                        );
+
+                                        ui.close();
+                                    }
+                                });
+
                                 let status = if expanded { "Close" } else { "Open" };
                                 ui.painter().text(
                                     egui::pos2(avail.min.x + 4.0, row_top + row_h * 0.5 - 2.0),
@@ -427,6 +582,59 @@ impl DrawUi<()> for TimelineState {
                                             egui::Color32::from_gray(110)
                                         },
                                     );
+
+                                    let label_rect = egui::Rect::from_min_size(
+                                        egui::pos2(avail.min.x + 48.0, legend_top),
+                                        egui::vec2(LABEL_COL_WIDTH - 48.0, row_h),
+                                    );
+
+                                    let track_response = ui.interact(
+                                        label_rect,
+                                        ui.id().with((
+                                            "timeline_track",
+                                            track.content_idx,
+                                            track.info_idx,
+                                            track.target_idx,
+                                        )),
+                                        egui::Sense::click(),
+                                    );
+
+                                    track_response.context_menu(|ui| {
+                                        let frame = anim_frame.round();
+
+                                        if ui.button(format!("Add key at frame {frame}")).clicked()
+                                        {
+                                            let track = (*track).clone();
+
+                                            self.propose(
+                                                active_idx,
+                                                format!("Add key to {}", track.label),
+                                                |info| {
+                                                    anim_edit::add_key(info, &track, frame)
+                                                        .map(|_| ())
+                                                },
+                                            );
+
+                                            ui.close();
+                                        }
+
+                                        if ui.button("Delete track").clicked() {
+                                            let track = (*track).clone();
+
+                                            self.propose(
+                                                active_idx,
+                                                format!("Delete track {}", track.label),
+                                                |info| {
+                                                    anim_edit::delete_track(info, &track)
+                                                        .ok_or_else(|| {
+                                                            "The track no longer exists".into()
+                                                        })
+                                                },
+                                            );
+
+                                            ui.close();
+                                        }
+                                    });
 
                                     if t_idx + 1 < tracks.len() {
                                         let sep_y = legend_top + row_h - TimelineRow::GAP * 0.5;
@@ -544,7 +752,7 @@ fn draw_ruler(ui: &mut egui::Ui, ruler_rect: egui::Rect, visible_start: f32, vis
 
     let major_every = (tick_step * 5).max(1);
 
-    let painter = ui.painter();
+    let painter = ui.painter_at(ruler_rect);
     let first_frame = (visible_start / tick_step as f32).floor() as i32 * tick_step;
     let last_frame = (visible_start + visible_span).ceil() as i32;
 
@@ -597,8 +805,8 @@ impl TimelineState {
             return;
         };
 
-        ui.painter()
-            .rect_filled(canvas_rect, 2.0, egui::Color32::from_black_alpha(40));
+        let painter = ui.painter_at(canvas_rect.expand(TIMELINE_MARKER_RADIUS + 2.0));
+        painter.rect_filled(canvas_rect, 2.0, egui::Color32::from_black_alpha(40));
 
         let frame_count = anim.frame_count().max(1.0);
         let zoom = self.zoom.max(1.0);
@@ -624,7 +832,7 @@ impl TimelineState {
             }
 
             let color = track_color(color_idx);
-            draw_curve(ui, &to_screen, curve, color);
+            draw_curve(&painter, &to_screen, curve, color);
 
             let key_count = match curve {
                 Curve::Constant(keys) => keys.len(),
@@ -687,9 +895,8 @@ impl TimelineState {
                     .as_ref()
                     .is_some_and(|s| s.track == **track && s.key_idx == key_idx);
 
-                ui.painter()
-                    .circle_filled(screen_pos, TIMELINE_MARKER_RADIUS, color);
-                ui.painter().circle_stroke(
+                painter.circle_filled(screen_pos, TIMELINE_MARKER_RADIUS, color);
+                painter.circle_stroke(
                     screen_pos,
                     TIMELINE_MARKER_RADIUS,
                     egui::Stroke::new(
@@ -718,7 +925,7 @@ impl TimelineState {
                     to_screen.transform_pos(egui::pos2(handle_frame, handle_value)),
                 );
 
-                ui.painter().line_segment(
+                painter.line_segment(
                     [key_screen, handle_screen],
                     egui::Stroke::new(1.5, egui::Color32::WHITE),
                 );
@@ -759,7 +966,7 @@ impl TimelineState {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
 
-                ui.painter().add(egui::Shape::convex_polygon(
+                painter.add(egui::Shape::convex_polygon(
                     diamond_points(handle_screen, TIMELINE_MARKER_RADIUS * 0.9),
                     egui::Color32::WHITE,
                     egui::Stroke::new(1.0, egui::Color32::BLACK),
@@ -771,7 +978,7 @@ impl TimelineState {
             canvas_rect.min.x + (anim.frame - visible_start) / visible_span * canvas_rect.width();
 
         if playhead_x >= canvas_rect.min.x && playhead_x <= canvas_rect.max.x {
-            ui.painter().line_segment(
+            painter.line_segment(
                 [
                     egui::pos2(playhead_x, canvas_rect.min.y),
                     egui::pos2(playhead_x, canvas_rect.max.y),
@@ -928,11 +1135,78 @@ impl TimelineState {
             }
         }
 
+        if anim_edit::track_info_type(&anim.bflan.anim_info, &selected.track)
+            == Some(AnimInfoType::TexturePatternAnim)
+            && let Curve::Step(keys) = curve
+            && let Some(key) = keys.get(selected.key_idx)
+        {
+            let textures = &anim.bflan.anim_info.textures;
+            let current = textures
+                .get(key.value as usize)
+                .cloned()
+                .unwrap_or_else(|| format!("#{} (missing)", key.value));
+
+            ui.add_space(6.0);
+
+            egui::ComboBox::from_id_salt("timeline_pattern_texture")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for (index, texture) in textures.iter().enumerate() {
+                        if ui
+                            .selectable_label(index == key.value as usize, texture)
+                            .clicked()
+                        {
+                            self.pending_key_edit = Some(PendingKeyEdit {
+                                track: selected.track.clone(),
+                                key_idx: selected.key_idx,
+                                frame: key.frame,
+                                value: index as f32,
+                            });
+                        }
+                    }
+                });
+
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.texture_draft).desired_width(110.0));
+                let name = self.texture_draft.trim().to_string();
+
+                if ui
+                    .add_enabled(!name.is_empty(), egui::Button::new("Add name"))
+                    .clicked()
+                {
+                    if textures.contains(&name) {
+                        self.edit_error = Some(format!("{name} is already in the list"));
+                    } else {
+                        let mut info = anim.bflan.anim_info.clone();
+                        info.textures.push(name.clone());
+                        self.pending_anim_edit = Some((format!("Add texture name {name}"), info));
+                    }
+
+                    self.texture_draft.clear();
+                }
+            });
+        }
+
         ui.add_space(10.0);
 
-        if ui.button("Close").clicked() {
-            self.selected_key = None;
-        }
+        ui.horizontal(|ui| {
+            if ui.button("Delete key").clicked() {
+                let mut info = anim.bflan.anim_info.clone();
+
+                match anim_edit::delete_key(&mut info, &selected.track, selected.key_idx) {
+                    Ok(()) => {
+                        self.pending_anim_edit =
+                            Some((format!("Delete key in {}", selected.track.label), info));
+                        self.selected_key = None;
+                    }
+                    Err(err) => self.edit_error = Some(err),
+                }
+            }
+
+            if ui.button("Close").clicked() {
+                self.selected_key = None;
+            }
+        });
     }
 }
 
@@ -954,7 +1228,7 @@ fn key_point(curve: &Curve, idx: usize) -> (f32, f32) {
 }
 
 fn draw_curve(
-    ui: &egui::Ui,
+    painter: &egui::Painter,
     to_screen: &egui::emath::RectTransform,
     curve: &Curve,
     color: egui::Color32,
@@ -988,7 +1262,7 @@ fn draw_curve(
                     egui::Color32::TRANSPARENT,
                     stroke,
                 );
-                ui.painter().add(shape);
+                painter.add(shape);
             }
         }
         Curve::Step(keys) => {
@@ -1008,8 +1282,7 @@ fn draw_curve(
             }
 
             if points.len() >= 2 {
-                ui.painter()
-                    .add(egui::epaint::PathShape::line(points, stroke));
+                painter.add(egui::epaint::PathShape::line(points, stroke));
             }
         }
 
@@ -1021,8 +1294,7 @@ fn draw_curve(
             }
 
             if points.len() >= 2 {
-                ui.painter()
-                    .add(egui::epaint::PathShape::line(points, stroke));
+                painter.add(egui::epaint::PathShape::line(points, stroke));
             }
         }
     }
