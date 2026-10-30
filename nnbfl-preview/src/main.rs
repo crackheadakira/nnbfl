@@ -455,6 +455,7 @@ struct DragState {
     rotate_z: f32,
 }
 
+#[derive(Default)]
 pub struct LayoutTabs {
     pub items: Vec<LayoutData>,
     pub active_index: usize,
@@ -462,14 +463,6 @@ pub struct LayoutTabs {
 }
 
 impl LayoutTabs {
-    pub fn new() -> Self {
-        Self {
-            items: Vec::new(),
-            active_index: 0,
-            glyphs: GlyphData::new(),
-        }
-    }
-
     pub fn active(&self) -> Option<&LayoutData> {
         self.items.get(self.active_index)
     }
@@ -827,7 +820,7 @@ struct App {
 impl App {
     fn new() -> Self {
         Self {
-            tabs: LayoutTabs::new(),
+            tabs: LayoutTabs::default(),
             docs: DocStore::default(),
             ui_state: UiState::default(),
             camera: Camera::new(),

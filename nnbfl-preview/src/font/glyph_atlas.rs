@@ -324,8 +324,8 @@ pub struct GlyphData {
     pub atlas: GlyphAtlas,
 }
 
-impl GlyphData {
-    pub fn new() -> Self {
+impl Default for GlyphData {
+    fn default() -> Self {
         Self {
             fonts: FontCache::new(),
             atlas: GlyphAtlas::new(1024, 1024),

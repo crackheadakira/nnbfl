@@ -159,7 +159,7 @@ fn load_layouts(file: &Path, layout_dir: Option<&Path>) -> Result<Vec<Loaded>, S
     entries
         .into_iter()
         .map(|(path, stem)| {
-            let mut glyphs = GlyphData::new();
+            let mut glyphs = GlyphData::default();
             let source = LayoutSource { doc, layout: path };
             let (layout, _) = LayoutData::load_from_buffer(
                 files.clone(),
