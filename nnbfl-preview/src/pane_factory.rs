@@ -168,7 +168,7 @@ pub fn new_pane_section(
     }
 }
 
-fn add_material(materials: &mut MaterialList, base: &str) -> u16 {
+pub(crate) fn add_material(materials: &mut MaterialList, base: &str) -> u16 {
     let color = |c: Color4u8| MaterialColorEntry {
         color_u8: Some(c),
         color_f32: None,
@@ -186,7 +186,7 @@ fn add_material(materials: &mut MaterialList, base: &str) -> u16 {
     (materials.materials.len() - 1) as u16
 }
 
-fn unique_material_name(materials: &MaterialList, base: &str) -> String {
+pub(crate) fn unique_material_name(materials: &MaterialList, base: &str) -> String {
     let taken = |name: &str| {
         materials
             .materials

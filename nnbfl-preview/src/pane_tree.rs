@@ -11,7 +11,8 @@ use nnbfl::{
         file::{Bflyt, BflytNode, BflytSection, ControlSourceElement, GroupElement, PaneElement},
         flags::WindowKind,
         list::{
-            CaptureTextureList, FontList, Material, MaterialList, MaterialTextureSrt, TextureList,
+            CaptureTextureList, FontList, MATERIAL_NAME_LEN, Material, MaterialList,
+            MaterialTextureSrt, TextureList,
         },
         pane::{
             BasePaneUsageFlags, HorizontalPosition, PANE_NAME_LEN, Pane, PartsPane,
@@ -1238,6 +1239,10 @@ impl PaneTree {
             Some(other) if Some(*other) != pane => Some(format!("Another pane is named {name}")),
             _ => None,
         }
+    }
+
+    pub fn material_name_error(&self, name: &str, material: Option<u16>) -> Option<String> {
+        material_name_error(self.material_list.as_ref(), name, material)
     }
 
     pub fn unique_name(&self, base: &str, taken: &HashSet<String>) -> String {
@@ -2467,4 +2472,35 @@ fn measure_line_width(font: &FontFace, line: &str, font_size_px: f32, character_
     }
 
     width.max(0.0)
+}
+
+pub fn material_name_error(
+    list: Option<&MaterialList>,
+    name: &str,
+    material: Option<u16>,
+) -> Option<String> {
+    if name.is_empty() {
+        return Some("The name is empty".into());
+    }
+
+    if !name.bytes().all(|b| b.is_ascii_graphic() || b == b' ') {
+        return Some("Names are ASCII".into());
+    }
+
+    if name.len() > MATERIAL_NAME_LEN {
+        return Some(format!("Names are at most {MATERIAL_NAME_LEN} bytes"));
+    }
+
+    let clash = list.and_then(|list| {
+        list.materials
+            .iter()
+            .position(|m| m.material_name.trim_end_matches('\0') == name)
+    });
+
+    match clash {
+        Some(other) if Some(other as u16) != material => {
+            Some(format!("Another material is named {name}"))
+        }
+        _ => None,
+    }
 }

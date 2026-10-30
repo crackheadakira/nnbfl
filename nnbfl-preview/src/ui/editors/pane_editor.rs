@@ -34,11 +34,11 @@ impl PaneEditor {
     }
 }
 
-impl DrawUiWith<(&mut PaneNode, Option<&str>)> for PaneEditor {
+impl DrawUiWith<(&mut PaneNode, Option<&str>, &[String])> for PaneEditor {
     fn draw_with(
         &mut self,
         ui: &mut egui::Ui,
-        (pane, name_error): (&mut PaneNode, Option<&str>),
+        (pane, name_error, materials): (&mut PaneNode, Option<&str>, &[String]),
     ) -> bool {
         let mut changed = false;
         let mut is_open = self.is_editor_visible;
@@ -115,13 +115,37 @@ impl DrawUiWith<(&mut PaneNode, Option<&str>)> for PaneEditor {
                     changed |= pic
                         .bottom_right_vertex_color
                         .draw_with(ui, "Bottom Right Vertex Color");
-
-                    ui.label(format!("Picture Material Index {}", pic.material_index));
-
-                    if let Some(tq) = &mut pane.textured_quad {
-                        ui.label(format!("Quad Material Index {}", tq.material_idx));
-                    }
                 }
+
+                let editable = pane.parts_source.is_none() || pane.is_parts_overridden;
+                ui.add_enabled_ui(editable, |ui| match &mut pane.section {
+                    BflytSection::PicturePane(pic) => {
+                        changed |=
+                            material_combo(ui, "Material", &mut pic.material_index, materials);
+                    }
+                    BflytSection::TextBoxPane(txt) => {
+                        changed |=
+                            material_combo(ui, "Material", &mut txt.material_index, materials);
+                    }
+                    BflytSection::WindowPane(win) => {
+                        changed |= material_combo(
+                            ui,
+                            "Content Material",
+                            &mut win.content.material_index,
+                            materials,
+                        );
+
+                        for (i, frame) in win.frames.iter_mut().enumerate() {
+                            changed |= material_combo(
+                                ui,
+                                &format!("Frame {} Material", i + 1),
+                                &mut frame.material_index,
+                                materials,
+                            );
+                        }
+                    }
+                    _ => {}
+                });
             });
 
         self.is_editor_visible = is_open;
@@ -349,4 +373,32 @@ impl DrawUi for SystemData {
 
         changed
     }
+}
+
+fn material_combo(ui: &mut egui::Ui, label: &str, index: &mut u16, materials: &[String]) -> bool {
+    let mut changed = false;
+    let current = materials
+        .get(*index as usize)
+        .map_or_else(|| format!("#{index} (missing)"), |name| name.clone());
+
+    ui.horizontal(|ui| {
+        ui.label(label);
+
+        egui::ComboBox::from_id_salt(("pane_material", label))
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                for (i, name) in materials.iter().enumerate() {
+                    if ui
+                        .selectable_label(*index as usize == i, format!("[{}] {name}", i + 1))
+                        .clicked()
+                        && *index as usize != i
+                    {
+                        *index = i as u16;
+                        changed = true;
+                    }
+                }
+            });
+    });
+
+    changed
 }

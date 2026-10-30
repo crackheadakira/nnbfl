@@ -46,7 +46,7 @@ use winit::{
 use crate::{
     archive::{DocStore, EntryPath, LayoutSource, anim_owner, file_stem},
     archive_browser::{ArchiveEntry, ArchiveScan},
-    edit_history::{AnimSession, EditCtx, EditHistory},
+    edit_history::{AnimSession, EditCtx, EditHistory, MaterialSession, PaneSession, PaneSnapshot},
     error::LoadError,
     font::glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
     pane_tree::{Anchor, PaneId, PaneTree},
@@ -278,7 +278,7 @@ impl GpuState {
             egui_ctx.input(|i| i.pointer.any_down()) || egui_ctx.egui_wants_keyboard_input();
 
         if !editing && let Some(layout) = ctx.layout_tabs.active_mut() {
-            layout.commit_anim_session();
+            layout.commit_sessions();
         }
 
         if let Some(layout) = ctx.layout_tabs.active_mut()
@@ -541,12 +541,15 @@ pub struct LayoutData {
     pub version: VersionFormat,
     pub history: EditHistory,
     anim_session: Option<AnimSession>,
+    material_session: Option<MaterialSession>,
+    pane_session: Option<PaneSession>,
 
     pub timeline: TimelineState,
 }
 
 impl LayoutData {
-    const EDIT_HISTORY_LIMIT: usize = 20;
+    const EDIT_HISTORY_LIMIT: usize = 200;
+    const EDIT_HISTORY_BUDGET: usize = 256 * 1024 * 1024;
 
     pub fn edit_ctx(&mut self) -> (&mut EditHistory, EditCtx<'_>) {
         (
@@ -573,6 +576,133 @@ impl LayoutData {
                 baseline: instance.bflan.anim_info.clone(),
             });
         }
+    }
+
+    pub fn commit_sessions(&mut self) {
+        self.commit_anim_session();
+        self.commit_material_session();
+        self.commit_pane_session();
+    }
+
+    pub fn material_baseline(&self, index: u16) -> Option<MaterialSession> {
+        if self
+            .material_session
+            .as_ref()
+            .is_some_and(|s| s.index == index)
+        {
+            return None;
+        }
+
+        let material = self
+            .tree
+            .material_list
+            .as_ref()?
+            .materials
+            .get(index as usize)?;
+        Some(MaterialSession {
+            index,
+            material: material.clone(),
+            textures: self.tree.texture_list.clone(),
+        })
+    }
+
+    pub fn note_material_edit(&mut self, baseline: Option<MaterialSession>) {
+        if let Some(baseline) = baseline {
+            self.commit_material_session();
+            self.material_session = Some(baseline);
+        }
+    }
+
+    fn commit_material_session(&mut self) {
+        let Some(session) = self.material_session.take() else {
+            return;
+        };
+
+        let Some(material) = self
+            .tree
+            .material_list
+            .as_ref()
+            .and_then(|list| list.materials.get(session.index as usize))
+        else {
+            return;
+        };
+
+        let label = format!(
+            "Edit material {}",
+            material.material_name.trim_end_matches('\0')
+        );
+
+        let mut commands = Vec::new();
+        if !same_serialized(material, &session.material) {
+            commands.push(edit_history::AppliedCommand::ReplaceMaterial {
+                index: session.index,
+                before: Box::new(session.material),
+                after: Box::new(material.clone()),
+            });
+        }
+
+        if !same_serialized(&self.tree.texture_list, &session.textures) {
+            commands.push(edit_history::AppliedCommand::ReplaceTextureList {
+                before: Box::new(session.textures),
+                after: Box::new(self.tree.texture_list.clone()),
+            });
+        }
+
+        match commands.len() {
+            0 => {}
+            1 => self.history.record(label, commands.remove(0)),
+            _ => self
+                .history
+                .record(label, edit_history::AppliedCommand::Batch(commands)),
+        }
+    }
+
+    pub fn pane_baseline(&self, pane: PaneId) -> Option<PaneSession> {
+        if self.pane_session.as_ref().is_some_and(|s| s.pane == pane) {
+            return None;
+        }
+
+        let node = self.tree.find_by_idx(pane)?;
+        Some(PaneSession {
+            pane,
+            snapshot: PaneSnapshot::of(node),
+        })
+    }
+
+    pub fn note_pane_edit(&mut self, baseline: Option<PaneSession>) {
+        if let Some(baseline) = baseline {
+            self.commit_pane_session();
+            self.pane_session = Some(baseline);
+        }
+    }
+
+    fn commit_pane_session(&mut self) {
+        let Some(session) = self.pane_session.take() else {
+            return;
+        };
+
+        let Some(node) = self.tree.find_by_idx(session.pane) else {
+            return;
+        };
+
+        let after = PaneSnapshot::of(node);
+        let before = session.snapshot;
+        if same_serialized(&before.section, &after.section)
+            && before.label == after.label
+            && same_serialized(&before.user_data, &after.user_data)
+        {
+            return;
+        }
+
+        let label = format!("Edit {}", after.label.trim_end_matches('\0'));
+        self.history.record(
+            label,
+            edit_history::AppliedCommand::ReplacePane {
+                pane_idx: session.pane,
+                before: Box::new(before),
+                after: Box::new(after),
+            },
+        );
     }
 
     fn commit_anim_session(&mut self) {
@@ -796,8 +926,10 @@ impl LayoutData {
             parts_size,
             file_name: layout_name,
             version,
-            history: EditHistory::new(Self::EDIT_HISTORY_LIMIT),
+            history: EditHistory::new(Self::EDIT_HISTORY_LIMIT, Self::EDIT_HISTORY_BUDGET),
             anim_session: None,
+            material_session: None,
+            pane_session: None,
         };
 
         Ok((layout_data, anim_names))
@@ -1253,7 +1385,7 @@ impl App {
 
     fn switch_active_tab(&mut self) {
         for layout in &mut self.tabs.items {
-            layout.commit_anim_session();
+            layout.commit_sessions();
         }
 
         self.ui_state.anim_names = self.tabs.active_anim_names();
@@ -1341,13 +1473,7 @@ impl App {
         let edits: Vec<_> = edits(&layout.tree)
             .into_iter()
             .filter(|edit| {
-                let target_idx = match edit {
-                    edit_history::PaneEdit::Delete { target_idx } => Some(*target_idx),
-                    edit_history::PaneEdit::Duplicate { source_idx, .. } => Some(*source_idx),
-                    edit_history::PaneEdit::Add { parent, .. } => *parent,
-                    edit_history::PaneEdit::Move { source_idx, .. } => Some(*source_idx),
-                    edit_history::PaneEdit::Rename { target_idx, .. } => Some(*target_idx),
-                };
+                let target_idx = edit.target_pane();
 
                 !target_idx.is_some_and(is_parts_content)
             })
@@ -1357,12 +1483,26 @@ impl App {
             return;
         }
 
-        layout.commit_anim_session();
+        layout.commit_sessions();
         let (history, mut edit) = layout.edit_ctx();
+        let touches_panes = edits.iter().any(|edit| !edit.is_material());
         let resulting = history.perform_all(&mut edit, edits);
-        self.ui_state.pane_tree_view.select_many(resulting);
+
+        if touches_panes {
+            self.ui_state.pane_tree_view.select_many(resulting);
+        }
 
         self.after_structural_edit();
+    }
+
+    fn select_material(&mut self, index: usize) {
+        let count = self
+            .tabs
+            .active()
+            .and_then(|layout| layout.tree.material_list.as_ref())
+            .map_or(0, |list| list.materials.len());
+
+        self.ui_state.material_editor.selected_material = index.min(count.saturating_sub(1));
     }
 
     fn after_structural_edit(&mut self) {
@@ -1806,9 +1946,28 @@ impl ApplicationHandler for App {
                         .collect()
                 }),
 
+                UiAction::AddMaterial => {
+                    self.perform_pane_edit(edit_history::PaneEdit::AddMaterial);
+                    self.select_material(usize::MAX);
+                }
+
+                UiAction::DuplicateMaterial(index) => {
+                    self.perform_pane_edit(edit_history::PaneEdit::DuplicateMaterial { index });
+                    self.select_material(index as usize + 1);
+                }
+
+                UiAction::DeleteMaterial(index) => {
+                    self.perform_pane_edit(edit_history::PaneEdit::DeleteMaterial { index });
+                    self.select_material(index as usize);
+                }
+
+                UiAction::RenameMaterial { index, name } => {
+                    self.perform_pane_edit(edit_history::PaneEdit::RenameMaterial { index, name })
+                }
+
                 UiAction::Undo => {
                     if let Some(layout) = self.tabs.active_mut() {
-                        layout.commit_anim_session();
+                        layout.commit_sessions();
                         let (history, mut edit) = layout.edit_ctx();
 
                         let resulting = history.undo(&mut edit);
@@ -1819,7 +1978,7 @@ impl ApplicationHandler for App {
 
                 UiAction::JumpToHistory(target) => {
                     if let Some(layout) = self.tabs.active_mut() {
-                        layout.commit_anim_session();
+                        layout.commit_sessions();
 
                         let mut resulting = Vec::new();
 
@@ -1843,7 +2002,7 @@ impl ApplicationHandler for App {
 
                 UiAction::Redo => {
                     if let Some(layout) = self.tabs.active_mut() {
-                        layout.commit_anim_session();
+                        layout.commit_sessions();
                         let (history, mut edit) = layout.edit_ctx();
 
                         let resulting = history.redo(&mut edit);
@@ -2078,4 +2237,8 @@ fn main() {
     let mut app = App::new();
 
     event_loop.run_app(&mut app).expect("run event loop");
+}
+
+fn same_serialized<T: serde::Serialize>(a: &T, b: &T) -> bool {
+    serde_json::to_string(a).ok() == serde_json::to_string(b).ok()
 }

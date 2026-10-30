@@ -3,30 +3,63 @@ use nnbfl::{
         BlendFactor, BlendOp, CombinerTevMode, DetailedCombinerAlphaStageConfig,
         DetailedCombinerColorStageConfig, DetailedCombinerStageMode, LogicOp, MATERIAL_NAME_LEN,
         Material, MaterialBlendMode, MaterialList, MaterialTextureOptions, TevAlphaOp, TevColorOp,
-        TevKonstSel, TevScale, TevSource,
+        TevKonstSel, TevScale, TevSource, TextureList,
     },
     ui2d::types::{Color4f, Color4u8, Vector2f},
 };
 
-use crate::ui::{
-    DrawUi, DrawUiWith,
-    array_editor::{ArrayEditor, ArrayLayout, optional},
+use std::collections::HashMap;
+
+use crate::{
+    pane_tree::{PaneId, material_name_error},
+    ui::{
+        DrawUi, DrawUiWith,
+        array_editor::{ArrayEditor, ArrayLayout, optional},
+        general::UiAction,
+    },
 };
 
 #[derive(Default)]
 pub struct MaterialEditor {
     pub selected_material: usize,
     pub is_editor_visible: bool,
+    name: Option<(usize, String, String)>,
 }
 
-impl DrawUiWith<&mut MaterialList> for MaterialEditor {
-    fn draw_with(&mut self, ui: &mut egui::Ui, material_list: &mut MaterialList) -> bool {
-        let mut changed = false;
+pub struct MaterialEditorContext<'a> {
+    pub list: &'a mut MaterialList,
+    pub textures: &'a mut Option<TextureList>,
+    pub bntx_textures: &'a [String],
+    pub users: &'a HashMap<u16, Vec<PaneId>>,
+}
+
+#[derive(Default)]
+pub struct MaterialEditorOutput {
+    pub changed: bool,
+    pub action: Option<UiAction>,
+}
+
+pub struct TexturePicker<'a> {
+    pub textures: &'a mut Option<TextureList>,
+    pub bntx_textures: &'a [String],
+}
+
+impl MaterialEditor {
+    pub fn draw(&mut self, ui: &mut egui::Ui, ctx: MaterialEditorContext) -> MaterialEditorOutput {
+        let MaterialEditorContext {
+            list,
+            textures,
+            bntx_textures,
+            users,
+        } = ctx;
+
+        let mut output = MaterialEditorOutput::default();
+        let mut open = self.is_editor_visible;
 
         egui::Window::new("Material Editor")
             .collapsible(false)
             .resizable(true)
-            .open(&mut self.is_editor_visible)
+            .open(&mut open)
             .show(ui, |ui| {
                 egui::Panel::left("mat_editor_list")
                     .resizable(true)
@@ -36,34 +69,29 @@ impl DrawUiWith<&mut MaterialList> for MaterialEditor {
                             .auto_shrink(false)
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    ui.weak(format!(
-                                        "{} Total Materials",
-                                        material_list.materials.len()
-                                    ));
+                                    ui.weak(format!("{} Total Materials", list.materials.len()));
 
                                     if ui.button("➕ Add").clicked() {
-                                        let new_material = Material {
-                                            material_name: format!(
-                                                "Material_{}",
-                                                material_list.materials.len() + 1
-                                            ),
-                                            ..Default::default()
-                                        };
-
-                                        material_list.materials.push(new_material);
-
-                                        self.selected_material = material_list.materials.len() - 1;
-                                        changed = true;
+                                        output.action = Some(UiAction::AddMaterial);
                                     }
                                 });
 
                                 ui.separator();
 
-                                for (idx, material) in material_list.materials.iter().enumerate() {
-                                    let text = format!("[{}] {}", idx + 1, material.material_name);
-                                    let is_selected = self.selected_material == idx;
+                                for (idx, material) in list.materials.iter().enumerate() {
+                                    let name = material.material_name.trim_end_matches('\0');
+                                    let unused = users.get(&(idx as u16)).is_none_or(Vec::is_empty);
 
-                                    if ui.selectable_label(is_selected, text).clicked() {
+                                    let text = if unused {
+                                        egui::RichText::new(format!("[{}] {name}", idx + 1)).weak()
+                                    } else {
+                                        egui::RichText::new(format!("[{}] {name}", idx + 1))
+                                    };
+
+                                    if ui
+                                        .selectable_label(self.selected_material == idx, text)
+                                        .clicked()
+                                    {
                                         self.selected_material = idx;
                                     }
                                 }
@@ -81,24 +109,109 @@ impl DrawUiWith<&mut MaterialList> for MaterialEditor {
                                 bottom: 4,
                             })
                             .show(ui, |ui| {
-                                if let Some(material) =
-                                    material_list.materials.get_mut(self.selected_material)
+                                let index = self.selected_material;
+
+                                let Some(material) = list.materials.get(index) else {
+                                    return;
+                                };
+
+                                let current = material.material_name.trim_end_matches('\0');
+
+                                if self
+                                    .name
+                                    .as_ref()
+                                    .is_none_or(|(i, was, _)| *i != index || was != current)
                                 {
-                                    changed |= material.draw(ui)
+                                    self.name = Some((index, current.into(), current.into()));
+                                }
+
+                                if let Some(action) = self.header(ui, list, users, index) {
+                                    output.action = Some(action);
+                                }
+
+                                ui.separator();
+
+                                if let Some(material) = list.materials.get_mut(index) {
+                                    output.changed |= material.draw_with(
+                                        ui,
+                                        TexturePicker {
+                                            textures,
+                                            bntx_textures,
+                                        },
+                                    );
                                 }
                             });
                     })
             });
 
-        changed
+        self.is_editor_visible = open;
+        output
+    }
+
+    fn header(
+        &mut self,
+        ui: &mut egui::Ui,
+        list: &MaterialList,
+        users: &HashMap<u16, Vec<PaneId>>,
+        index: usize,
+    ) -> Option<UiAction> {
+        let mut action = None;
+        let (_, current, typed) = self.name.as_mut()?;
+        let error = material_name_error(Some(list), typed, Some(index as u16));
+
+        ui.horizontal(|ui| {
+            ui.label("Name:");
+            let response = ui.add(egui::TextEdit::singleline(typed).char_limit(MATERIAL_NAME_LEN));
+            let entered = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let can_rename = typed != current && error.is_none();
+
+            if ui
+                .add_enabled(can_rename, egui::Button::new("Rename"))
+                .clicked()
+                || (entered && can_rename)
+            {
+                action = Some(UiAction::RenameMaterial {
+                    index: index as u16,
+                    name: typed.clone(),
+                });
+            }
+        });
+
+        if typed != current
+            && let Some(error) = &error
+        {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+
+        let used_by = users.get(&(index as u16)).map_or(0, Vec::len);
+
+        ui.horizontal(|ui| {
+            ui.weak(match used_by {
+                0 => "Not used by any pane".to_string(),
+                1 => "Used by 1 pane".to_string(),
+                n => format!("Used by {n} panes"),
+            });
+
+            if ui.button("📋 Duplicate").clicked() {
+                action = Some(UiAction::DuplicateMaterial(index as u16));
+            }
+
+            if ui
+                .add_enabled(used_by == 0, egui::Button::new("🗑 Delete"))
+                .on_disabled_hover_text("Assign other materials to its panes first")
+                .clicked()
+            {
+                action = Some(UiAction::DeleteMaterial(index as u16));
+            }
+        });
+
+        action
     }
 }
 
-impl DrawUi for Material {
-    fn draw(&mut self, ui: &mut egui::Ui) -> bool {
+impl DrawUiWith<TexturePicker<'_>> for Material {
+    fn draw_with(&mut self, ui: &mut egui::Ui, mut picker: TexturePicker) -> bool {
         let mut changed = false;
-
-        ui.add(egui::TextEdit::singleline(&mut self.material_name).char_limit(MATERIAL_NAME_LEN));
 
         changed |= ui
             .checkbox(&mut self.use_texture_only, "Use Texture Only")
@@ -135,9 +248,9 @@ impl DrawUi for Material {
         let tex_count = self.tex_maps.len();
         let maps = ArrayEditor::new("tex_maps", &mut self.tex_maps)
             .title("Texture Maps")
-            .item_label(|i, map| format!("Texture {} · {}", i + 1, map.texture_name))
+            .item_label(|i, _| format!("Texture {}", i + 1))
             .show(ui, |ui, idx, tex_map| {
-                let mut changed = false;
+                let mut changed = texture_combo(ui, idx, &mut tex_map.texture_name, &mut picker);
                 ui.horizontal(|ui| {
                     changed |= tex_map.u_options.draw_with(ui, ("U", idx));
                     changed |= tex_map.v_options.draw_with(ui, ("V", idx));
@@ -163,8 +276,10 @@ impl DrawUi for Material {
             let grow = !self.tex_extensions.is_empty() && self.tex_extensions.len() == tex_count;
 
             op.mirror(&mut self.tex_extensions, grow);
-            op.mirror(&mut self.tex_srts, false);
-            op.mirror(&mut self.tex_coord_gens, false);
+            let srts_parallel = self.tex_srts.len() == tex_count;
+            op.mirror(&mut self.tex_srts, srts_parallel);
+            let gens_parallel = self.tex_coord_gens.len() == tex_count;
+            op.mirror(&mut self.tex_coord_gens, gens_parallel);
             op.mirror(&mut self.projection_tex_gens, false);
         }
 
@@ -1099,4 +1214,76 @@ impl DrawUi for DetailedCombinerAlphaStageConfig {
 
 fn texture_label<T>(i: usize, _: &T) -> String {
     format!("Texture {}", i + 1)
+}
+
+fn texture_combo(
+    ui: &mut egui::Ui,
+    idx: usize,
+    name: &mut String,
+    picker: &mut TexturePicker,
+) -> bool {
+    let mut changed = false;
+    let listed: Vec<String> = picker
+        .textures
+        .as_ref()
+        .map(|list| {
+            list.textures
+                .iter()
+                .map(|t| t.trim_end_matches('\0').to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let current = name.trim_end_matches('\0').to_string();
+    let missing = !current.is_empty() && !listed.contains(&current);
+
+    ui.horizontal(|ui| {
+        ui.label("Texture");
+        egui::ComboBox::from_id_salt(("tex_map_texture", idx))
+            .selected_text(if current.is_empty() {
+                "(none)"
+            } else {
+                &current
+            })
+            .show_ui(ui, |ui| {
+                for texture in &listed {
+                    if ui.selectable_label(*texture == current, texture).clicked() {
+                        *name = texture.clone();
+                        changed = true;
+                    }
+                }
+
+                let extra: Vec<&String> = picker
+                    .bntx_textures
+                    .iter()
+                    .filter(|t| !listed.contains(t))
+                    .collect();
+
+                if !extra.is_empty() {
+                    ui.separator();
+                    ui.weak("Add from BNTX");
+
+                    for texture in extra {
+                        if ui
+                            .selectable_label(false, format!("➕ {texture}"))
+                            .clicked()
+                        {
+                            picker
+                                .textures
+                                .get_or_insert_default()
+                                .textures
+                                .push(texture.clone());
+                            *name = texture.clone();
+                            changed = true;
+                        }
+                    }
+                }
+            });
+
+        if missing {
+            ui.colored_label(ui.visuals().warn_fg_color, "not in the texture list");
+        }
+    });
+
+    changed
 }

@@ -20,7 +20,7 @@ use crate::{
         archive_browser::ArchiveBrowser,
         context_menu::{ContextMenu, ContextMenuAction, ContextMenuState},
         dialogs::duplicate::DuplicateDialog,
-        editors::{GroupEditor, MaterialEditor, PaneEditor, TextureEditor},
+        editors::{GroupEditor, MaterialEditor, MaterialEditorContext, PaneEditor, TextureEditor},
         shortcuts::Shortcuts,
         tree_view::TreeView,
     },
@@ -158,6 +158,14 @@ pub enum UiAction {
         anchor: Anchor,
     },
 
+    AddMaterial,
+    DuplicateMaterial(u16),
+    DeleteMaterial(u16),
+    RenameMaterial {
+        index: u16,
+        name: String,
+    },
+
     Undo,
     Redo,
     JumpToHistory(usize),
@@ -175,6 +183,11 @@ fn draw_history(ui: &mut Ui, history: &EditHistory) -> Option<usize> {
                 .auto_shrink([false, true])
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
+                    ui.weak(format!(
+                        "~{:.1} MB held",
+                        history.size() as f64 / (1024.0 * 1024.0)
+                    ));
+
                     let position = history.position();
 
                     let first = if history.dropped() {
@@ -765,24 +778,81 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
 
     if let Some(layout) = ctx.layout_tabs.items.get_mut(ctx.layout_tabs.active_index) {
         let mut materials_changed = false;
-        if let Some(material_list) = layout.tree.material_list.as_mut()
-            && ctx.ui_state.material_editor.draw_with(ui, material_list)
-        {
-            materials_changed = true;
-            let material = ctx.ui_state.material_editor.selected_material as u16;
-            layout.tree.mark_material_dirty(material);
+
+        if ctx.ui_state.material_editor.is_editor_visible {
+            let index = ctx.ui_state.material_editor.selected_material as u16;
+            let baseline = layout.material_baseline(index);
+
+            let bntx_textures: Vec<String> = layout
+                .tree
+                .all_bntxs()
+                .flat_map(|bntx| bntx.textures.iter().map(|t| t.name.clone()))
+                .collect();
+
+            let tree = &mut layout.tree;
+
+            if let Some(list) = tree.material_list.as_mut() {
+                let output = ctx.ui_state.material_editor.draw(
+                    ui,
+                    MaterialEditorContext {
+                        list,
+                        textures: &mut tree.texture_list,
+                        bntx_textures: &bntx_textures,
+                        users: &tree.material_users,
+                    },
+                );
+
+                if let Some(action) = output.action {
+                    ctx.ui_state.pending_action = Some(action);
+                }
+
+                if output.changed {
+                    tree.mark_material_dirty(index);
+                    layout.note_material_edit(baseline);
+                    materials_changed = true;
+                }
+            }
         }
 
-        if let Some(idx) = ctx.ui_state.pane_tree_view.selected_pane {
+        if let Some(idx) = ctx.ui_state.pane_tree_view.selected_pane
+            && ctx.ui_state.pane_editor.is_editor_visible
+        {
             let editor = &mut ctx.ui_state.pane_editor;
             let name_error = editor
                 .pending_name(idx)
                 .and_then(|name| layout.tree.pane_name_error(name, Some(idx)));
 
-            if let Some(node) = layout.tree.find_by_idx_mut(idx)
-                && editor.draw_with(ui, (node, name_error.as_deref()))
-            {
+            let baseline = layout.pane_baseline(idx);
+
+            let materials: Vec<String> = layout
+                .tree
+                .material_list
+                .as_ref()
+                .map(|list| {
+                    list.materials
+                        .iter()
+                        .map(|m| m.material_name.trim_end_matches('\0').to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let mut edited = None;
+
+            if let Some(node) = layout.tree.find_by_idx_mut(idx) {
+                let materials_before = node.material_indices();
+
+                if editor.draw_with(ui, (node, name_error.as_deref(), &materials)) {
+                    edited = Some(node.material_indices() != materials_before);
+                }
+            }
+
+            if let Some(rematerialed) = edited {
+                if rematerialed {
+                    layout.tree.rebuild_maps();
+                }
+
                 layout.tree.mark_pane_dirty(idx);
+                layout.note_pane_edit(baseline);
                 materials_changed = true;
             }
 

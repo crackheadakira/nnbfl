@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use crate::{
     ops::duplicate::{self, DuplicateNames, DuplicateOptions},
@@ -10,7 +10,7 @@ use nnbfl::{
     bflan::anim_info::{AnimContent, AnimInfo, AnimType, PaneAnimInfo},
     bflyt::{
         file::{BflytSection, ControlSourceElement, GroupElement},
-        list::{MATERIAL_NAME_LEN, Material, MaterialList},
+        list::{MATERIAL_NAME_LEN, Material, MaterialList, TextureList},
     },
     ui2d::{
         types::{Vector2f, Vector3f},
@@ -20,6 +20,7 @@ use nnbfl::{
 
 use crate::{
     pane_tree::{DirtyFlags, PaneNode, PaneTree},
+    renderer::textured_quad::TexturedQuad,
     traits::Displaying,
 };
 
@@ -58,6 +59,45 @@ pub enum PaneEdit {
         target_idx: PaneId,
         name: String,
     },
+    AddMaterial,
+    DuplicateMaterial {
+        index: u16,
+    },
+    DeleteMaterial {
+        index: u16,
+    },
+    RenameMaterial {
+        index: u16,
+        name: String,
+    },
+}
+
+impl PaneEdit {
+    pub fn is_material(&self) -> bool {
+        matches!(
+            self,
+            PaneEdit::AddMaterial
+                | PaneEdit::DuplicateMaterial { .. }
+                | PaneEdit::DeleteMaterial { .. }
+                | PaneEdit::RenameMaterial { .. }
+        )
+    }
+
+    pub fn target_pane(&self) -> Option<PaneId> {
+        match self {
+            PaneEdit::Delete { target_idx } | PaneEdit::Rename { target_idx, .. } => {
+                Some(*target_idx)
+            }
+            PaneEdit::Duplicate { source_idx, .. } | PaneEdit::Move { source_idx, .. } => {
+                Some(*source_idx)
+            }
+            PaneEdit::Add { parent, .. } => *parent,
+            PaneEdit::AddMaterial
+            | PaneEdit::DuplicateMaterial { .. }
+            | PaneEdit::DeleteMaterial { .. }
+            | PaneEdit::RenameMaterial { .. } => None,
+        }
+    }
 }
 
 impl PaneEdit {
@@ -75,11 +115,9 @@ impl PaneEdit {
                     .map(|n| n.label.trim_end_matches('\0').to_string())
                     .collect();
 
-                let mut commands = vec![AppliedCommand::Removed(Box::new(PendingRemoval {
-                    parent_idx,
-                    position,
-                    node,
-                }))];
+                let mut commands = vec![AppliedCommand::Removed(Box::new(PendingRemoval::new(
+                    parent_idx, position, node,
+                )))];
 
                 let AppliedCommand::Removed(removal) = &commands[0] else {
                     unreachable!()
@@ -187,6 +225,86 @@ impl PaneEdit {
                     old_parent,
                     old_anchor,
                 })
+            }
+
+            PaneEdit::AddMaterial => {
+                let list = tree.material_list.get_or_insert_default();
+                let index = pane_factory::add_material(list, "Material");
+
+                Some(AppliedCommand::InsertedMaterial { index })
+            }
+
+            PaneEdit::DuplicateMaterial { index } => {
+                let list = tree.material_list.as_ref()?;
+                let mut copy = list.materials.get(index as usize)?.clone();
+                let base = copy.material_name.trim_end_matches('\0').to_string();
+                copy.material_name = pane_factory::unique_material_name(list, &base);
+
+                tree.insert_material(index + 1, copy);
+                Some(AppliedCommand::InsertedMaterial { index: index + 1 })
+            }
+
+            PaneEdit::DeleteMaterial { index } => {
+                if tree
+                    .material_users
+                    .get(&index)
+                    .is_some_and(|u| !u.is_empty())
+                {
+                    return None;
+                }
+
+                let material = tree.remove_material(index)?;
+
+                Some(AppliedCommand::RemovedMaterial {
+                    index,
+                    material: Box::new(material),
+                })
+            }
+
+            PaneEdit::RenameMaterial { index, name } => {
+                if tree.material_name_error(&name, Some(index)).is_some() {
+                    return None;
+                }
+
+                let material = tree
+                    .material_list
+                    .as_mut()?
+                    .materials
+                    .get_mut(index as usize)?;
+
+                let before = material.clone();
+
+                let old = before.material_name.trim_end_matches('\0').to_string();
+                if old == name {
+                    return None;
+                }
+
+                material.material_name = name.clone();
+                let after = material.clone();
+                tree.mark_material_dirty(index);
+
+                let mut commands = vec![AppliedCommand::ReplaceMaterial {
+                    index,
+                    before: Box::new(before),
+                    after: Box::new(after),
+                }];
+
+                commands.extend(edit_anims(ctx.timeline, ctx.tree, |info| {
+                    let mut changed = false;
+
+                    for content in &mut info.contents {
+                        if content.anim_type == AnimType::Material
+                            && content.name.trim_end_matches('\0') == old
+                        {
+                            content.name = name.clone();
+                            changed = true;
+                        }
+                    }
+
+                    changed
+                }));
+
+                Some(AppliedCommand::Batch(commands))
             }
 
             PaneEdit::Rename { target_idx, name } => {
@@ -434,6 +552,82 @@ pub struct PendingRemoval {
     node: PaneNode,
 }
 
+impl PendingRemoval {
+    fn new(parent_idx: Option<PaneId>, position: usize, mut node: PaneNode) -> Self {
+        strip_visuals(&mut node);
+        Self {
+            parent_idx,
+            position,
+            node,
+        }
+    }
+}
+
+fn strip_visuals(node: &mut PaneNode) {
+    if node.parts_source.is_none() || node.is_parts_overridden {
+        node.textured_quad = None;
+        node.window_quads = Vec::new();
+        node.glyph_quads = Vec::new();
+    }
+
+    for child in node
+        .children
+        .iter_mut()
+        .chain(node.parts_children.iter_mut())
+    {
+        strip_visuals(child);
+    }
+}
+
+struct ByteCounter(usize);
+
+impl std::io::Write for ByteCounter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialized_size<T: serde::Serialize + ?Sized>(value: &T) -> usize {
+    let mut counter = ByteCounter(0);
+    let _ = serde_json::to_writer(&mut counter, value);
+    counter.0
+}
+
+fn node_size(node: &PaneNode) -> usize {
+    let quads =
+        node.textured_quad.is_some() as usize + node.window_quads.len() + node.glyph_quads.len();
+
+    size_of::<PaneNode>()
+        + serialized_size(&node.section)
+        + node.label.len()
+        + node.user_data.as_ref().map_or(0, serialized_size)
+        + quads * size_of::<TexturedQuad>()
+        + node
+            .children
+            .iter()
+            .chain(&node.parts_children)
+            .map(node_size)
+            .sum::<usize>()
+}
+
+fn snapshot_size(snapshot: &PaneSnapshot) -> usize {
+    serialized_size(&snapshot.section)
+        + snapshot.label.len()
+        + snapshot.user_data.as_ref().map_or(0, serialized_size)
+}
+
+fn meta_size(meta: &LayoutMeta) -> usize {
+    meta.user_data.as_ref().map_or(0, serialized_size)
+        + serialized_size(&meta.group)
+        + meta.control_source.as_ref().map_or(0, serialized_size)
+        + meta.material_list.as_ref().map_or(0, serialized_size)
+}
+
 pub enum AppliedCommand {
     Inserted(PaneId),
     Removed(Box<PendingRemoval>),
@@ -468,6 +662,15 @@ pub enum AppliedCommand {
         before: Box<PaneAnimInfo>,
         after: Box<PaneAnimInfo>,
     },
+    ReplaceMaterial {
+        index: u16,
+        before: Box<Material>,
+        after: Box<Material>,
+    },
+    ReplaceTextureList {
+        before: Box<Option<TextureList>>,
+        after: Box<Option<TextureList>>,
+    },
     Batch(Vec<AppliedCommand>),
 }
 
@@ -479,16 +682,28 @@ impl AppliedCommand {
             AppliedCommand::Inserted(pane_idx) => {
                 let (parent_idx, position) = tree.sibling_position(pane_idx)?;
                 let node = tree.remove_node(pane_idx)?;
-                Some(AppliedCommand::Removed(Box::new(PendingRemoval {
-                    parent_idx,
-                    position,
-                    node,
-                })))
+                Some(AppliedCommand::Removed(Box::new(PendingRemoval::new(
+                    parent_idx, position, node,
+                ))))
             }
 
             AppliedCommand::Removed(removal) => {
                 let pane_idx =
                     tree.insert_node_at(removal.parent_idx, removal.position, removal.node);
+
+                let restored: Vec<PaneId> = tree
+                    .find_by_idx(pane_idx)
+                    .map(|node| node.iter().map(|n| n.pane_idx).collect())
+                    .unwrap_or_default();
+
+                for pane in restored {
+                    if let Some(node) = tree.find_by_idx_mut(pane) {
+                        node.dirty = DirtyFlags::all();
+                    }
+
+                    tree.mark_pane_dirty(pane);
+                }
+
                 Some(AppliedCommand::Inserted(pane_idx))
             }
             AppliedCommand::Transformed {
@@ -534,6 +749,7 @@ impl AppliedCommand {
             } => {
                 let node = tree.find_by_idx_mut(pane_idx)?;
                 let renamed = node.label != before.label;
+                let materials_before = node.material_indices();
 
                 node.section = before.section.clone();
                 node.label = before.label.clone();
@@ -541,7 +757,11 @@ impl AppliedCommand {
                 node.dirty = DirtyFlags::all();
                 tree.mark_pane_dirty(pane_idx);
 
-                if renamed {
+                let rematerialed = tree
+                    .find_by_idx(pane_idx)
+                    .is_some_and(|n| n.material_indices() != materials_before);
+
+                if renamed || rematerialed {
                     tree.rebuild_maps();
                 }
 
@@ -600,6 +820,35 @@ impl AppliedCommand {
                 })
             }
 
+            AppliedCommand::ReplaceMaterial {
+                index,
+                before,
+                after,
+            } => {
+                let material = tree
+                    .material_list
+                    .as_mut()?
+                    .materials
+                    .get_mut(index as usize)?;
+
+                *material = (*before).clone();
+                tree.mark_material_dirty(index);
+
+                Some(AppliedCommand::ReplaceMaterial {
+                    index,
+                    before: after,
+                    after: before,
+                })
+            }
+
+            AppliedCommand::ReplaceTextureList { before, after } => {
+                tree.texture_list = (*before).clone();
+                Some(AppliedCommand::ReplaceTextureList {
+                    before: after,
+                    after: before,
+                })
+            }
+
             AppliedCommand::Batch(commands) => {
                 let mut inverses = Vec::with_capacity(commands.len());
 
@@ -612,6 +861,36 @@ impl AppliedCommand {
         }
     }
 
+    pub fn approx_size(&self) -> usize {
+        size_of::<Self>()
+            + match self {
+                AppliedCommand::Inserted(_)
+                | AppliedCommand::Transformed { .. }
+                | AppliedCommand::Moved { .. }
+                | AppliedCommand::InsertedMaterial { .. } => 0,
+                AppliedCommand::Removed(removal) => node_size(&removal.node),
+                AppliedCommand::ReplacePane { before, after, .. } => {
+                    snapshot_size(before) + snapshot_size(after)
+                }
+                AppliedCommand::ReplaceLayoutMeta { before, after } => {
+                    meta_size(before) + meta_size(after)
+                }
+                AppliedCommand::RemovedMaterial { material, .. } => serialized_size(material),
+                AppliedCommand::ReplaceAnimInfo { before, after, .. } => {
+                    serialized_size(before) + serialized_size(after)
+                }
+                AppliedCommand::ReplaceMaterial { before, after, .. } => {
+                    serialized_size(before) + serialized_size(after)
+                }
+                AppliedCommand::ReplaceTextureList { before, after } => {
+                    serialized_size(before) + serialized_size(after)
+                }
+                AppliedCommand::Batch(commands) => {
+                    commands.iter().map(AppliedCommand::approx_size).sum()
+                }
+            }
+    }
+
     pub fn resulting_panes(&self) -> Vec<PaneId> {
         match self {
             AppliedCommand::Inserted(idx) => vec![*idx],
@@ -622,7 +901,9 @@ impl AppliedCommand {
             AppliedCommand::ReplaceLayoutMeta { .. }
             | AppliedCommand::RemovedMaterial { .. }
             | AppliedCommand::InsertedMaterial { .. }
-            | AppliedCommand::ReplaceAnimInfo { .. } => Vec::new(),
+            | AppliedCommand::ReplaceAnimInfo { .. }
+            | AppliedCommand::ReplaceMaterial { .. }
+            | AppliedCommand::ReplaceTextureList { .. } => Vec::new(),
             AppliedCommand::Batch(commands) => {
                 let mut panes = Vec::new();
 
@@ -643,26 +924,57 @@ pub struct AnimSession {
     pub baseline: PaneAnimInfo,
 }
 
+pub struct MaterialSession {
+    pub index: u16,
+    pub material: Material,
+    pub textures: Option<TextureList>,
+}
+
+pub struct PaneSession {
+    pub pane: PaneId,
+    pub snapshot: PaneSnapshot,
+}
+
 struct Step {
     label: String,
     command: AppliedCommand,
+    size: usize,
+}
+
+impl Step {
+    fn new(label: String, command: AppliedCommand) -> Self {
+        let size = size_of::<Self>() + label.len() + command.approx_size();
+        Self {
+            label,
+            command,
+            size,
+        }
+    }
 }
 
 pub struct EditHistory {
-    undo_stack: Vec<Step>,
+    undo_stack: VecDeque<Step>,
     redo_stack: Vec<Step>,
     limit: usize,
+    budget: usize,
+    size: usize,
     dropped: bool,
 }
 
 impl EditHistory {
-    pub fn new(limit: usize) -> Self {
+    pub fn new(limit: usize, budget: usize) -> Self {
         Self {
-            undo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             limit,
+            budget,
+            size: 0,
             dropped: false,
         }
+    }
+
+    pub fn size(&self) -> usize {
+        self.size
     }
 
     pub fn perform(&mut self, ctx: &mut EditCtx, edit: PaneEdit) -> Vec<PaneId> {
@@ -690,19 +1002,19 @@ impl EditHistory {
     }
 
     pub fn undo(&mut self, ctx: &mut EditCtx) -> Vec<PaneId> {
-        let Some(step) = self.undo_stack.pop() else {
+        let Some(step) = self.undo_stack.pop_back() else {
             return Vec::new();
         };
 
+        self.size -= step.size;
         let Some(inverse) = step.command.invert(ctx) else {
             return Vec::new();
         };
 
         let panes = inverse.resulting_panes();
-        self.redo_stack.push(Step {
-            label: step.label,
-            command: inverse,
-        });
+        let step = Step::new(step.label, inverse);
+        self.size += step.size;
+        self.redo_stack.push(step);
 
         panes
     }
@@ -712,15 +1024,13 @@ impl EditHistory {
             return Vec::new();
         };
 
+        self.size -= step.size;
         let Some(inverse) = step.command.invert(ctx) else {
             return Vec::new();
         };
 
         let panes = inverse.resulting_panes();
-        self.push_undo(Step {
-            label: step.label,
-            command: inverse,
-        });
+        self.push_undo(Step::new(step.label, inverse));
 
         panes
     }
@@ -741,17 +1051,27 @@ impl EditHistory {
     }
 
     fn push_undo(&mut self, step: Step) {
-        if self.undo_stack.len() >= self.limit {
-            self.undo_stack.remove(0);
+        self.size += step.size;
+        self.undo_stack.push_back(step);
+
+        while self.undo_stack.len() > self.limit
+            || (self.size > self.budget && self.undo_stack.len() > 1)
+        {
+            let Some(oldest) = self.undo_stack.pop_front() else {
+                break;
+            };
+
+            self.size -= oldest.size;
             self.dropped = true;
         }
-
-        self.undo_stack.push(step);
     }
 
     pub fn record(&mut self, label: String, command: AppliedCommand) {
-        self.redo_stack.clear();
-        self.push_undo(Step { label, command });
+        for step in self.redo_stack.drain(..) {
+            self.size -= step.size;
+        }
+
+        self.push_undo(Step::new(label, command));
     }
 
     pub fn record_transform(
@@ -800,12 +1120,20 @@ fn describe(edits: &[PaneEdit], tree: &PaneTree) -> String {
             .unwrap_or_default()
     };
 
+    let material = |index: &u16| {
+        tree.material_list
+            .as_ref()
+            .and_then(|list| list.materials.get(*index as usize))
+            .map(|m| m.material_name.trim_end_matches('\0').to_string())
+            .unwrap_or_default()
+    };
+
     let verb = |edit: &PaneEdit| match edit {
-        PaneEdit::Delete { .. } => "Delete",
-        PaneEdit::Duplicate { .. } => "Duplicate",
-        PaneEdit::Add { .. } => "Add",
+        PaneEdit::Delete { .. } | PaneEdit::DeleteMaterial { .. } => "Delete",
+        PaneEdit::Duplicate { .. } | PaneEdit::DuplicateMaterial { .. } => "Duplicate",
+        PaneEdit::Add { .. } | PaneEdit::AddMaterial => "Add",
         PaneEdit::Move { .. } => "Reorder",
-        PaneEdit::Rename { .. } => "Rename",
+        PaneEdit::Rename { .. } | PaneEdit::RenameMaterial { .. } => "Rename",
     };
 
     match edits {
@@ -820,6 +1148,14 @@ fn describe(edits: &[PaneEdit], tree: &PaneTree) -> String {
                 name: new,
             } => {
                 format!("Rename {} to {new}", name(target_idx))
+            }
+            PaneEdit::AddMaterial => "Add material".into(),
+            PaneEdit::DuplicateMaterial { index } => {
+                format!("Duplicate material {}", material(index))
+            }
+            PaneEdit::DeleteMaterial { index } => format!("Delete material {}", material(index)),
+            PaneEdit::RenameMaterial { index, name: new } => {
+                format!("Rename material {} to {new}", material(index))
             }
         },
         [first, rest @ ..] if rest.iter().all(|e| verb(e) == verb(first)) => {

@@ -1818,6 +1818,8 @@ dependencies = [
  "puffin_egui",
  "rayon",
  "rfd",
+ "serde",
+ "serde_json",
  "szs",
  "thiserror 2.0.19",
  "tomolib",
