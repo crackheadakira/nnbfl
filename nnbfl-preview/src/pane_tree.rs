@@ -316,12 +316,13 @@ impl PaneNode {
 
     pub fn material_indices(&self) -> Vec<u16> {
         match &self.section {
-            BflytSection::PicturePane(pic) => vec![pic.material_index],
-            BflytSection::TextBoxPane(txt) => vec![txt.material_index],
-            BflytSection::WindowPane(win) => std::iter::once(win.content.material_index)
-                .chain(win.frames.iter().map(|f| f.material_index))
+            BflytSection::PartsPane(parts) => parts
+                .properties
+                .iter()
+                .filter_map(|prop| prop.o_section.as_ref())
+                .flat_map(section_material_indices)
                 .collect(),
-            _ => Vec::new(),
+            section => section_material_indices(section),
         }
     }
 
@@ -501,24 +502,23 @@ impl PaneNode {
                 {
                     let layout = calculate_window_layout(win, corners.to_array());
 
-                    let mut quad_idx = 0;
+                    for tq in &mut self.window_quads {
+                        let geom = match tq.piece_id {
+                            0 => layout.content.as_ref(),
+                            piece => layout.frames.get(piece - 1),
+                        };
 
-                    if layout.content.is_some()
-                        && let Some(geom) = layout.content
-                    {
-                        if let Some(tq) = self.window_quads.get_mut(quad_idx) {
-                            tq.x = geom.x;
-                            tq.y = geom.y;
-                            tq.width = geom.width;
-                            tq.height = geom.height;
-                            tq.corners = geom.corners;
-                            tq.rotation = self.world_rotation;
-                        }
+                        let Some(geom) = geom else {
+                            continue;
+                        };
 
-                        quad_idx += 1;
-                    }
+                        tq.x = geom.x;
+                        tq.y = geom.y;
+                        tq.width = geom.width;
+                        tq.height = geom.height;
+                        tq.corners = geom.corners;
+                        tq.rotation = self.world_rotation;
 
-                    for geom in layout.frames {
                         let Some(kind) = geom.frame_kind else {
                             continue;
                         };
@@ -533,46 +533,34 @@ impl PaneNode {
                             continue;
                         };
 
-                        if let Some(tq) = self.window_quads.get_mut(quad_idx) {
-                            tq.x = geom.x;
-                            tq.y = geom.y;
-                            tq.width = geom.width;
-                            tq.height = geom.height;
-                            tq.corners = geom.corners;
-                            tq.rotation = self.world_rotation;
+                        let (tex_w, tex_h) = {
+                            bntxs
+                                .iter()
+                                .flat_map(|b| &b.textures)
+                                .find(|t| t.name == *tq.texture_name)
+                                .map(|t| (t.info.width as f32, t.info.height as f32))
+                                .unwrap_or((1.0, 1.0))
+                        };
 
-                            let (tex_w, tex_h) = {
-                                bntxs
-                                    .iter()
-                                    .flat_map(|b| &b.textures)
-                                    .find(|t| t.name == *tq.texture_name)
-                                    .map(|t| (t.info.width as f32, t.info.height as f32))
-                                    .unwrap_or((1.0, 1.0))
-                            };
+                        let effective_flip = flip_override.unwrap_or(frame_data.texture_flip_mode);
 
-                            let effective_flip =
-                                flip_override.unwrap_or(frame_data.texture_flip_mode);
+                        let texture_uvs = calculate_scaled_frame_uvs(
+                            geom.width,
+                            geom.height,
+                            tex_w,
+                            tex_h,
+                            kind,
+                            win.flag.window_kind,
+                            effective_flip,
+                            tq.standard_material.texture_count as usize,
+                            win.frames.len(),
+                        );
 
-                            let texture_uvs = calculate_scaled_frame_uvs(
-                                geom.width,
-                                geom.height,
-                                tex_w,
-                                tex_h,
-                                kind,
-                                win.flag.window_kind,
-                                effective_flip,
-                                tq.standard_material.texture_count as usize,
-                                win.frames.len(),
-                            );
+                        let base_uvs = Self::compute_uvs(&texture_uvs);
+                        let uvs = Self::apply_srt_to_uvs(base_uvs, &tq.tex_srts);
 
-                            let base_uvs = Self::compute_uvs(&texture_uvs);
-                            let uvs = Self::apply_srt_to_uvs(base_uvs, &tq.tex_srts);
-
-                            tq.base_uvs = base_uvs;
-                            tq.uvs = uvs;
-                        }
-
-                        quad_idx += 1;
+                        tq.base_uvs = base_uvs;
+                        tq.uvs = uvs;
                     }
                 }
 
@@ -735,6 +723,7 @@ pub struct PaneTree {
     /// The panes drawing with each material of this layout's list
     pub material_users: HashMap<u16, Vec<PaneId>>,
     material_dirty: HashSet<PaneId>,
+    parts_dirty: HashSet<PaneId>,
     needs_rebatch: bool,
 
     pub next_id: u32,
@@ -773,21 +762,24 @@ impl PaneTree {
         fn update(
             node: &mut PaneNode,
             parent_visible: bool,
-            parent_alpha: f32,
+            influence: f32,
             materials: &HashMap<String, MaterialAnimation>,
         ) {
-            let (visible, alpha) = if let Some(base) = node.section.get_base_pane() {
+            let (visible, alpha, child_influence) = if let Some(base) = node.section.get_base_pane()
+            {
                 let visible =
                     parent_visible && node.animation.visible.unwrap_or(base.pane_flags.is_visible);
                 let local_alpha = node.animation.alpha.unwrap_or(base.alpha as f32 / 255.0);
-                let alpha = if base.pane_flags.influenced_alpha {
-                    local_alpha * parent_alpha
+
+                let child_influence = if base.pane_flags.influenced_alpha {
+                    influence * local_alpha
                 } else {
-                    local_alpha
+                    influence
                 };
-                (visible, alpha)
+
+                (visible, local_alpha * influence, child_influence)
             } else {
-                (parent_visible, parent_alpha)
+                (parent_visible, influence, influence)
             };
 
             node.visible = visible;
@@ -813,7 +805,7 @@ impl PaneTree {
             }
 
             for child in node.all_children_mut() {
-                update(child, visible, alpha, materials);
+                update(child, visible, child_influence, materials);
             }
         }
 
@@ -887,8 +879,20 @@ impl PaneTree {
     }
 
     pub fn mark_material_dirty(&mut self, material: u16) {
-        if let Some(users) = self.material_users.get(&material) {
-            self.material_dirty.extend(users);
+        let Some(users) = self.material_users.get(&material) else {
+            return;
+        };
+
+        for &pane in users {
+            let parts = self
+                .find_by_idx(pane)
+                .is_some_and(|n| matches!(n.section, BflytSection::PartsPane(_)));
+
+            if parts {
+                self.parts_dirty.insert(pane);
+            } else {
+                self.material_dirty.insert(pane);
+            }
         }
     }
 
@@ -898,6 +902,22 @@ impl PaneTree {
 
     pub fn recompute_dirty_materials(&mut self, glyphs: &mut GlyphData) {
         puffin::profile_function!();
+        let owners = std::mem::take(&mut self.parts_dirty);
+
+        for &owner in &owners {
+            let ids = self.parts_content_ids(owner);
+            self.rebuild_parts(owner, Some(ids), glyphs);
+
+            if let Some(node) = self.find_by_idx_mut(owner) {
+                node.mark_transform_dirty();
+            }
+        }
+
+        if !owners.is_empty() {
+            self.recompute_dirty();
+            self.needs_rebatch = true;
+        }
+
         for pane in std::mem::take(&mut self.material_dirty) {
             if let Some(rebatch) = self.rebuild_node_visuals(pane, glyphs) {
                 self.needs_rebatch |= rebatch;
@@ -1233,7 +1253,7 @@ impl PaneTree {
         let mut touched = Vec::new();
 
         self.for_each_mut(|node| {
-            if node.parts_source.is_some() && !node.is_parts_overridden {
+            if node.parts_source.is_some() {
                 return;
             }
 
@@ -1521,6 +1541,20 @@ impl PaneTree {
             .unwrap_or_default()
     }
 
+    pub fn parts_owner(&self, pane: PaneId) -> Option<PaneId> {
+        let mut current = self.parent_map.get(&pane).copied().flatten();
+
+        while let Some(id) = current {
+            if matches!(self.find_by_idx(id)?.section, BflytSection::PartsPane(_)) {
+                return Some(id);
+            }
+
+            current = self.parent_map.get(&id).copied().flatten();
+        }
+
+        None
+    }
+
     pub fn rebuild_parts(
         &mut self,
         pane: PaneId,
@@ -1665,6 +1699,7 @@ impl PaneTree {
             label_map: HashMap::new(),
             material_users: HashMap::new(),
             material_dirty: HashSet::new(),
+            parts_dirty: HashSet::new(),
             needs_rebatch: false,
             next_id,
             parts_cache: blarc_cache,
@@ -2281,6 +2316,43 @@ impl Builder<'_> {
         node.window_quads = visuals.window_quads;
         node.glyph_quads = visuals.glyph_quads;
     }
+}
+
+pub fn section_material_indices(section: &BflytSection) -> Vec<u16> {
+    match section {
+        BflytSection::PicturePane(pic) => vec![pic.material_index],
+        BflytSection::TextBoxPane(txt) => vec![txt.material_index],
+        BflytSection::WindowPane(win) => window_materials(win),
+        _ => Vec::new(),
+    }
+}
+
+pub fn set_section_materials(section: &mut BflytSection, indices: &[u16]) {
+    match section {
+        BflytSection::PicturePane(pic) => pic.material_index = indices[0],
+        BflytSection::TextBoxPane(txt) => txt.material_index = indices[0],
+        BflytSection::WindowPane(win) => {
+            win.content.material_index = indices[0];
+            for (frame, &index) in win.frames.iter_mut().zip(&indices[1..]) {
+                frame.material_index = index;
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn find_content<'a>(nodes: &'a [PaneNode], name: &str) -> Option<&'a PaneNode> {
+    for node in nodes {
+        if node.label.trim_end_matches('\0') == name {
+            return Some(node);
+        }
+
+        if let Some(found) = find_content(&node.children, name) {
+            return Some(found);
+        }
+    }
+
+    None
 }
 
 fn overridden_parts(parts: &PartsPane, over: &PartsPane) -> PartsPane {

@@ -6,5 +6,5 @@ mod texture_editor;
 
 pub use group_editor::GroupEditor;
 pub use material_editor::{MaterialEditor, MaterialEditorContext};
-pub use pane_editor::{PaneEditor, PaneEditorContext};
+pub use pane_editor::{OverrideRequest, OverrideTarget, PaneEditor, PaneEditorContext};
 pub use texture_editor::{TextureEditState, TextureEditor};

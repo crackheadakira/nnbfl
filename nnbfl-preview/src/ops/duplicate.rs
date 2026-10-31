@@ -108,7 +108,7 @@ pub fn plan(tree: &PaneTree, source: PaneId, rule: Option<&RenameRule>) -> Optio
 
     let mut used: Vec<(u16, PaneId)> = node
         .iter()
-        .filter(|n| n.parts_source.is_none() || n.is_parts_overridden)
+        .filter(|n| n.parts_source.is_none())
         .flat_map(|n| {
             n.material_indices()
                 .into_iter()
@@ -362,7 +362,7 @@ pub fn apply(
     let remap = |i: u16| index_map.get(&i).copied().unwrap_or(i);
 
     fn remap_all(node: &mut PaneNode, remap: &impl Fn(u16) -> u16) {
-        if node.parts_source.is_none() || node.is_parts_overridden {
+        if node.parts_source.is_none() {
             remap_section_materials(&mut node.section, remap);
         }
 

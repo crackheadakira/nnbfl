@@ -58,7 +58,7 @@ pub fn text(ui: &mut Ui, label: &str, value: &mut String, limit: usize) -> bool 
     })
 }
 
-fn drags(ui: &mut Ui, values: &mut [&mut f32], names: &[&str], speed: f64) -> bool {
+pub fn drags(ui: &mut Ui, values: &mut [&mut f32], names: &[&str], speed: f64) -> bool {
     ui.horizontal(|ui| {
         let mut changed = false;
 

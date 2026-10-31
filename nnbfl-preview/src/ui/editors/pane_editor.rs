@@ -3,9 +3,9 @@ use nnbfl::{
         file::BflytSection,
         flags::{TexFilter, TexWrapMode},
         pane::{
-            AlignmentPane, LineTransform, LineTransformTable, PANE_NAME_LEN, Pane, PartsPane,
-            PerCharacterTransform, PicturePane, TextBoxPane, TextureUv, USER_NAME_LEN, WindowFrame,
-            WindowPane,
+            AlignmentPane, BasePaneUsageFlags, LineTransform, LineTransformTable, PANE_NAME_LEN,
+            Pane, PartsPane, PartsPaneBasicInfo, PartsProperty, PerCharacterTransform, PicturePane,
+            TextBoxPane, TextureUv, USER_NAME_LEN, WindowFrame, WindowPane,
         },
     },
     ui2d::{
@@ -18,11 +18,12 @@ use nnbfl::{
 };
 
 use super::fields::{
-    HORIZONTAL, VERTICAL, check, color, color_f, combo, drag, drag_in, floats, grid, index_combo,
-    row, section, text, vec2, vec3,
+    HORIZONTAL, VERTICAL, check, color, color_f, combo, drag, drag_in, drags, floats, grid,
+    index_combo, row, section, text, vec2, vec3,
 };
 use crate::{
-    pane_tree::{PaneId, PaneNode},
+    edit_history::OverrideToggle,
+    pane_tree::{PaneId, PaneNode, section_material_indices},
     traits::Displaying,
     ui::{
         DrawUi, DrawUiWith,
@@ -58,12 +59,28 @@ pub struct PaneEditorContext<'a> {
     pub name_error: Option<&'a str>,
     pub materials: &'a [String],
     pub fonts: &'a [String],
+    pub overrides: Option<OverrideTarget<'a>>,
+    pub parts_content: &'a [(PaneId, String)],
+}
+
+pub struct OverrideTarget<'a> {
+    pub owner: &'a str,
+    pub parts: &'a mut PartsPane,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum OverrideRequest {
+    Section(OverrideToggle),
+    OpenMaterial(u16),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PaneEditorOutput {
     pub changed: bool,
     pub reexpand: bool,
+    pub override_changed: bool,
+    pub request: Option<OverrideRequest>,
+    pub select: Option<PaneId>,
 }
 
 impl PaneEditor {
@@ -123,9 +140,10 @@ impl DrawUiWith<(&mut PaneNode, PaneEditorContext<'_>), PaneEditorOutput> for Pa
     fn draw_with(
         &mut self,
         ui: &mut egui::Ui,
-        (pane, ctx): (&mut PaneNode, PaneEditorContext<'_>),
+        (pane, mut ctx): (&mut PaneNode, PaneEditorContext<'_>),
     ) -> PaneEditorOutput {
         let mut out = PaneEditorOutput::default();
+        let mut overrides = ctx.overrides.take();
         let mut is_open = self.is_editor_visible;
 
         egui::Window::new("Pane Editor")
@@ -141,16 +159,28 @@ impl DrawUiWith<(&mut PaneNode, PaneEditorContext<'_>), PaneEditorOutput> for Pa
                         ui.weak(format!("{} pane", pane.section.kind_name()));
 
                         if let Some(source) = &pane.parts_source {
-                            ui.weak(format!(
-                                "From parts layout {source}; override editing comes later"
-                            ));
+                            match &mut overrides {
+                                Some(target) => {
+                                    ui.weak(format!(
+                                        "From parts layout {source}; edit it through the overrides"
+                                    ));
+
+                                    ui.separator();
+
+                                    override_fields(ui, pane, target, ctx.materials, &mut out);
+                                }
+                                None => {
+                                    ui.weak(format!(
+                                        "From parts layout {source}, nested in another parts layout; only the outer parts pane's content can be overridden"
+                                    ));
+                                }
+                            }
                         }
 
                         ui.separator();
 
                         ui.add_enabled_ui(pane.parts_source.is_none(), |ui| {
-                            out.changed |=
-                                section_fields(ui, &mut pane.section, &ctx, &mut out.reexpand);
+                            out.changed |= section_fields(ui, &mut pane.section, &ctx, &mut out);
 
                             out.changed |= section(ui, "User Data", true, |ui| {
                                 optional(ui, "User Data", &mut pane.user_data, |ui, array| {
@@ -169,11 +199,401 @@ impl DrawUiWith<(&mut PaneNode, PaneEditorContext<'_>), PaneEditorOutput> for Pa
     }
 }
 
+fn override_fields(
+    ui: &mut egui::Ui,
+    pane: &PaneNode,
+    target: &mut OverrideTarget<'_>,
+    materials: &[String],
+    out: &mut PaneEditorOutput,
+) {
+    let name = pane.label.trim_end_matches('\0');
+    let owner = target.owner;
+    let properties = &mut target.parts.properties;
+
+    let found = properties
+        .iter()
+        .position(|p| p.property_name.trim_end_matches('\0') == name);
+
+    let mut prop = found.map_or_else(
+        || PartsProperty {
+            property_name: name.to_string(),
+            ..Default::default()
+        },
+        |i| properties[i].clone(),
+    );
+
+    let mut cleared = false;
+
+    let changed = section(ui, "Parts Overrides", true, |ui| {
+        ui.weak(format!("Saved on parts pane {owner}"));
+
+        let mut changed = basic_override_fields(ui, pane, &mut prop);
+        changed |= section_override_fields(ui, &pane.section, &mut prop, materials, out);
+        changed |= user_data_override_fields(ui, pane, &mut prop);
+
+        cleared = found.is_some() && ui.button("Clear Overrides").clicked();
+        changed
+    });
+
+    match found {
+        Some(i) if cleared || (changed && is_unused(&prop)) => {
+            properties.remove(i);
+        }
+        Some(i) if changed => properties[i] = prop,
+        None if changed && !is_unused(&prop) => properties.push(prop),
+        _ => return,
+    }
+
+    out.override_changed = true;
+}
+
+fn is_unused(prop: &PartsProperty) -> bool {
+    prop.basic_usage_flag == BasePaneUsageFlags::default()
+        && prop.o_section.is_none()
+        && prop.o_user_data.is_none()
+        && !prop.is_sentinel_override
+}
+
+fn basic_info_of(base: &Pane) -> PartsPaneBasicInfo {
+    PartsPaneBasicInfo {
+        user_name: base.user_name.clone(),
+        translation_x: base.translation.x,
+        translation_y: base.translation.y,
+        translation_z: base.translation.z,
+        rotation_x: base.rotation.x,
+        rotation_y: base.rotation.y,
+        rotation_z: base.rotation.z,
+        scale_x: base.scale.x,
+        scale_y: base.scale.y,
+        size_x: base.size.x,
+        size_y: base.size.y,
+        pane_alpha: base.alpha,
+    }
+}
+
+fn overridable(
+    ui: &mut egui::Ui,
+    label: &str,
+    on: &mut bool,
+    edit: impl FnOnce(&mut egui::Ui) -> bool,
+) -> bool {
+    row(ui, label, |ui| {
+        ui.horizontal(|ui| {
+            let toggled = ui.checkbox(on, "").changed();
+            toggled | ui.add_enabled_ui(*on, edit).inner
+        })
+        .inner
+    })
+}
+
+fn basic_override_fields(ui: &mut egui::Ui, pane: &PaneNode, prop: &mut PartsProperty) -> bool {
+    let Some(base) = pane.section.get_base_pane() else {
+        return false;
+    };
+
+    let was = prop.basic_usage_flag.clone();
+    let info = prop.o_basic_info.get_or_insert_with(|| basic_info_of(base));
+
+    let BasePaneUsageFlags {
+        is_visible_set,
+        is_visible_true,
+        has_translate,
+        has_size,
+        has_scale,
+        has_rotate,
+        has_alpha,
+        ..
+    } = &mut prop.basic_usage_flag;
+
+    let changed = grid(ui, "override_basic", |ui| {
+        let mut changed = false;
+
+        changed |= overridable(ui, "Visible", is_visible_set, |ui| {
+            ui.checkbox(is_visible_true, "").changed()
+        });
+        changed |= overridable(ui, "Translate", has_translate, |ui| {
+            drags(
+                ui,
+                &mut [
+                    &mut info.translation_x,
+                    &mut info.translation_y,
+                    &mut info.translation_z,
+                ],
+                &["X", "Y", "Z"],
+                0.5,
+            )
+        });
+        changed |= overridable(ui, "Rotate", has_rotate, |ui| {
+            drags(
+                ui,
+                &mut [
+                    &mut info.rotation_x,
+                    &mut info.rotation_y,
+                    &mut info.rotation_z,
+                ],
+                &["X", "Y", "Z"],
+                0.1,
+            )
+        });
+        changed |= overridable(ui, "Scale", has_scale, |ui| {
+            drags(
+                ui,
+                &mut [&mut info.scale_x, &mut info.scale_y],
+                &["X", "Y"],
+                0.01,
+            )
+        });
+        changed |= overridable(ui, "Size", has_size, |ui| {
+            drags(
+                ui,
+                &mut [&mut info.size_x, &mut info.size_y],
+                &["X", "Y"],
+                0.5,
+            )
+        });
+        changed |= overridable(ui, "Alpha", has_alpha, |ui| {
+            ui.add(egui::DragValue::new(&mut info.pane_alpha).range(0..=255))
+                .changed()
+        });
+
+        changed
+    });
+
+    let now = prop.basic_usage_flag.clone();
+
+    if now.is_visible_set && !was.is_visible_set {
+        prop.basic_usage_flag.is_visible_true = pane.visible;
+    }
+
+    if now.has_translate && !was.has_translate {
+        info.translation_x = base.translation.x;
+        info.translation_y = base.translation.y;
+        info.translation_z = base.translation.z;
+    }
+
+    if now.has_rotate && !was.has_rotate {
+        info.rotation_x = base.rotation.x;
+        info.rotation_y = base.rotation.y;
+        info.rotation_z = base.rotation.z;
+    }
+
+    if now.has_scale && !was.has_scale {
+        info.scale_x = base.scale.x;
+        info.scale_y = base.scale.y;
+    }
+
+    if now.has_size && !was.has_size {
+        info.size_x = base.size.x;
+        info.size_y = base.size.y;
+    }
+
+    if now.has_alpha && !was.has_alpha {
+        info.pane_alpha = base.alpha;
+    }
+
+    let flags = &prop.basic_usage_flag;
+    let any = flags.is_visible_set
+        || flags.has_translate
+        || flags.has_size
+        || flags.has_scale
+        || flags.has_rotate
+        || flags.has_alpha
+        || flags.has_user_data;
+
+    if !any {
+        prop.o_basic_info = None;
+    }
+
+    changed
+}
+
+fn section_override_fields(
+    ui: &mut egui::Ui,
+    section: &BflytSection,
+    prop: &mut PartsProperty,
+    materials: &[String],
+    out: &mut PaneEditorOutput,
+) -> bool {
+    let toggles: &[(OverrideToggle, &str)] = match section {
+        BflytSection::TextBoxPane(_) => &[
+            (OverrideToggle::Text, "Text"),
+            (OverrideToggle::Position, "Text Position"),
+            (OverrideToggle::Shadow, "Shadow"),
+            (OverrideToggle::Colours, "Material Colours"),
+            (OverrideToggle::Textures, "Material Textures"),
+        ],
+        BflytSection::PicturePane(_) | BflytSection::WindowPane(_) => &[
+            (OverrideToggle::Colours, "Material Colours"),
+            (OverrideToggle::Textures, "Material Textures"),
+        ],
+        _ => return false,
+    };
+
+    let partial = |prop: &PartsProperty| toggles.iter().any(|(t, _)| t.get(prop));
+    let mut changed = false;
+
+    if prop.o_section.is_some() && !partial(prop) {
+        ui.weak("Replaces the whole section with the copy saved on the parts pane");
+
+        if ui.button("Remove Section Override").clicked() {
+            prop.o_section = None;
+            changed = true;
+        }
+    } else {
+        changed |= grid(ui, "override_section", |ui| {
+            let mut changed = false;
+
+            for &(toggle, label) in toggles {
+                let mut on = toggle.get(prop);
+
+                if check(ui, label, &mut on) {
+                    if prop.o_section.is_none() {
+                        out.request = Some(OverrideRequest::Section(toggle));
+                    } else {
+                        toggle.set(prop, on);
+                        changed = true;
+
+                        if !partial(prop) {
+                            prop.o_section = None;
+                        }
+                    }
+                }
+            }
+
+            changed
+        });
+    }
+
+    let (usage, has_materials) = (
+        prop.usage_flag.clone(),
+        prop.material_usage_flag.use_color_blend || prop.material_usage_flag.use_texture,
+    );
+
+    if let Some(BflytSection::TextBoxPane(txt)) = &mut prop.o_section {
+        if usage.use_text {
+            changed |= override_text_fields(ui, txt);
+        }
+
+        if usage.use_position {
+            changed |= grid(ui, "override_position", |ui| {
+                combo(ui, "Origin X", &mut txt.text_origin.horizontal, HORIZONTAL)
+                    | combo(ui, "Origin Y", &mut txt.text_origin.vertical, VERTICAL)
+                    | combo(
+                        ui,
+                        "Alignment",
+                        &mut txt.text_alignment,
+                        &["Synchronous", "Left", "Center", "Right"],
+                    )
+            });
+        }
+
+        if usage.use_shadow {
+            changed |= grid(ui, "override_shadow", |ui| {
+                check(ui, "Shadow", &mut txt.text_flags.is_enable_shadow)
+                    | vec2(ui, "Shadow Offset", &mut txt.shadow_translation, 0.1)
+                    | vec2(ui, "Shadow Scale", &mut txt.shadow_size, 0.01)
+                    | drag(ui, "Shadow Tilt", &mut txt.shadow_italic_tilt, 0.01)
+                    | color(ui, "Shadow Top", &mut txt.shadow_top_color)
+                    | color(ui, "Shadow Bottom", &mut txt.shadow_bottom_color)
+            });
+        }
+    }
+
+    if let Some(over) = &prop.o_section
+        && (has_materials || !partial(prop))
+    {
+        for index in section_material_indices(over) {
+            let name = materials
+                .get(index as usize)
+                .map_or("(missing)", String::as_str);
+
+            if ui.button(format!("Edit Material {name}…")).clicked() {
+                out.request = Some(OverrideRequest::OpenMaterial(index));
+            }
+        }
+    }
+
+    changed
+}
+
+fn override_text_fields(ui: &mut egui::Ui, txt: &mut TextBoxPane) -> bool {
+    let mut shown = txt
+        .text
+        .as_deref()
+        .unwrap_or_default()
+        .trim_end_matches('\0')
+        .to_string();
+
+    let mut changed = false;
+    ui.label("Text");
+
+    if ui
+        .add(
+            egui::TextEdit::multiline(&mut shown)
+                .desired_rows(2)
+                .desired_width(f32::INFINITY),
+        )
+        .changed()
+    {
+        set_text(txt, &shown);
+        changed = true;
+    }
+
+    changed |= grid(ui, "override_text", |ui| {
+        let mut label = txt.label.clone().unwrap_or_default();
+
+        let changed = text(ui, "Text Label", &mut label, usize::MAX);
+        if changed {
+            txt.label = (!label.is_empty()).then_some(label);
+        }
+
+        changed
+    });
+
+    changed
+}
+
+fn user_data_override_fields(ui: &mut egui::Ui, pane: &PaneNode, prop: &mut PartsProperty) -> bool {
+    let removes = prop.is_sentinel_override || prop.user_data_type == 2;
+    let mut mode: u8 = match &prop.o_user_data {
+        _ if removes => 2,
+        Some(_) if prop.user_data_type != 1 => 1,
+        _ => 0,
+    };
+
+    let mut changed = grid(ui, "override_user_data", |ui| {
+        combo(
+            ui,
+            "User Data",
+            &mut mode,
+            &["Unchanged", "Replace", "Remove"],
+        )
+    });
+
+    if changed {
+        prop.user_data_type = 0;
+        prop.is_sentinel_override = mode == 2;
+        prop.o_user_data =
+            (mode == 1).then(|| BflytSection::UserData(pane.user_data.clone().unwrap_or_default()));
+    }
+
+    if let Some(BflytSection::UserData(array)) = &mut prop.o_user_data
+        && mode == 1
+    {
+        changed |= ArrayEditor::new("override_user_data_entries", &mut array.user_data)
+            .item_label(|_, entry| entry.o_name.clone())
+            .show(ui, |ui, _, entry| entry.draw(ui))
+            .changed;
+    }
+
+    changed
+}
+
 fn section_fields(
     ui: &mut egui::Ui,
     section: &mut BflytSection,
     ctx: &PaneEditorContext<'_>,
-    reexpand: &mut bool,
+    out: &mut PaneEditorOutput,
 ) -> bool {
     let mut changed = false;
 
@@ -186,8 +606,8 @@ fn section_fields(
         BflytSection::TextBoxPane(txt) => text_box_fields(ui, txt, ctx),
         BflytSection::WindowPane(win) => window_fields(ui, win, ctx.materials),
         BflytSection::PartsPane(parts) => {
-            let magnified = parts_fields(ui, parts);
-            *reexpand |= magnified;
+            let magnified = parts_fields(ui, parts, ctx.parts_content, &mut out.select);
+            out.reexpand |= magnified;
             magnified
         }
         BflytSection::AlignmentPane(align) => alignment_fields(ui, align),
@@ -636,8 +1056,13 @@ fn inset(ui: &mut egui::Ui, values: [&mut i16; 4]) -> bool {
     .inner
 }
 
-fn parts_fields(ui: &mut egui::Ui, parts: &mut PartsPane) -> bool {
-    section(ui, "Parts", true, |ui| {
+fn parts_fields(
+    ui: &mut egui::Ui,
+    parts: &mut PartsPane,
+    content: &[(PaneId, String)],
+    select: &mut Option<PaneId>,
+) -> bool {
+    let changed = section(ui, "Parts", true, |ui| {
         grid(ui, "parts", |ui| {
             let mut changed = false;
 
@@ -649,14 +1074,53 @@ fn parts_fields(ui: &mut egui::Ui, parts: &mut PartsPane) -> bool {
             changed |= drag(ui, "Magnify X", &mut parts.magnify_x, 0.01);
             changed |= drag(ui, "Magnify Y", &mut parts.magnify_y, 0.01);
 
-            row(ui, "Overrides", |ui| {
-                ui.label(parts.properties.len().to_string());
-                false
-            });
-
             changed
         })
-    })
+    });
+
+    section(ui, "Parts Overrides", true, |ui| {
+        let overridden = |name: &str| {
+            parts
+                .properties
+                .iter()
+                .any(|p| p.property_name.trim_end_matches('\0') == name)
+        };
+
+        if content.is_empty() {
+            ui.weak("Overrides can only be set on parts panes outside other parts layouts");
+            return false;
+        }
+
+        for prop in &parts.properties {
+            let name = prop.property_name.trim_end_matches('\0');
+            let pane = content.iter().find(|(_, n)| n == name).map(|(id, _)| *id);
+
+            ui.horizontal(|ui| {
+                ui.label(name);
+
+                if ui
+                    .add_enabled(pane.is_some(), egui::Button::new("Edit"))
+                    .clicked()
+                {
+                    *select = pane;
+                }
+            });
+        }
+
+        egui::ComboBox::from_id_salt("parts_add_override")
+            .selected_text("Override a pane…")
+            .show_ui(ui, |ui| {
+                for (id, name) in content.iter().filter(|(_, n)| !overridden(n)) {
+                    if ui.selectable_label(false, name).clicked() {
+                        *select = Some(*id);
+                    }
+                }
+            });
+
+        false
+    });
+
+    changed
 }
 
 fn alignment_fields(ui: &mut egui::Ui, align: &mut AlignmentPane) -> bool {

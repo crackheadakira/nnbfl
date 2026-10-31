@@ -64,6 +64,11 @@ pub enum PaneEdit {
         name: String,
     },
     AddMaterial,
+    OverrideSection {
+        owner: PaneId,
+        pane: String,
+        toggle: OverrideToggle,
+    },
     DuplicateMaterial {
         index: u16,
     },
@@ -93,6 +98,7 @@ impl PaneEdit {
         !matches!(
             self,
             PaneEdit::AddMaterial
+                | PaneEdit::OverrideSection { .. }
                 | PaneEdit::DuplicateMaterial { .. }
                 | PaneEdit::DeleteMaterial { .. }
                 | PaneEdit::RenameMaterial { .. }
@@ -111,6 +117,7 @@ impl PaneEdit {
                 Some(*source_idx)
             }
             PaneEdit::Add { parent, .. } => *parent,
+            PaneEdit::OverrideSection { owner, .. } => Some(*owner),
             PaneEdit::AddMaterial
             | PaneEdit::DuplicateMaterial { .. }
             | PaneEdit::DeleteMaterial { .. }
@@ -139,7 +146,7 @@ impl PaneEdit {
 
                 let mut orphans: Vec<u16> = node
                     .iter()
-                    .filter(|n| n.parts_source.is_none() || n.is_parts_overridden)
+                    .filter(|n| n.parts_source.is_none())
                     .flat_map(PaneNode::material_indices)
                     .filter(|index| !tree.material_users.contains_key(index))
                     .collect();
@@ -297,6 +304,12 @@ impl PaneEdit {
                     after: Some(texture),
                 })
             }
+
+            PaneEdit::OverrideSection {
+                owner,
+                pane,
+                toggle,
+            } => override_section(ctx, owner, &pane, toggle),
 
             PaneEdit::AddMaterial => {
                 let list = tree.material_list.get_or_insert_default();
@@ -565,6 +578,126 @@ fn same_tracks(a: &PaneAnimInfo, b: &PaneAnimInfo) -> bool {
                     .zip(&b.infos)
                     .all(|(a, b)| shape(a) == shape(b))
         })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverrideToggle {
+    Text,
+    Position,
+    Shadow,
+    Colours,
+    Textures,
+}
+
+impl OverrideToggle {
+    pub fn get(self, prop: &nnbfl::bflyt::pane::PartsProperty) -> bool {
+        match self {
+            OverrideToggle::Text => prop.usage_flag.use_text,
+            OverrideToggle::Position => prop.usage_flag.use_position,
+            OverrideToggle::Shadow => prop.usage_flag.use_shadow,
+            OverrideToggle::Colours => prop.material_usage_flag.use_color_blend,
+            OverrideToggle::Textures => prop.material_usage_flag.use_texture,
+        }
+    }
+
+    pub fn set(self, prop: &mut nnbfl::bflyt::pane::PartsProperty, on: bool) {
+        match self {
+            OverrideToggle::Text => prop.usage_flag.use_text = on,
+            OverrideToggle::Position => prop.usage_flag.use_position = on,
+            OverrideToggle::Shadow => prop.usage_flag.use_shadow = on,
+            OverrideToggle::Colours => prop.material_usage_flag.use_color_blend = on,
+            OverrideToggle::Textures => prop.material_usage_flag.use_texture = on,
+        }
+    }
+}
+
+fn override_section(
+    ctx: &mut EditCtx,
+    owner: PaneId,
+    pane: &str,
+    toggle: OverrideToggle,
+) -> Option<AppliedCommand> {
+    let tree = &mut *ctx.tree;
+    let owner_node = tree.find_by_idx(owner)?;
+
+    if owner_node.parts_source.is_some() {
+        return None;
+    }
+
+    let before = PaneSnapshot::of(owner_node);
+    let content = crate::pane_tree::find_content(&owner_node.parts_children, pane)?;
+    let mut section = content.section.clone();
+    let list = content.materials.clone();
+
+    let copies: Vec<Material> = crate::pane_tree::section_material_indices(&section)
+        .iter()
+        .filter_map(|&i| list.as_ref()?.materials.get(i as usize).cloned())
+        .collect();
+
+    let mut commands = Vec::new();
+    let mut indices = Vec::new();
+
+    for mut material in copies {
+        let layout = tree.material_list.get_or_insert_default();
+        let original = material.material_name.trim_end_matches('\0');
+
+        let wanted = if original == pane {
+            pane.to_string()
+        } else {
+            format!("{pane}_{original}")
+        };
+
+        let wanted: String = wanted.chars().take(MATERIAL_NAME_LEN).collect();
+        material.material_name = pane_factory::unique_material_name(layout, &wanted);
+        let index = layout.materials.len() as u16;
+
+        tree.insert_material(index, material);
+        commands.push(AppliedCommand::InsertedMaterial { index });
+        indices.push(index);
+    }
+
+    if !indices.is_empty() {
+        crate::pane_tree::set_section_materials(&mut section, &indices);
+    }
+
+    let node = tree.find_by_idx_mut(owner)?;
+    let BflytSection::PartsPane(parts) = &mut node.section else {
+        return None;
+    };
+
+    let at = match parts
+        .properties
+        .iter()
+        .position(|p| p.property_name.trim_end_matches('\0') == pane)
+    {
+        Some(at) => at,
+        None => {
+            parts.properties.push(nnbfl::bflyt::pane::PartsProperty {
+                property_name: pane.to_string(),
+                ..Default::default()
+            });
+            parts.properties.len() - 1
+        }
+    };
+
+    let prop = &mut parts.properties[at];
+    prop.o_section = Some(section);
+    toggle.set(prop, true);
+
+    let ids = tree.parts_content_ids(owner);
+    tree.rebuild_parts(owner, Some(ids), ctx.glyphs);
+    tree.rebuild_maps();
+    let node = tree.find_by_idx_mut(owner)?;
+    node.mark_transform_dirty();
+    let after = PaneSnapshot::of(node);
+
+    commands.push(AppliedCommand::ReplacePane {
+        pane_idx: owner,
+        before: Box::new(before),
+        after: Box::new(after),
+    });
+
+    Some(AppliedCommand::Batch(commands))
 }
 
 #[derive(Clone)]
@@ -1278,6 +1411,7 @@ fn describe(edits: &[PaneEdit], tree: &PaneTree) -> String {
         PaneEdit::Delete { .. } | PaneEdit::DeleteMaterial { .. } => "Delete",
         PaneEdit::Duplicate { .. } | PaneEdit::DuplicateMaterial { .. } => "Duplicate",
         PaneEdit::Add { .. } | PaneEdit::AddMaterial => "Add",
+        PaneEdit::OverrideSection { .. } => "Override",
         PaneEdit::ImportTexture { .. } => "Import",
         PaneEdit::EditAnim { .. } => "Edit",
         PaneEdit::ReplaceTexture { .. } => "Replace",
@@ -1299,6 +1433,9 @@ fn describe(edits: &[PaneEdit], tree: &PaneTree) -> String {
                 format!("Rename {} to {new}", name(target_idx))
             }
             PaneEdit::AddMaterial => "Add material".into(),
+            PaneEdit::OverrideSection { owner, pane, .. } => {
+                format!("Override {pane} in {}", name(owner))
+            }
             PaneEdit::DuplicateMaterial { index } => {
                 format!("Duplicate material {}", material(index))
             }

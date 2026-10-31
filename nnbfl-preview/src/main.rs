@@ -2052,6 +2052,16 @@ impl ApplicationHandler for App {
                     self.perform_pane_edit(edit_history::PaneEdit::Rename { target_idx, name })
                 }
 
+                UiAction::OverrideSection {
+                    owner,
+                    pane,
+                    toggle,
+                } => self.perform_pane_edit(edit_history::PaneEdit::OverrideSection {
+                    owner,
+                    pane,
+                    toggle,
+                }),
+
                 UiAction::DeletePanes(panes) => self.perform_pane_edits(|tree| {
                     tree.selection_roots(&panes)
                         .into_iter()

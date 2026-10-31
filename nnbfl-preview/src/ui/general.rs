@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::{
+    edit_history::OverrideToggle,
     ops::duplicate::{DuplicateNames, DuplicateOptions},
     pane_factory::NewPaneKind,
     pane_tree::{Anchor, PaneId},
@@ -26,8 +27,8 @@ use crate::{
         context_menu::{ContextMenu, ContextMenuAction, ContextMenuState},
         dialogs::duplicate::DuplicateDialog,
         editors::{
-            GroupEditor, MaterialEditor, MaterialEditorContext, PaneEditor, PaneEditorContext,
-            TextureEditState, TextureEditor,
+            GroupEditor, MaterialEditor, MaterialEditorContext, OverrideRequest, OverrideTarget,
+            PaneEditor, PaneEditorContext, TextureEditState, TextureEditor,
         },
         shortcuts::Shortcuts,
         tree_view::TreeView,
@@ -152,6 +153,11 @@ pub enum UiAction {
     RenamePane {
         target_idx: PaneId,
         name: String,
+    },
+    OverrideSection {
+        owner: PaneId,
+        pane: String,
+        toggle: OverrideToggle,
     },
 
     AddPane {
@@ -880,10 +886,59 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                 .map(|list| list.fonts.clone())
                 .unwrap_or_default();
 
+            let owner = layout
+                .tree
+                .find_by_idx(idx)
+                .filter(|n| n.parts_source.is_some())
+                .and_then(|_| layout.tree.parts_owner(idx))
+                .filter(|&o| {
+                    layout
+                        .tree
+                        .find_by_idx(o)
+                        .is_some_and(|n| n.parts_source.is_none())
+                });
+
+            let mut owner_parts = owner.and_then(|o| {
+                let node = layout.tree.find_by_idx(o)?;
+
+                let BflytSection::PartsPane(parts) = &node.section else {
+                    return None;
+                };
+
+                Some((
+                    o,
+                    node.label.trim_end_matches('\0').to_string(),
+                    parts.clone(),
+                ))
+            });
+
+            let owner_baseline = owner.map(|o| layout.pane_baseline(o));
+
+            let parts_content: Vec<(PaneId, String)> = layout
+                .tree
+                .find_by_idx(idx)
+                .filter(|n| {
+                    n.parts_source.is_none() && matches!(n.section, BflytSection::PartsPane(_))
+                })
+                .map(|n| {
+                    n.parts_children
+                        .iter()
+                        .flat_map(|c| c.iter())
+                        .filter(|c| !c.plain_quad.is_parts_root)
+                        .filter(|c| layout.tree.parts_owner(c.pane_idx) == Some(idx))
+                        .map(|c| (c.pane_idx, c.label.trim_end_matches('\0').to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let mut select = None;
             let mut edited = None;
+            let mut overridden = false;
+            let mut request = None;
 
             if let Some(node) = layout.tree.find_by_idx_mut(idx) {
                 let materials_before = node.material_indices();
+                let label = node.label.trim_end_matches('\0').to_string();
 
                 let output = editor.draw_with(
                     ui,
@@ -893,14 +948,72 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                             name_error: name_error.as_deref(),
                             materials: &materials,
                             fonts: &fonts,
+                            overrides: owner_parts.as_mut().map(|(_, owner, parts)| {
+                                OverrideTarget {
+                                    owner: owner.as_str(),
+                                    parts,
+                                }
+                            }),
+                            parts_content: &parts_content,
                         },
                     ),
                 );
+
+                select = output.select;
+                overridden = output.override_changed;
+                request = output.request.map(|r| (r, label));
 
                 if output.changed {
                     node.mark_transform_dirty();
                     edited = Some((node.material_indices() != materials_before, output.reexpand));
                 }
+            }
+
+            if overridden && let Some((owner, _, parts)) = owner_parts {
+                if let Some(node) = layout.tree.find_by_idx_mut(owner)
+                    && let BflytSection::PartsPane(own) = &mut node.section
+                {
+                    *own = parts;
+                }
+
+                layout.tree.rebuild_maps();
+                let ids = layout.tree.parts_content_ids(owner);
+
+                layout
+                    .tree
+                    .rebuild_parts(owner, Some(ids), &mut ctx.layout_tabs.glyphs);
+
+                if let Some(node) = layout.tree.find_by_idx_mut(owner) {
+                    node.mark_transform_dirty();
+                }
+
+                layout.tree.mark_pane_dirty(owner);
+                layout.tree.recompute_dirty();
+                layout.note_pane_edit(owner_baseline.flatten());
+
+                materials_changed = true;
+            }
+
+            if let Some(pane) = select {
+                ctx.ui_state.pane_tree_view.select(Some(pane));
+                ctx.ui_state.pane_tree_view.reveal(&layout.tree, &[pane]);
+            }
+
+            match request {
+                Some((OverrideRequest::Section(toggle), pane)) => {
+                    if let Some(owner) = owner {
+                        ctx.ui_state.pending_action = Some(UiAction::OverrideSection {
+                            owner,
+                            pane,
+                            toggle,
+                        });
+                    }
+                }
+                Some((OverrideRequest::OpenMaterial(index), _)) => {
+                    ctx.ui_state.material_editor.is_editor_visible = true;
+                    ctx.ui_state.material_editor.selected_material = index as usize;
+                }
+                None => {}
             }
 
             if let Some((rematerialed, reexpand)) = edited {
