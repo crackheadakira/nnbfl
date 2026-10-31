@@ -218,6 +218,47 @@ pub struct PaneNode {
     pub parts_children: Vec<PaneNode>,
     pub user_data: Option<UserDataArray>,
     pub handle_capabilities: Vec<HandleCapability>,
+    pub parts_size: Vector2f,
+    pub res_size: Option<Vector2f>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PartsScope {
+    magnify: Vector2f,
+    parts_size: Vector2f,
+    scale_from_root: Vector2f,
+}
+
+const ONE: Vector2f = Vector2f { x: 1.0, y: 1.0 };
+
+impl PartsScope {
+    fn size(&self, base: &Pane) -> Vector2f {
+        let m = self.magnify;
+
+        if base.flag_ex.is_no_scale_by_parts {
+            base.size
+        } else if base.flag_ex.is_scale_size_by_parts_root {
+            let comp = |centered: bool| if centered { 1.0 } else { 0.5 };
+            let comp_h = comp(base.position.position_x == HorizontalPosition::Center);
+            let comp_v = comp(base.position.position_y == VerticalPosition::Center);
+            let expand_h = (self.parts_size.x * m.x - self.parts_size.x) * comp_h;
+            let expand_v = (self.parts_size.y * m.y - self.parts_size.y) * comp_v;
+            let grow = |expand: f32, scale: f32| {
+                if scale.abs() > f32::EPSILON {
+                    expand / scale
+                } else {
+                    0.0
+                }
+            };
+
+            Vector2f {
+                x: base.size.x + grow(expand_h, self.scale_from_root.x * base.scale.x),
+                y: base.size.y + grow(expand_v, self.scale_from_root.y * base.scale.y),
+            }
+        } else {
+            base.size * m
+        }
+    }
 }
 
 impl PaneNode {
@@ -362,12 +403,51 @@ impl PaneNode {
         parent_size: Vector2f,
         parent_scale: Vector2f,
         parent_rotation: Vector3f,
+        scope: Option<PartsScope>,
         bntxs: &[&Bntx],
     ) {
-        let transform = self
-            .section
-            .get_base_pane()
-            .map(|base| self.animation.resolve_transform(base));
+        if self.plain_quad.is_parts_root {
+            self.world_center = parent_pos;
+            self.world_size = parent_size;
+            self.world_rotation = parent_rotation;
+            self.world_pos = Vector2f {
+                x: parent_pos.x - parent_size.x * 0.5,
+                y: parent_pos.y - parent_size.y * 0.5,
+            };
+
+            self.dirty.remove(DirtyFlags::TRANSFORM);
+
+            let scope = scope.map(|scope| PartsScope {
+                scale_from_root: ONE,
+                ..scope
+            });
+
+            self.children.par_iter_mut().for_each(|child| {
+                child.recompute(
+                    parent_pos,
+                    parent_size,
+                    parent_scale,
+                    parent_rotation,
+                    scope,
+                    bntxs,
+                );
+            });
+
+            return;
+        }
+
+        let transform = self.section.get_base_pane().map(|base| {
+            let mut transform = self.animation.resolve_transform(base);
+
+            if let Some(scope) = scope
+                && transform.size == base.size
+            {
+                transform.size = scope.size(base);
+            }
+
+            transform
+        });
+
         let child_scale;
 
         if self.dirty.contains(DirtyFlags::TRANSFORM) {
@@ -503,12 +583,64 @@ impl PaneNode {
             .map(|t| (t.rotation + parent_rotation, self.world_size))
             .unwrap_or((parent_rotation, parent_size));
 
+        let base = self.section.get_base_pane();
+
+        let (children_scope, content_scope) = match (&self.section, base) {
+            (BflytSection::PartsPane(parts), Some(base)) => {
+                let size = scope.map_or(base.size, |scope| scope.size(base));
+                let res = self.res_size.unwrap_or(base.size);
+                let ratio = |size: f32, res: f32| {
+                    if res.abs() > f32::EPSILON {
+                        size / res
+                    } else {
+                        1.0
+                    }
+                };
+
+                let content = PartsScope {
+                    magnify: Vector2f {
+                        x: ratio(size.x, res.x) * parts.magnify_x,
+                        y: ratio(size.y, res.y) * parts.magnify_y,
+                    },
+                    parts_size: self.parts_size,
+                    scale_from_root: ONE,
+                };
+
+                let children = scope.map(|scope| PartsScope {
+                    scale_from_root: ONE,
+                    ..scope
+                });
+
+                (children, Some(content))
+            }
+            (_, Some(base)) => (
+                scope.map(|scope| PartsScope {
+                    scale_from_root: scope.scale_from_root * base.scale,
+                    ..scope
+                }),
+                None,
+            ),
+            _ => (scope, None),
+        };
+
         let center = self.world_center;
         self.parts_children
             .par_iter_mut()
-            .chain(self.children.par_iter_mut())
-            .for_each(|child| {
-                child.recompute(center, child_size, child_scale, child_rotation, bntxs);
+            .map(|child| (child, content_scope))
+            .chain(
+                self.children
+                    .par_iter_mut()
+                    .map(|child| (child, children_scope)),
+            )
+            .for_each(|(child, scope)| {
+                child.recompute(
+                    center,
+                    child_size,
+                    child_scale,
+                    child_rotation,
+                    scope,
+                    bntxs,
+                );
             });
     }
 
@@ -729,6 +861,7 @@ impl PaneTree {
                 self.layout_size,
                 Vector2f { x: 1.0, y: 1.0 },
                 Vector3f::default(),
+                None,
                 &bntx_refs,
             );
         });
@@ -1436,9 +1569,12 @@ impl PaneTree {
         };
 
         let content = builder.expand_parts(&parts, center, depth, visible);
+        let parts_size = builder.parts_size(&parts);
         self.next_id = builder.next_pane_idx;
 
-        self.find_by_idx_mut(pane)?.parts_children = content;
+        let node = self.find_by_idx_mut(pane)?;
+        node.parts_children = content;
+        node.parts_size = parts_size;
         self.rebuild_maps();
         Some(self.parts_content_ids(pane))
     }
@@ -1533,6 +1669,12 @@ impl PaneTree {
             path_map: HashMap::new(),
         };
         tree.rebuild_maps();
+
+        for root in &mut tree.roots {
+            root.mark_transform_dirty();
+        }
+
+        tree.recompute_dirty();
         tree
     }
 }
@@ -1686,6 +1828,7 @@ impl<'a> Builder<'a> {
         if let BflytSection::PartsPane(parts) = section {
             let content = self.expand_parts(parts, node.world_center, node.depth, is_visible);
             node.parts_children.extend(content);
+            node.parts_size = self.parts_size(parts);
         }
 
         Some(node)
@@ -1739,6 +1882,17 @@ impl<'a> Builder<'a> {
         }
 
         Some(final_files)
+    }
+
+    fn parts_size(&self, parts: &PartsPane) -> Vector2f {
+        self.blarc_cache
+            .get(parts.o_layout_name.trim_end_matches('\0'))
+            .and_then(|layout| layout.as_ref())
+            .map(|layout| Vector2f {
+                x: layout.layout.parts_width,
+                y: layout.layout.parts_height,
+            })
+            .unwrap_or_default()
     }
 
     fn expand_parts(
@@ -1906,6 +2060,14 @@ impl<'a> Builder<'a> {
                 for node in nodes.iter_mut() {
                     if node.label.trim_end_matches('\0') == prop_name {
                         // How should the section actually be overriden, as I don't think it's a full overwrite?
+                        if let BflytSection::PartsPane(override_parts) = override_section
+                            && let BflytSection::PartsPane(parts) = &mut node.section
+                        {
+                            parts.magnify_x = override_parts.magnify_x;
+                            parts.magnify_y = override_parts.magnify_y;
+                            parts.properties = override_parts.properties.clone();
+                        }
+
                         if let BflytSection::PicturePane(override_pic) = override_section
                             && let BflytSection::PicturePane(pic) = &mut node.section
                         {
@@ -2096,6 +2258,8 @@ pub fn assemble_node(
         parts_children: Vec::new(),
         user_data: None,
         handle_capabilities,
+        parts_size: Vector2f::default(),
+        res_size: None,
     }
 }
 
@@ -2326,6 +2490,7 @@ pub fn apply_basic_info_override(
         }
 
         if flags.has_size {
+            node.res_size.get_or_insert(base.size);
             base.size.x = info.size_x;
             base.size.y = info.size_y;
         }

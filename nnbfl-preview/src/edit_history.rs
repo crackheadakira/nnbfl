@@ -856,6 +856,15 @@ impl AppliedCommand {
                     tree.rebuild_maps();
                 }
 
+                if matches!(before.section, BflytSection::PartsPane(_)) {
+                    let ids = tree.parts_content_ids(pane_idx);
+                    tree.rebuild_parts(pane_idx, Some(ids), ctx.glyphs);
+
+                    if let Some(node) = tree.find_by_idx_mut(pane_idx) {
+                        node.mark_transform_dirty();
+                    }
+                }
+
                 Some(AppliedCommand::ReplacePane {
                     pane_idx,
                     before: after,

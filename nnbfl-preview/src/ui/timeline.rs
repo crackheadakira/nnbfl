@@ -562,7 +562,7 @@ impl DrawUi<()> for TimelineState {
                     }
 
                     ui.separator();
-                    ui.label("Frames:");
+                    ui.label("Total Frames:");
 
                     let mut frames = info_frames;
 

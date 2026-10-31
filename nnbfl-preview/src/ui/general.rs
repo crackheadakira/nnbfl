@@ -26,8 +26,8 @@ use crate::{
         context_menu::{ContextMenu, ContextMenuAction, ContextMenuState},
         dialogs::duplicate::DuplicateDialog,
         editors::{
-            GroupEditor, MaterialEditor, MaterialEditorContext, PaneEditor, TextureEditState,
-            TextureEditor,
+            GroupEditor, MaterialEditor, MaterialEditorContext, PaneEditor, PaneEditorContext,
+            TextureEditState, TextureEditor,
         },
         shortcuts::Shortcuts,
         tree_view::TreeView,
@@ -620,6 +620,7 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                         if let Some(layout) = ctx.layout_tabs.active_mut() {
                             ui.vertical(|ui| {
                                 if let Some(idx) = ctx.ui_state.pane_tree_view.selected_pane {
+                                    let baseline = layout.pane_baseline(idx);
                                     let changed = {
                                         if let Some(node) = layout.tree.find_by_idx_mut(idx) {
                                             draw_pane_properties(ui, node)
@@ -634,6 +635,7 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                                         }
 
                                         layout.tree.recompute_dirty();
+                                        layout.note_pane_edit(baseline);
                                     }
                                 } else {
                                     ui.centered_and_justified(|ui| {
@@ -871,22 +873,54 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                 })
                 .unwrap_or_default();
 
+            let fonts: Vec<String> = layout
+                .tree
+                .font_list
+                .as_ref()
+                .map(|list| list.fonts.clone())
+                .unwrap_or_default();
+
             let mut edited = None;
 
             if let Some(node) = layout.tree.find_by_idx_mut(idx) {
                 let materials_before = node.material_indices();
 
-                if editor.draw_with(ui, (node, name_error.as_deref(), &materials)) {
-                    edited = Some(node.material_indices() != materials_before);
+                let output = editor.draw_with(
+                    ui,
+                    (
+                        &mut *node,
+                        PaneEditorContext {
+                            name_error: name_error.as_deref(),
+                            materials: &materials,
+                            fonts: &fonts,
+                        },
+                    ),
+                );
+
+                if output.changed {
+                    node.mark_transform_dirty();
+                    edited = Some((node.material_indices() != materials_before, output.reexpand));
                 }
             }
 
-            if let Some(rematerialed) = edited {
+            if let Some((rematerialed, reexpand)) = edited {
                 if rematerialed {
                     layout.tree.rebuild_maps();
                 }
 
+                if reexpand {
+                    let ids = layout.tree.parts_content_ids(idx);
+                    layout
+                        .tree
+                        .rebuild_parts(idx, Some(ids), &mut ctx.layout_tabs.glyphs);
+
+                    if let Some(node) = layout.tree.find_by_idx_mut(idx) {
+                        node.mark_transform_dirty();
+                    }
+                }
+
                 layout.tree.mark_pane_dirty(idx);
+                layout.tree.recompute_dirty();
                 layout.note_pane_edit(baseline);
                 materials_changed = true;
             }
@@ -1012,75 +1046,79 @@ fn draw_pane_properties(ui: &mut Ui, pane: &mut PaneNode) -> bool {
             ui.heading("Transform");
             ui.add_space(4.0);
 
+            let editable = pane.parts_source.is_none();
+
             if let Some(base) = pane.section.get_base_pane_mut() {
-                egui::Grid::new("pane_transform_grid")
-                    .num_columns(2)
-                    .striped(true)
-                    .spacing([12.0, 4.0])
-                    .show(ui, |ui| {
-                        ui.label("Translate X");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.translation.x).speed(0.5))
-                            .changed();
-                        ui.end_row();
+                ui.add_enabled_ui(editable, |ui| {
+                    egui::Grid::new("pane_transform_grid")
+                        .num_columns(2)
+                        .striped(true)
+                        .spacing([12.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Translate X");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.translation.x).speed(0.5))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Translate Y");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.translation.y).speed(0.5))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Translate Y");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.translation.y).speed(0.5))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Translate Z");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.translation.z).speed(0.5))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Translate Z");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.translation.z).speed(0.5))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Rotate X");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.rotation.x).speed(0.1))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Rotate X");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.rotation.x).speed(0.1))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Rotate Y");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.rotation.y).speed(0.1))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Rotate Y");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.rotation.y).speed(0.1))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Rotate Z");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.rotation.z).speed(0.1))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Rotate Z");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.rotation.z).speed(0.1))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Scale X");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.scale.x).speed(0.01))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Scale X");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.scale.x).speed(0.01))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Scale Y");
-                        if ui
-                            .add(egui::DragValue::new(&mut base.scale.y).speed(0.01))
-                            .changed()
-                        {
-                            changed = true;
-                        }
-                        ui.end_row();
+                            ui.label("Scale Y");
+                            if ui
+                                .add(egui::DragValue::new(&mut base.scale.y).speed(0.01))
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            ui.end_row();
 
-                        ui.label("Size X");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.size.x).speed(0.5))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Size X");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.size.x).speed(0.5))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Size Y");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.size.y).speed(0.5))
-                            .changed();
-                        ui.end_row();
-                    });
+                            ui.label("Size Y");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.size.y).speed(0.5))
+                                .changed();
+                            ui.end_row();
+                        });
+                });
             }
 
             ui.add_space(8.0);
