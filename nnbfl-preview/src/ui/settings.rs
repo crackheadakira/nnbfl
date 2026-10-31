@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::{
-    config::{AppConfig, GameKind, GameProfile},
+    config::{AppConfig, GameProfile, PRESETS},
     game_config::Language,
     ui::{
         DrawUiWith,
@@ -27,14 +27,13 @@ impl DrawUiWith<&mut AppConfig, bool> for SettingsWindow {
             .show(ui.ctx(), |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.heading("Game Profile");
-                    ui.weak("Fonts a layout's archive lacks are looked up in the active game's romfs");
                     changed |= profile_combo(ui, "settings_active_profile", config);
 
                     ui.separator();
                     ui.heading("System Fonts");
                     ui.weak(
                         "The console's shared fonts (nintendo_udsg-r_std_003.bfttf and others) ship with no game. \
-                         Dump them from your own console, or copy them from you emulator setup, \
+                         \nDump them from your own console, or copy them from you emulator setup, \
                          and choose that folder here.",
                     );
 
@@ -53,6 +52,32 @@ impl DrawUiWith<&mut AppConfig, bool> for SettingsWindow {
 
                     ui.separator();
                     ui.heading("Profiles");
+                    ui.weak("A profile is a font folder (or font archive) and a layout folder");
+
+                    ui.horizontal(|ui| {
+                        ui.menu_button("New From Preset", |ui| {
+                            for preset in PRESETS {
+                                if ui.button(preset.name).on_hover_text(preset.hint).clicked() {
+                                    config.profiles.push(GameProfile::from_preset(preset));
+                                    changed = true;
+                                    ui.close();
+                                }
+                            }
+                        });
+
+                        if ui.button("Import…").clicked()
+                            && let Some(path) =
+                                rfd::FileDialog::new().add_filter("Profile", &["toml"]).pick_file()
+                        {
+                            match GameProfile::load_from(&path) {
+                                Ok(profile) => {
+                                    config.profiles.push(profile);
+                                    changed = true;
+                                }
+                                Err(e) => log::error!("Couldn't import {}: {e}", path.display()),
+                            }
+                        }
+                    });
 
                     let active = config
                         .profiles
@@ -69,7 +94,7 @@ impl DrawUiWith<&mut AppConfig, bool> for SettingsWindow {
                                 p.name.clone()
                             }
                         })
-                        .show(ui, |ui, i, profile| profile_fields(ui, i, profile))
+                        .show(ui, profile_fields)
                         .changed;
 
                     if edited {
@@ -114,58 +139,66 @@ pub fn profile_combo(ui: &mut egui::Ui, id: &str, config: &mut AppConfig) -> boo
 }
 
 fn profile_fields(ui: &mut egui::Ui, i: usize, profile: &mut GameProfile) -> bool {
-    grid(ui, ("settings_profile", i), |ui| {
+    let changed = grid(ui, ("settings_profile", i), |ui| {
         let mut changed = text(ui, "Name", &mut profile.name, usize::MAX);
 
-        changed |= row(ui, "Game", |ui| {
-            let mut changed = false;
+        changed |= row(ui, "Fonts", |ui| {
+            let changed = path_picker(ui, &mut profile.fonts, true);
 
-            egui::ComboBox::from_id_salt(("settings_profile_kind", i))
-                .selected_text(profile.kind.label())
-                .show_ui(ui, |ui| {
-                    for kind in GameKind::ALL {
-                        changed |= ui
-                            .selectable_value(&mut profile.kind, kind, kind.label())
-                            .changed();
-                    }
-                });
-
+            if !profile.fonts.as_os_str().is_empty() && !profile.fonts.exists() {
+                ui.colored_label(ui.visuals().error_fg_color, "Not found");
+            }
             changed
         });
 
-        changed |= row(ui, "romfs", |ui| {
-            let mut romfs = Some(profile.romfs.clone()).filter(|p| !p.as_os_str().is_empty());
-            let changed = folder_picker(ui, &mut romfs);
-            profile.romfs = romfs.unwrap_or_default();
-            changed
+        changed |= row(ui, "Layouts", |ui| {
+            path_picker(ui, &mut profile.layouts, false)
         });
 
-        changed |= row(ui, "Language", |ui| {
-            let mut changed = false;
+        let mut patterns = profile.font_files.join(", ");
 
-            egui::ComboBox::from_id_salt(("settings_profile_language", i))
-                .selected_text(profile.language.map_or("Default", |l| l.label()))
-                .show_ui(ui, |ui| {
-                    changed |= ui
-                        .selectable_value(&mut profile.language, None, "Default")
-                        .changed();
+        if text(ui, "Font Files", &mut patterns, usize::MAX) {
+            profile.font_files = patterns
+                .split(',')
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect();
 
-                    for &language in Language::ALL {
-                        changed |= ui
-                            .selectable_value(
-                                &mut profile.language,
-                                Some(language),
-                                language.label(),
-                            )
-                            .changed();
-                    }
-                });
-
-            changed
-        });
+            changed |= true;
+        }
 
         changed
-    })
+    });
+
+    ui.weak("Font files: comma-separated patterns such as *.sarc.zs; empty uses every file");
+
+    if ui.button("Export…").clicked()
+        && let Some(path) = rfd::FileDialog::new()
+            .add_filter("Profile", &["toml"])
+            .set_file_name(format!("{}.toml", profile.name))
+            .save_file()
+        && let Err(e) = profile.save_to(&path)
+    {
+        log::error!("Couldn't export to {}: {e}", path.display());
+    }
+
+    changed
+}
+
+fn path_picker(ui: &mut egui::Ui, path: &mut PathBuf, allow_file: bool) -> bool {
+    let mut folder = Some(path.clone()).filter(|p| !p.as_os_str().is_empty());
+    let mut changed = folder_picker(ui, &mut folder);
+
+    if allow_file
+        && ui.button("Archive…").clicked()
+        && let Some(file) = rfd::FileDialog::new().pick_file()
+    {
+        folder = Some(file);
+        changed = true;
+    }
+
+    *path = folder.unwrap_or_default();
+    changed
 }
 
 fn language_combo(ui: &mut egui::Ui, id: &str, language: &mut Language) -> bool {

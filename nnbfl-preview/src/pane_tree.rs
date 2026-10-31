@@ -30,6 +30,7 @@ use nnbfl::{
 };
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use tomolib::formats::bntx::Bntx;
+use ttf_parser::GlyphId;
 
 use crate::{
     anim_state::{
@@ -37,7 +38,11 @@ use crate::{
     },
     archive_browser::{ArchiveEntry, resolve_nested_package_bytes},
     decompress_if_needed, extract_all_files_recursive,
-    font::glyph_atlas::{FontFace, GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
+    font::{
+        glyph_atlas::{FontFace, GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
+        library::FontIndex,
+        resolve::{FontCache, MemberMetrics},
+    },
     renderer::{
         quad::Quad,
         selection::HandleCapability,
@@ -207,6 +212,7 @@ pub struct PaneNode {
     pub world_rotation: Vector3f,
     pub world_corners: Corners,
     pub parent_anchor: Vector2f,
+    pub child_scale: Vector2f,
 
     pub plain_quad: Quad,
     pub textured_quad: Option<TexturedQuad>,
@@ -348,14 +354,15 @@ impl PaneNode {
         }
     }
 
-    pub fn recompute_glyphs(
+    fn rebuild_text(
         &mut self,
         font_list: Option<&FontList>,
+        fonts: &FontIndex,
         material_list: Option<&MaterialList>,
         glyphs: &mut GlyphData,
     ) {
-        self.glyph_quads = if let BflytSection::TextBoxPane(txt) = &self.section {
-            build_text_glyph_quads(
+        if let BflytSection::TextBoxPane(txt) = &self.section {
+            self.glyph_quads = build_text_glyph_quads(
                 txt,
                 self.world_center,
                 self.world_size,
@@ -363,15 +370,14 @@ impl PaneNode {
                 self.visible,
                 self.pane_idx,
                 font_list,
-                material_list,
+                fonts,
+                self.materials.as_deref().or(material_list),
                 glyphs,
-            )
-        } else {
-            Vec::new()
-        };
+            );
+        }
 
         for child in self.all_children_mut() {
-            child.recompute_glyphs(font_list, material_list, glyphs);
+            child.rebuild_text(font_list, fonts, material_list, glyphs);
         }
     }
 
@@ -410,6 +416,7 @@ impl PaneNode {
         bntxs: &[&Bntx],
     ) {
         if self.plain_quad.is_parts_root {
+            self.child_scale = parent_scale;
             self.world_center = parent_pos;
             self.world_size = parent_size;
             self.world_rotation = parent_rotation;
@@ -575,6 +582,8 @@ impl PaneNode {
                 .unwrap_or(parent_scale);
         }
 
+        self.child_scale = child_scale;
+
         let (child_rotation, child_size) = transform
             .map(|t| (t.rotation + parent_rotation, self.world_size))
             .unwrap_or((parent_rotation, parent_size));
@@ -707,6 +716,7 @@ pub struct PaneTree {
     pub user_data: Option<UserDataArray>,
     pub texture_list: Option<TextureList>,
     pub font_list: Option<FontList>,
+    pub font_index: Arc<FontIndex>,
     pub capture_texture_list: Option<CaptureTextureList>,
     pub control_source: Option<ControlSourceElement>,
     pub group: GroupElement,
@@ -878,6 +888,20 @@ impl PaneTree {
         */
     }
 
+    pub fn rebuild_text(&mut self, glyphs: &mut GlyphData) {
+        for root in &mut self.roots {
+            root.rebuild_text(
+                self.font_list.as_ref(),
+                &self.font_index,
+                self.material_list.as_ref(),
+                glyphs,
+            );
+        }
+
+        self.needs_rebatch = true;
+        self.update_animation_visuals();
+    }
+
     pub fn mark_material_dirty(&mut self, material: u16) {
         let Some(users) = self.material_users.get(&material) else {
             return;
@@ -940,6 +964,7 @@ impl PaneTree {
         let sources = VisualSources {
             material_list: node.materials.as_deref().or(self.material_list.as_ref()),
             font_list: self.font_list.as_ref(),
+            fonts: &self.font_index,
             bntxs: &bntxs,
         };
 
@@ -1595,6 +1620,7 @@ impl PaneTree {
             material_list: self.material_list.as_ref(),
             sub_material_list,
             font_list: self.font_list.as_ref(),
+            fonts: &self.font_index,
             archive_entries: None,
             archive_layouts: &[],
             blarc_dir: None,
@@ -1622,6 +1648,7 @@ impl PaneTree {
         Some(self.parts_content_ids(pane))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn from_bflyt(
         file: Bflyt,
         blarc_dir: Option<&Path>,
@@ -1629,6 +1656,7 @@ impl PaneTree {
         archive_entries: Option<&[ArchiveEntry]>,
         archive_layouts: &[(String, Vec<u8>)],
         discovered_bntxs: Vec<Bntx>,
+        fonts: Arc<FontIndex>,
         glyphs: &mut GlyphData,
     ) -> Self {
         puffin::profile_function!();
@@ -1654,6 +1682,7 @@ impl PaneTree {
             material_list: file.material_list.as_ref(),
             sub_material_list: None,
             font_list: file.font_list.as_ref(),
+            fonts: &fonts,
             archive_entries,
             archive_layouts,
             blarc_dir,
@@ -1708,6 +1737,7 @@ impl PaneTree {
             user_data: file.user_data,
             texture_list: file.texture_list,
             font_list: file.font_list,
+            font_index: fonts,
             capture_texture_list: file.capture_texture_list,
             group: file.root_group,
             control_source: file.control_source,
@@ -1728,6 +1758,7 @@ struct Builder<'a> {
     material_list: Option<&'a MaterialList>,
     sub_material_list: Option<MaterialList>,
     font_list: Option<&'a FontList>,
+    fonts: &'a FontIndex,
     blarc_dir: Option<&'a Path>,
     archive_entries: Option<&'a [ArchiveEntry]>,
     archive_layouts: &'a [(String, Vec<u8>)],
@@ -1844,6 +1875,7 @@ impl<'a> Builder<'a> {
         let sources = VisualSources {
             material_list: self.sub_material_list.as_ref().or(self.material_list),
             font_list: self.font_list,
+            fonts: self.fonts,
             bntxs: &bntxs,
         };
 
@@ -2293,6 +2325,7 @@ impl Builder<'_> {
         let sources = VisualSources {
             material_list: node.materials.as_deref().or(self.material_list),
             font_list: self.font_list,
+            fonts: self.fonts,
             bntxs: &bntxs,
         };
 
@@ -2451,6 +2484,7 @@ fn apply_user_data_override(node: &mut PaneNode, prop: &PartsProperty) {
 pub struct VisualSources<'a> {
     pub material_list: Option<&'a MaterialList>,
     pub font_list: Option<&'a FontList>,
+    pub fonts: &'a FontIndex,
     pub bntxs: &'a [&'a Bntx],
 }
 
@@ -2570,6 +2604,7 @@ pub fn assemble_node(
         world_size: placement.size,
         world_center: placement.center,
         parent_anchor: anchor,
+        child_scale: ONE,
         world_corners: corners,
         world_rotation: placement.rotation,
         textured_quad: visuals.textured_quad,
@@ -2621,6 +2656,7 @@ pub fn build_pane_visuals(
                 placement.visible,
                 pane_idx,
                 sources.font_list,
+                sources.fonts,
                 sources.material_list,
                 glyphs,
             ),
@@ -2863,6 +2899,7 @@ fn build_text_glyph_quads(
     is_visible: bool,
     pane_idx: PaneId,
     font_list: Option<&FontList>,
+    fonts: &FontIndex,
     material_list: Option<&MaterialList>,
     glyphs: &mut GlyphData,
 ) -> Vec<TexturedQuad> {
@@ -2883,7 +2920,8 @@ fn build_text_glyph_quads(
         .map(String::as_str)
         .unwrap_or("");
 
-    let Some((font_id, font)) = glyphs.fonts.get_or_load(font_name) else {
+    let font_ref = glyphs.fonts.resolve(fonts, font_name);
+    let Some(primary) = glyphs.fonts.primary_face(font_ref) else {
         return quads;
     };
 
@@ -2894,6 +2932,17 @@ fn build_text_glyph_quads(
         txt.font_size.y
     };
 
+    let lines: Vec<Vec<GlyphChoice>> = text
+        .split('\n')
+        .map(|line| {
+            line.chars()
+                .map(|ch| (ch, glyphs.fonts.face_for(font_ref, ch)))
+                .collect()
+        })
+        .collect();
+
+    let (font_cache, atlas) = (&glyphs.fonts, &mut glyphs.atlas);
+    let font = font_cache.face(primary);
     let scale = font_size_px / font.units_per_em.max(1.0);
     let line_height =
         (font.ascender - font.descender + font.line_gap) * font_size_px + txt.line_space;
@@ -2911,10 +2960,9 @@ fn build_text_glyph_quads(
         VerticalPosition::Bottom => -box_h,
     };
 
-    let lines: Vec<_> = text.split('\n').collect();
     let line_widths: Vec<_> = lines
         .iter()
-        .map(|line| measure_line_width(font, line, font_size_px, txt.character_space))
+        .map(|line| measure_line_width(font_cache, line, font_size_px, txt.character_space))
         .collect();
 
     let total_text_height = line_height * lines.len() as f32;
@@ -2946,21 +2994,29 @@ fn build_text_glyph_quads(
         let pen_y = start_y + line_idx as f32 * line_height + font.ascender * scale;
         let mut prev_glyph = None;
 
-        for ch in line.chars() {
-            let Some(glyph_id) = font.glyph_id_for_char(ch) else {
+        for &(ch, choice) in line {
+            let Some((face_id, metrics)) = choice else {
+                prev_glyph = None;
+                continue;
+            };
+
+            let face = font_cache.face(face_id);
+            let Some(glyph_id) = face.glyph_id_for_char(ch) else {
                 prev_glyph = None;
                 continue;
             };
 
             if ch != ' '
-                && let Some(atlas_glyph) = glyphs.atlas.glyph(font, font_id, glyph_id, font_size_px)
+                && let Some(atlas_glyph) = atlas.glyph(face, face_id, glyph_id, font_size_px)
                 && atlas_glyph.width > 0.0
                 && atlas_glyph.height > 0.0
             {
-                let local_left = pen_x + atlas_glyph.bearing_x;
-                let local_top = pen_y - atlas_glyph.bearing_y - atlas_glyph.height;
-                let local_right = local_left + atlas_glyph.width;
-                let local_bottom = local_top + atlas_glyph.height;
+                let width = atlas_glyph.width * metrics.width_scale;
+                let height = atlas_glyph.height * metrics.height_scale;
+                let local_left = pen_x + atlas_glyph.bearing_x * metrics.width_scale;
+                let local_top = pen_y - atlas_glyph.bearing_y * metrics.height_scale - height;
+                let local_right = local_left + width;
+                let local_bottom = local_top + height;
 
                 let corners = [
                     Corners::rotate_point(
@@ -2999,7 +3055,7 @@ fn build_text_glyph_quads(
                     },
                     mat,
                     Vector2f::new(local_left, local_top),
-                    Vector2f::new(atlas_glyph.width, atlas_glyph.height),
+                    Vector2f::new(width, height),
                     corners.map(|c| c.into()),
                     is_visible,
                     pane_idx,
@@ -3017,38 +3073,58 @@ fn build_text_glyph_quads(
                 }
             }
 
-            let advance = font.advance_width(glyph_id, font_size_px)
-                + prev_glyph
-                    .map(|prev| font.kerning(prev, glyph_id, font_size_px))
-                    .unwrap_or(0.0)
+            pen_x += glyph_advance(face, face_id, glyph_id, prev_glyph, metrics, font_size_px)
                 + txt.character_space;
-
-            pen_x += advance;
-            prev_glyph = Some(glyph_id);
+            prev_glyph = Some((face_id, glyph_id));
         }
     }
 
     quads
 }
 
-fn measure_line_width(font: &FontFace, line: &str, font_size_px: f32, character_space: f32) -> f32 {
+type GlyphChoice = (char, Option<(usize, MemberMetrics)>);
+
+fn glyph_advance(
+    face: &FontFace,
+    face_id: usize,
+    glyph_id: GlyphId,
+    prev: Option<(usize, GlyphId)>,
+    metrics: MemberMetrics,
+    font_size_px: f32,
+) -> f32 {
+    let kerning = prev
+        .filter(|&(prev_face, _)| prev_face == face_id)
+        .map_or(0.0, |(_, prev)| face.kerning(prev, glyph_id, font_size_px));
+
+    (face.advance_width(glyph_id, font_size_px) + kerning) * metrics.width_scale
+}
+
+fn measure_line_width(
+    fonts: &FontCache,
+    line: &[GlyphChoice],
+    font_size_px: f32,
+    character_space: f32,
+) -> f32 {
     let mut width = 0.0;
     let mut prev_glyph = None;
     let mut any_glyph = false;
 
-    for ch in line.chars() {
-        let Some(glyph_id) = font.glyph_id_for_char(ch) else {
+    for &(ch, choice) in line {
+        let Some((face_id, metrics)) = choice else {
             prev_glyph = None;
             continue;
         };
 
-        width += font.advance_width(glyph_id, font_size_px)
-            + prev_glyph
-                .map(|prev| font.kerning(prev, glyph_id, font_size_px))
-                .unwrap_or(0.0)
+        let face = fonts.face(face_id);
+        let Some(glyph_id) = face.glyph_id_for_char(ch) else {
+            prev_glyph = None;
+            continue;
+        };
+
+        width += glyph_advance(face, face_id, glyph_id, prev_glyph, metrics, font_size_px)
             + character_space;
 
-        prev_glyph = Some(glyph_id);
+        prev_glyph = Some((face_id, glyph_id));
         any_glyph = true;
     }
 

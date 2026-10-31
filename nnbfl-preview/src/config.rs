@@ -18,32 +18,59 @@ pub struct AppConfig {
 #[serde(default)]
 pub struct GameProfile {
     pub name: String,
-    pub kind: GameKind,
-    pub romfs: PathBuf,
-    pub language: Option<Language>,
+    pub fonts: PathBuf,
+    pub layouts: PathBuf,
+
+    /// File name patterns (`*` wildcards) picking the font sources in `fonts`
+    pub font_files: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GameKind {
-    #[default]
-    Generic,
-    AnimalCrossing,
-    TomodachiLife,
+pub struct Preset {
+    pub name: &'static str,
+    pub font_files: &'static [&'static str],
+    pub hint: &'static str,
 }
 
-impl GameKind {
-    pub const ALL: [GameKind; 3] = [
-        GameKind::Generic,
-        GameKind::AnimalCrossing,
-        GameKind::TomodachiLife,
-    ];
+pub const PRESETS: &[Preset] = &[
+    Preset {
+        name: "Generic",
+        font_files: &[],
+        hint: "Every file in the font folder",
+    },
+    Preset {
+        name: "Animal Crossing: New Horizons",
+        font_files: &["*.sarc.zs"],
+        hint: "Fonts: romfs/Font, layouts: romfs/Layout",
+    },
+    Preset {
+        name: "Tomodachi Life: Living the Dream",
+        font_files: &["Font*.bfarc.zs"],
+        hint: "Fonts: romfs/Font, layouts: romfs/Layout",
+    },
+    Preset {
+        name: "Mario Kart 8 Deluxe",
+        font_files: &["font.sarc"],
+        hint: "Fonts: romfs/UI/<language> (bitmap fonts), layouts: romfs/UI",
+    },
+];
 
-    pub fn label(self) -> &'static str {
-        match self {
-            GameKind::Generic => "Generic",
-            GameKind::AnimalCrossing => "Animal Crossing: New Horizons",
-            GameKind::TomodachiLife => "Tomodachi Life: Living the Dream",
+impl GameProfile {
+    pub fn from_preset(preset: &Preset) -> Self {
+        Self {
+            name: preset.name.to_string(),
+            font_files: preset.font_files.iter().map(|p| p.to_string()).collect(),
+            ..Default::default()
         }
+    }
+
+    pub fn load_from(path: &Path) -> Result<Self, String> {
+        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        toml::from_str(&text).map_err(|e| e.to_string())
+    }
+
+    pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
+        let text = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
+        std::fs::write(path, text)
     }
 }
 
@@ -100,6 +127,24 @@ impl AppConfig {
 
     pub fn profile(&self, name: &str) -> Option<&GameProfile> {
         self.profiles.iter().find(|p| p.name == name)
+    }
+
+    pub fn layout_dir(&self) -> Option<PathBuf> {
+        match self.active() {
+            Some(profile) if !profile.layouts.as_os_str().is_empty() => {
+                Some(profile.layouts.clone())
+            }
+            _ => self.layout_dir.clone(),
+        }
+    }
+
+    pub fn set_layout_dir(&mut self, dir: PathBuf) {
+        let name = self.active_profile.clone();
+
+        match name.and_then(|n| self.profiles.iter_mut().find(|p| p.name == n)) {
+            Some(profile) => profile.layouts = dir,
+            None => self.layout_dir = Some(dir),
+        }
     }
 }
 

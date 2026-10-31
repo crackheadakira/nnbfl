@@ -51,7 +51,11 @@ use crate::{
     archive_browser::{ArchiveEntry, ArchiveScan},
     edit_history::{AnimSession, EditCtx, EditHistory, MaterialSession, PaneSession, PaneSnapshot},
     error::LoadError,
-    font::glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
+    font::{
+        glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
+        library::FontIndex,
+        resolve::FontEnvironment,
+    },
     pane_tree::{Anchor, PaneId, PaneTree},
     renderer::{
         selection::{Handle, SelectionRenderer, point_in_quad},
@@ -467,6 +471,12 @@ struct DragState {
     start_translation: Vector3f,
     start_size: Vector2f,
     rotate_z: f32,
+
+    parent_rotation_z: f32,
+    parent_scale: Vector2f,
+
+    frame_rotation_z: f32,
+    frame_scale: Vector2f,
 }
 
 #[derive(Default)]
@@ -867,6 +877,11 @@ impl LayoutData {
             })
             .collect();
 
+        let fonts = Arc::new(FontIndex::from_archive_files(
+            &bflyt.layout.name,
+            &all_files,
+        ));
+
         let (discovered_bntxs, discovered_bflans) = all_files
             .into_par_iter()
             .fold(
@@ -944,6 +959,7 @@ impl LayoutData {
             archive_scan_entries,
             &archive_layouts,
             discovered_bntxs.into_iter().map(|(_, bntx)| bntx).collect(),
+            fonts,
             glyphs,
         );
 
@@ -981,12 +997,20 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let mut ui_state = UiState::default();
-        ui_state.config = config::AppConfig::load();
-        ui_state.archive_browser.layout_dir = ui_state.config.layout_dir.clone();
+        let mut ui_state = UiState {
+            config: config::AppConfig::load(),
+            ..Default::default()
+        };
+
+        ui_state.archive_browser.layout_dir = ui_state.config.layout_dir();
+
+        let mut tabs = LayoutTabs::default();
+        tabs.glyphs
+            .fonts
+            .set_environment(FontEnvironment::from_config(&ui_state.config, None));
 
         Self {
-            tabs: LayoutTabs::default(),
+            tabs,
             docs: DocStore::default(),
             ui_state,
             camera: Camera::new(),
@@ -1036,6 +1060,19 @@ impl App {
         let size = base.map(|b| b.size).unwrap_or(node.world_size);
         let rotate_z = base.map(|b| b.rotation.z).unwrap_or(0.0);
 
+        let parent = layout
+            .tree
+            .parent_map
+            .get(&idx)
+            .copied()
+            .flatten()
+            .and_then(|p| layout.tree.find_by_idx(p));
+
+        let (parent_rotation_z, parent_scale) = parent
+            .map_or((0.0, Vector2f::new(1.0, 1.0)), |p| {
+                (p.world_rotation.z, p.child_scale)
+            });
+
         self.drag_state = Some(DragState {
             pane_idx: idx,
             handle,
@@ -1046,6 +1083,10 @@ impl App {
             start_translation: translation,
             start_size: size,
             rotate_z,
+            parent_rotation_z,
+            parent_scale,
+            frame_rotation_z: node.world_rotation.z,
+            frame_scale: node.child_scale,
         });
 
         true
@@ -1094,8 +1135,10 @@ impl App {
 
         match drag.handle {
             Handle::Body => {
-                base.translation.x = drag.start_translation.x + dx;
-                base.translation.y = drag.start_translation.y - dy;
+                let (local_dx, local_dy) =
+                    to_local(dx, dy, drag.parent_rotation_z, drag.parent_scale);
+                base.translation.x = drag.start_translation.x + local_dx;
+                base.translation.y = drag.start_translation.y - local_dy;
             }
             Handle::Rotation => {
                 let pivot_x = node.world_center.x;
@@ -1120,10 +1163,8 @@ impl App {
                 base.rotation.z = drag.rotate_z - angle_delta;
             }
             _ => {
-                let rad = -drag.rotate_z.to_radians();
-                let (sin_r, cos_r) = rad.sin_cos();
-                let local_dx = dx * cos_r + dy * sin_r;
-                let local_dy = -dx * sin_r + dy * cos_r;
+                let (local_dx, local_dy) =
+                    to_local(dx, dy, drag.frame_rotation_z, drag.frame_scale);
 
                 match drag.handle {
                     Handle::TopLeft
@@ -1838,6 +1879,16 @@ pub fn extract_all_files_recursive(
     }
 }
 
+fn to_local(dx: f32, dy: f32, rotation_z: f32, scale: Vector2f) -> (f32, f32) {
+    let (sin_r, cos_r) = rotation_z.to_radians().sin_cos();
+    let divide = |v: f32, s: f32| if s.abs() > f32::EPSILON { v / s } else { v };
+
+    (
+        divide(dx * cos_r - dy * sin_r, scale.x),
+        divide(dx * sin_r + dy * cos_r, scale.y),
+    )
+}
+
 fn decompress_if_needed(data: Vec<u8>, filename: &str) -> Vec<u8> {
     if data.len() >= 4 && data[0..4] == [0x28, 0xB5, 0x2F, 0xFD] {
         let mut decompressed = Vec::new();
@@ -1951,8 +2002,8 @@ impl ApplicationHandler for App {
                         return;
                     };
 
-                    self.ui_state.archive_browser.layout_dir = Some(dir.clone());
-                    self.ui_state.config.layout_dir = Some(dir);
+                    self.ui_state.config.set_layout_dir(dir);
+                    self.ui_state.archive_browser.layout_dir = self.ui_state.config.layout_dir();
                     self.ui_state.config.save();
 
                     if let Some(w) = &self.window {

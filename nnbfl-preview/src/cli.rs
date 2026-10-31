@@ -6,7 +6,9 @@ use nnbfl::sarc::file::MagicFiles;
 use crate::{
     LayoutData,
     archive::{DocStore, EntryPath, LayoutSource, file_stem},
+    config::AppConfig,
     font::glyph_atlas::GlyphData,
+    font::resolve::FontEnvironment,
     render::{
         DeviceOptions, FrameRange, OffscreenRenderer, Pose, RenderSettings, export_animation,
     },
@@ -64,9 +66,13 @@ struct RenderArgs {
     #[arg(long, default_value = "transparent", value_parser = parse_background)]
     background: [f32; 4],
 
-    /// Where parts layouts outside the opened archive are looked up
+    /// Where parts layouts outside the opened archive are looked up, the profile's layout folder when not given
     #[arg(long)]
     layout_dir: Option<PathBuf>,
+
+    /// The config profile fonts are looked up in, the config's active profile when not given
+    #[arg(long)]
+    profile: Option<String>,
 
     /// Renders on a software adapter
     #[arg(long)]
@@ -133,7 +139,11 @@ struct Loaded {
     stem: String,
 }
 
-fn load_layouts(file: &Path, layout_dir: Option<&Path>) -> Result<Vec<Loaded>, String> {
+fn load_layouts(
+    file: &Path,
+    layout_dir: Option<&Path>,
+    fonts: &FontEnvironment,
+) -> Result<Vec<Loaded>, String> {
     let mut docs = DocStore::default();
     let doc = docs.open(file)?;
     let files = docs.docs[doc].files(&[]);
@@ -160,6 +170,8 @@ fn load_layouts(file: &Path, layout_dir: Option<&Path>) -> Result<Vec<Loaded>, S
         .into_iter()
         .map(|(path, stem)| {
             let mut glyphs = GlyphData::default();
+            glyphs.fonts.set_environment(fonts.clone());
+
             let source = LayoutSource { doc, layout: path };
             let (layout, _) = LayoutData::load_from_buffer(
                 files.clone(),
@@ -187,7 +199,7 @@ fn anim_name(layout: &LayoutData, index: usize) -> String {
 }
 
 fn list(file: &Path) -> i32 {
-    let layouts = match load_layouts(file, None) {
+    let layouts = match load_layouts(file, None, &FontEnvironment::default()) {
         Ok(layouts) => layouts,
         Err(e) => {
             eprintln!("{e}");
@@ -213,7 +225,16 @@ fn list(file: &Path) -> i32 {
 }
 
 fn render(args: &RenderArgs) -> i32 {
-    let mut layouts = match load_layouts(&args.file, args.layout_dir.as_deref()) {
+    let fonts = FontEnvironment::from_config(&AppConfig::load(), args.profile.as_deref());
+    let layout_dir = args.layout_dir.clone().or_else(|| {
+        fonts
+            .profile
+            .as_ref()
+            .map(|p| p.layouts.clone())
+            .filter(|p| !p.as_os_str().is_empty())
+    });
+
+    let mut layouts = match load_layouts(&args.file, layout_dir.as_deref(), &fonts) {
         Ok(layouts) => layouts,
         Err(e) => {
             eprintln!("{e}");

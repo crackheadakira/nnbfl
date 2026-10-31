@@ -273,61 +273,15 @@ impl FontFace {
     }
 }
 
-#[derive(Default)]
-pub struct FontCache {
-    faces: Vec<FontFace>,
-    name_to_id: HashMap<String, usize>,
-    placeholder_id: Option<usize>,
-}
-
-impl FontCache {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn get_or_load(&mut self, font_name: &str) -> Option<(usize, &FontFace)> {
-        puffin::profile_function!();
-
-        if let Some(&id) = self.name_to_id.get(font_name) {
-            return Some((id, &self.faces[id]));
-        }
-
-        let id = if let Some(id) = self.placeholder_id {
-            id
-        } else {
-            let bytes = Self::load_placeholder_bytes(font_name)?;
-            let face = FontFace::load(bytes, 0)?;
-
-            let id = self.faces.len();
-            self.faces.push(face);
-            self.placeholder_id = Some(id);
-            id
-        };
-
-        self.name_to_id.insert(font_name.to_string(), id);
-        Some((id, &self.faces[id]))
-    }
-
-    fn load_placeholder_bytes(font_name: &str) -> Option<Vec<u8>> {
-        puffin::profile_function!();
-        crate::chinese_font::load_chinese_font()
-            .map(|data| data.font.into_owned())
-            .map_err(|e| {
-                log::warn!("FontCache: failed to load placeholder font for '{font_name}': {e}")
-            })
-            .ok()
-    }
-}
-
 pub struct GlyphData {
-    pub fonts: FontCache,
+    pub fonts: super::resolve::FontCache,
     pub atlas: GlyphAtlas,
 }
 
 impl Default for GlyphData {
     fn default() -> Self {
         Self {
-            fonts: FontCache::new(),
+            fonts: super::resolve::FontCache::new(),
             atlas: GlyphAtlas::new(1024, 1024),
         }
     }

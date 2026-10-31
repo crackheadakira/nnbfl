@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use crate::{
     config::AppConfig,
     edit_history::OverrideToggle,
+    font::resolve::{FontCache, FontEnvironment, MemberSource},
     ops::duplicate::{DuplicateNames, DuplicateOptions},
     pane_factory::NewPaneKind,
     pane_tree::{Anchor, PaneId},
@@ -125,6 +126,7 @@ impl PaneVisibilityFlags {
 pub enum SidebarTab {
     #[default]
     Panes,
+    Fonts,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -203,6 +205,86 @@ pub enum UiAction {
     Undo,
     Redo,
     JumpToHistory(usize),
+}
+
+fn apply_config(ctx: &mut RenderContext<'_>) {
+    ctx.ui_state.config.save();
+
+    let layout_dir = ctx.ui_state.config.layout_dir();
+    let browser = &mut ctx.ui_state.archive_browser;
+
+    if browser.layout_dir != layout_dir {
+        browser.layout_dir = layout_dir;
+        browser.archive_scan = None;
+    }
+
+    let env = FontEnvironment::from_config(&ctx.ui_state.config, None);
+    let tabs = &mut *ctx.layout_tabs;
+
+    if tabs.glyphs.fonts.set_environment(env) {
+        for layout in &mut tabs.items {
+            layout.tree.rebuild_text(&mut tabs.glyphs);
+        }
+    }
+}
+
+fn draw_fonts(ui: &mut Ui, tree: &crate::pane_tree::PaneTree, fonts: &mut FontCache) {
+    ui.heading("Fonts");
+
+    let Some(list) = &tree.font_list else {
+        ui.weak("This layout has no font list");
+        return;
+    };
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        for name in &list.fonts {
+            let id = fonts.resolve(&tree.font_index, name);
+            let font = fonts.font(id);
+
+            egui::CollapsingHeader::new(name)
+                .default_open(true)
+                .show(ui, |ui| {
+                    for member in &font.members {
+                        let (text, color) = match &member.source {
+                            MemberSource::Found { origin } => {
+                                (format!("{} ({origin})", member.file), None)
+                            }
+                            MemberSource::BitmapStandIn => (
+                                format!("{} (bitmap, drawn with a stand-in)", member.file),
+                                Some(ui.visuals().warn_fg_color),
+                            ),
+                            MemberSource::SystemStandIn => (
+                                format!(
+                                    "{} (console font, set the system font folder in Settings)",
+                                    member.file
+                                ),
+                                Some(ui.visuals().warn_fg_color),
+                            ),
+                            MemberSource::Missing => (
+                                format!("{} (not found)", member.file),
+                                Some(ui.visuals().error_fg_color),
+                            ),
+                        };
+
+                        let label = match color {
+                            Some(color) => egui::RichText::new(text).color(color),
+                            None => egui::RichText::new(text),
+                        };
+
+                        ui.label(label).on_hover_text(if member.ranges.is_empty() {
+                            "All characters".to_string()
+                        } else {
+                            member
+                                .ranges
+                                .iter()
+                                .map(|(lo, hi)| format!("U+{lo:04X}..U+{hi:04X}"))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        });
+                    }
+                });
+        }
+    });
 }
 
 fn draw_history(ui: &mut Ui, history: &EditHistory) -> Option<usize> {
@@ -436,16 +518,6 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                 ctx.ui_state.archive_browser.is_visible = true;
             }
 
-            if ui.button("Settings").clicked() {
-                ctx.ui_state.settings.is_open = true;
-            }
-
-            ui.label("Profile:");
-
-            if profile_combo(ui, "menu_active_profile", &mut ctx.ui_state.config) {
-                ctx.ui_state.config.save();
-            }
-
             if let Some(layout) = ctx.layout_tabs.active() {
                 ui.menu_button("Shader Pass", |ui| {
                     let stages = [
@@ -496,6 +568,16 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                 if ui.button("Statistics").clicked() {
                     ctx.ui_state.show_statistics_window = true;
                 }
+            }
+
+            if ui.button("Settings").clicked() {
+                ctx.ui_state.settings.is_open = true;
+            }
+
+            ui.label("Profile:");
+
+            if profile_combo(ui, "menu_active_profile", &mut ctx.ui_state.config) {
+                apply_config(ctx);
             }
 
             ui.menu_button("Help", |ui| {
@@ -572,6 +654,8 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                     SidebarTab::Panes,
                     "Pane Tree",
                 );
+
+                ui.selectable_value(&mut ctx.ui_state.sidebar_tab, SidebarTab::Fonts, "Fonts");
             });
             ui.separator();
 
@@ -603,6 +687,14 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                         .show(ui, ctx.layout_tabs.active_mut())
                     {
                         ctx.ui_state.pending_action = Some(ui_action);
+                    }
+                }
+
+                SidebarTab::Fonts => {
+                    let tabs = &mut *ctx.layout_tabs;
+
+                    if let Some(layout) = tabs.items.get(tabs.active_index) {
+                        draw_fonts(ui, &layout.tree, &mut tabs.glyphs.fonts);
                     }
                 }
             }
@@ -1119,7 +1211,7 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
 
     let state = &mut *ctx.ui_state;
     if state.settings.draw_with(ui, &mut state.config) {
-        state.config.save();
+        apply_config(ctx);
     }
 
     if ctx.ui_state.enable_puffin {
