@@ -11,3 +11,9 @@ strip = "symbols"
 inherits = "release"
 debug = true
 strip = false
+
+[profile.fast]
+inherits = "release"
+lto = "off"
+codegen-units = 16
+incremental = true

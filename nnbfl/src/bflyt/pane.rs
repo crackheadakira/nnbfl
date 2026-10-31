@@ -962,6 +962,7 @@ impl BitPackable<u8> for BasePaneUsageFlags {
 pub struct MaterialUsageFlags {
     pub use_color_blend: bool,
     pub use_texture: bool,
+    pub override_capture_texture: bool,
     pub use_picture_procedural_shape: bool,
 }
 
@@ -970,6 +971,7 @@ impl BitPackable<u8> for MaterialUsageFlags {
         Self {
             use_color_blend: (flags & 0x01) != 0,
             use_texture: (flags & 0x02) != 0,
+            override_capture_texture: (flags & 0x04) != 0,
             use_picture_procedural_shape: (flags & 0x08) != 0,
         }
     }
@@ -982,6 +984,10 @@ impl BitPackable<u8> for MaterialUsageFlags {
 
         if self.use_texture {
             flags |= 0x02;
+        }
+
+        if self.override_capture_texture {
+            flags |= 0x04;
         }
 
         if self.use_picture_procedural_shape {

@@ -95,6 +95,9 @@ pub enum FormatError {
 
     #[error("Invalid layout hierarchy: {0}")]
     InvalidHierarchyChange(&'static str),
+
+    #[error("Archive can't be written: {0}")]
+    UnwritableArchive(String),
 }
 
 #[derive(Error, Debug)]

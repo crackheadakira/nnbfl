@@ -168,6 +168,11 @@ impl GlyphAtlas {
         self.dirty = true;
     }
 
+    /// Uploads again on the next [`Self::upload`], for a cache that lost the atlas
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
     pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cache: &mut TextureCache) {
         puffin::profile_function!();
 
@@ -213,16 +218,19 @@ impl FontFace {
         let descender = face.descender() as f32;
         let line_gap = face.line_gap() as f32;
 
-        let fontdue_font = fontdue::Font::from_bytes(
-            data.clone(),
-            fontdue::FontSettings {
-                collection_index: face_index,
-
-                ..Default::default()
-            },
-        )
-        .map_err(|e| log::error!("fontdue failed to load font: {e}"))
-        .ok()?;
+        let fontdue_font = {
+            puffin::profile_scope!("fontdue::Font::from_bytes");
+            fontdue::Font::from_bytes(
+                data,
+                fontdue::FontSettings {
+                    collection_index: face_index,
+                    load_substitutions: false,
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| log::error!("fontdue failed to load font: {e}"))
+            .ok()?
+        };
 
         Some(Self {
             face_index,
@@ -269,6 +277,7 @@ impl FontFace {
 pub struct FontCache {
     faces: Vec<FontFace>,
     name_to_id: HashMap<String, usize>,
+    placeholder_id: Option<usize>,
 }
 
 impl FontCache {
@@ -279,16 +288,23 @@ impl FontCache {
     pub fn get_or_load(&mut self, font_name: &str) -> Option<(usize, &FontFace)> {
         puffin::profile_function!();
 
-        if !self.name_to_id.contains_key(font_name) {
+        if let Some(&id) = self.name_to_id.get(font_name) {
+            return Some((id, &self.faces[id]));
+        }
+
+        let id = if let Some(id) = self.placeholder_id {
+            id
+        } else {
             let bytes = Self::load_placeholder_bytes(font_name)?;
             let face = FontFace::load(bytes, 0)?;
 
             let id = self.faces.len();
             self.faces.push(face);
-            self.name_to_id.insert(font_name.to_string(), id);
-        }
+            self.placeholder_id = Some(id);
+            id
+        };
 
-        let id = self.name_to_id[font_name];
+        self.name_to_id.insert(font_name.to_string(), id);
         Some((id, &self.faces[id]))
     }
 
@@ -308,8 +324,8 @@ pub struct GlyphData {
     pub atlas: GlyphAtlas,
 }
 
-impl GlyphData {
-    pub fn new() -> Self {
+impl Default for GlyphData {
+    fn default() -> Self {
         Self {
             fonts: FontCache::new(),
             atlas: GlyphAtlas::new(1024, 1024),

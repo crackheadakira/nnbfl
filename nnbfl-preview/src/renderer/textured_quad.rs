@@ -1,3 +1,4 @@
+use crate::pane_tree::PaneId;
 use std::collections::{HashMap, HashSet};
 
 use bytemuck::{Pod, Zeroable};
@@ -13,6 +14,8 @@ use wgpu::{BindGroupLayout, TextureView};
 
 use super::quad::Quad;
 use super::texture::TextureCache;
+use crate::anim_state::{MaterialAnimation, PaneAnimation};
+use crate::font::glyph_atlas::GLYPH_ATLAS_TEXTURE_NAME;
 use crate::pane_tree::PaneNode;
 use crate::renderer::quad::Uniforms;
 use crate::ui::general::PaneVisibilityFlags;
@@ -180,8 +183,21 @@ impl WgpuSamplerSettings {
 }
 
 #[derive(Clone, Debug)]
+pub struct QuadAppearance {
+    pub material_name: String,
+    pub texture_names: [Option<String>; 3],
+    pub tex_srts: Vec<MaterialTextureSrt>,
+    pub corner_tints: [[f32; 4]; 4],
+    pub black_color: u32,
+    pub white_color: u32,
+    pub packed_alpha_flags: u32,
+    pub indirect_rotation: f32,
+    pub indirect_scale: Vector2f,
+}
+
+#[derive(Clone, Debug)]
 pub struct TexturedQuad {
-    pub pane_idx: usize,
+    pub pane_idx: PaneId,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -215,6 +231,8 @@ pub struct TexturedQuad {
 
     pub indirect_rotation: f32,
     pub indirect_scale: Vector2f,
+
+    pub base_appearance: QuadAppearance,
 }
 
 pub fn build_indirect_matrices(rotation_deg: f32, scale: Vector2f) -> ([f32; 4], [f32; 4]) {
@@ -223,17 +241,50 @@ pub fn build_indirect_matrices(rotation_deg: f32, scale: Vector2f) -> ([f32; 4],
     let cos_r = rad.cos();
     let sin_r = rad.sin();
 
-    // TODO: fix still
-
-    let a0x = -cos_r * scale.x;
-    let a1x = sin_r * scale.y;
-    let a0y = sin_r * scale.x;
-    let a1y = cos_r * scale.y;
+    let a0x = cos_r * scale.x * 2.0;
+    let a1x = -sin_r * scale.y * 2.0;
+    let a0y = sin_r * scale.x * 2.0;
+    let a1y = cos_r * scale.y * 2.0;
 
     let tx = (a0x * -0.5) + (a1x * -0.5);
     let ty = (a0y * -0.5) + (a1y * -0.5);
 
     ([a0x, a1x, 0.0, tx], [a0y, a1y, 0.0, ty])
+}
+
+fn uv_sets_by_source(mat: &Material, texture_uvs: &[TextureUv]) -> Vec<TextureUv> {
+    let plain = TextureUv {
+        top_left: Vector2f::new(0.0, 0.0),
+        top_right: Vector2f::new(1.0, 0.0),
+        bottom_left: Vector2f::new(0.0, 1.0),
+        bottom_right: Vector2f::new(1.0, 1.0),
+    };
+
+    (0..3)
+        .map(|layer| {
+            let source = match mat.tex_coord_gens.get(layer).map(|g| g.tex_gen_source) {
+                Some(TexGenSrc::Tex1) => 1,
+                Some(TexGenSrc::Tex2) => 2,
+                Some(TexGenSrc::Tex0) => 0,
+                _ => layer,
+            };
+
+            texture_uvs
+                .get(source)
+                .or(texture_uvs.get(layer))
+                .cloned()
+                .unwrap_or_else(|| plain.clone())
+        })
+        .collect()
+}
+
+fn indirect_slots(combine_mode: u32) -> (bool, bool) {
+    let mode = combine_mode & 0xFF;
+    let each = mode == CombinerTevMode::EachIndirect as u32;
+    let single =
+        mode == CombinerTevMode::Indirect as u32 || mode == CombinerTevMode::BlendIndirect as u32;
+
+    (single || each, each)
 }
 
 pub fn vertex_corners_color_to_corner_tints(
@@ -242,20 +293,11 @@ pub fn vertex_corners_color_to_corner_tints(
     bottom_left_vertex_color: &Color4u8,
     bottom_right_vertex_color: &Color4u8,
 ) -> [[f32; 4]; 4] {
-    let to_f32_rgba = |color: &Color4u8| -> [f32; 4] {
-        let rgba: [f32; 4] = (*color).into();
-        if rgba[3] > 0.0 {
-            rgba
-        } else {
-            [1.0, 1.0, 1.0, 1.0]
-        }
-    };
-
     [
-        to_f32_rgba(top_left_vertex_color),
-        to_f32_rgba(top_right_vertex_color),
-        to_f32_rgba(bottom_left_vertex_color),
-        to_f32_rgba(bottom_right_vertex_color),
+        (*top_left_vertex_color).into(),
+        (*top_right_vertex_color).into(),
+        (*bottom_left_vertex_color).into(),
+        (*bottom_right_vertex_color).into(),
     ]
 }
 
@@ -283,7 +325,7 @@ impl TexturedQuad {
         size: Vector2f,
         corners: [[f32; 2]; 4],
         is_visible: bool,
-        pane_idx: usize,
+        pane_idx: PaneId,
         glyph_override: Option<GlyphQuadOverride<'_>>,
     ) -> Option<Self> {
         puffin::profile_function!();
@@ -303,12 +345,14 @@ impl TexturedQuad {
             return None;
         }
 
-        let base_uvs = PaneNode::compute_uvs(pane_data.texture_uvs);
+        let texture_uvs = uv_sets_by_source(mat, pane_data.texture_uvs);
+        let mut base_uvs = PaneNode::compute_uvs(&texture_uvs);
         let mut uvs = PaneNode::apply_srt_to_uvs(base_uvs, &mat.tex_srts);
 
         if let Some(glyph) = &glyph_override {
             for (idx, corner) in uvs.iter_mut().enumerate() {
                 corner[0] = glyph.uvs[idx];
+                base_uvs[idx][0] = glyph.uvs[idx];
             }
         }
 
@@ -511,7 +555,135 @@ impl TexturedQuad {
             material_idx: pane_data.material_idx,
             piece_id: pane_data.piece_id,
             rotation: pane_data.rotation,
+            base_appearance: QuadAppearance {
+                material_name: mat.material_name.trim_end_matches('\0').to_string(),
+                texture_names: [Some(tex_name.to_string()), get_name(1), get_name(2)],
+                tex_srts: mat.tex_srts.clone(),
+                corner_tints: pane_data.corner_tints,
+                black_color: black_packed,
+                white_color: white_packed,
+                packed_alpha_flags,
+                indirect_rotation,
+                indirect_scale,
+            },
         })
+    }
+
+    pub fn apply_animation(
+        &mut self,
+        pane: &PaneAnimation,
+        material: Option<&MaterialAnimation>,
+        alpha: f32,
+        visible: bool,
+    ) {
+        let base = &self.base_appearance;
+        let default_material = MaterialAnimation::default();
+        let material = material.unwrap_or(&default_material);
+
+        self.standard_material.visible = visible as u32;
+        self.tint[3] = alpha;
+
+        for (corner_idx, corner) in self.corner_tints.iter_mut().enumerate() {
+            for (channel, value) in corner.iter_mut().enumerate() {
+                *value = pane.corner_colors[corner_idx][channel]
+                    .unwrap_or(base.corner_tints[corner_idx][channel]);
+            }
+        }
+
+        let texture_name = if base.texture_names[0].as_deref() == Some(GLYPH_ATLAS_TEXTURE_NAME) {
+            base.texture_names[0].as_ref()
+        } else {
+            material.texture_names[0]
+                .as_ref()
+                .or(base.texture_names[0].as_ref())
+        };
+
+        if let Some(name) = texture_name
+            && self.texture_name != *name
+        {
+            self.texture_name.clone_from(name);
+        }
+
+        for (layer, name) in [(1, &mut self.texture_name1), (2, &mut self.texture_name2)] {
+            let resolved = material.texture_names[layer]
+                .as_ref()
+                .or(base.texture_names[layer].as_ref());
+            if name.as_ref() != resolved {
+                *name = resolved.cloned();
+            }
+        }
+
+        for (layer, base_srt) in base.tex_srts.iter().enumerate().take(3) {
+            let srt = material.texture_srts[layer].resolve(base_srt);
+            let previous = &self.tex_srts[layer];
+            if [
+                srt.translate_u,
+                srt.translate_v,
+                srt.rotate,
+                srt.scale_u,
+                srt.scale_v,
+            ] != [
+                previous.translate_u,
+                previous.translate_v,
+                previous.rotate,
+                previous.scale_u,
+                previous.scale_v,
+            ] {
+                for (corner, base_corner) in self.uvs.iter_mut().zip(self.base_uvs) {
+                    if layer != 0
+                        || base.texture_names[0].as_deref() != Some(GLYPH_ATLAS_TEXTURE_NAME)
+                    {
+                        corner[layer] =
+                            crate::anim_state::transform_uv_srt(&srt, base_corner[layer]);
+                    }
+                }
+                self.tex_srts[layer] = srt;
+            }
+        }
+
+        let rotation = material.indirect_rotation.unwrap_or(base.indirect_rotation);
+        let scale = Vector2f::new(
+            material.indirect_scale[0].unwrap_or(base.indirect_scale.x),
+            material.indirect_scale[1].unwrap_or(base.indirect_scale.y),
+        );
+
+        if rotation != self.indirect_rotation || scale != self.indirect_scale {
+            self.indirect_rotation = rotation;
+            self.indirect_scale = scale;
+            let (m0, m1) = build_indirect_matrices(rotation, scale);
+            self.standard_material.indirect_mtx0 = m0;
+            self.standard_material.indirect_mtx1 = m1;
+        }
+
+        self.standard_material.packed_alpha_flags = base.packed_alpha_flags;
+
+        if let Some(reference) = material.alpha_reference {
+            let reference = (reference.clamp(0.0, 1.0) * 255.0).round() as u32;
+
+            self.standard_material.packed_alpha_flags =
+                (base.packed_alpha_flags & !(0xFF << 3)) | (reference << 3);
+        }
+
+        for (packed, base_color, channels) in [
+            (
+                &mut self.standard_material.black_color,
+                base.black_color,
+                material.black_color,
+            ),
+            (
+                &mut self.standard_material.white_color,
+                base.white_color,
+                material.white_color,
+            ),
+        ] {
+            *packed = base_color;
+            for (channel, value) in channels.into_iter().enumerate() {
+                if let Some(value) = value {
+                    let shift = channel * 8;
+                    *packed = (*packed & !(0xFF << shift)) | ((value as u32) << shift);
+                }
+            }
+        }
     }
 }
 
@@ -522,7 +694,7 @@ pub enum PaneQuadData<'a> {
 }
 
 impl<'a> PaneQuadData<'a> {
-    pub fn pane_idx(&self) -> usize {
+    pub fn pane_idx(&self) -> PaneId {
         match self {
             PaneQuadData::Plain(q) => q.pane_idx,
             PaneQuadData::Textured(t) => t.pane_idx,
@@ -569,7 +741,7 @@ fn corner_vertex(data: &PaneQuadData, corner: usize, tint: [f32; 4]) -> Vertex {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum BatchKey {
+pub enum BatchKey {
     Plain,
     Textured {
         texture_name: String,
@@ -580,6 +752,31 @@ enum BatchKey {
         is_detailed: bool,
         detailed_combiner_hash: [i32; 6],
     },
+}
+
+impl BatchKey {
+    pub fn of(tq: &TexturedQuad) -> Self {
+        let mut detailed_combiner_hash = [0i32; 6];
+        if tq.is_detailed {
+            for (i, hash) in detailed_combiner_hash.iter_mut().enumerate() {
+                *hash = tq.detailed_combiner_material.stage_bits[i][0]
+                    ^ tq.detailed_combiner_material.stage_bits[i][1]
+                    ^ tq.detailed_combiner_material.stage_bits[i][2];
+            }
+        }
+
+        // better batch key needed, material idx defeats puprpose of batching, but for now
+        // helps avoid bad collisions.
+        BatchKey::Textured {
+            texture_name: tq.texture_name.clone(),
+            sampler: tq.sampler_0,
+            material_idx: tq.material_idx,
+            combine_mode: tq.standard_material.combine_mode,
+            combine_mode2: tq.standard_material.combine_mode2,
+            is_detailed: tq.is_detailed,
+            detailed_combiner_hash,
+        }
+    }
 }
 
 struct Batch {
@@ -604,7 +801,7 @@ struct Batch {
     key: BatchKey,
 
     /// [`TexturedQuad::pane_idx`] & [`TexturedQuad::piece_id`]
-    piece_keys: Vec<(usize, usize)>,
+    piece_keys: Vec<(PaneId, usize)>,
 }
 
 pub struct PaneRenderer {
@@ -621,7 +818,7 @@ pub struct PaneRenderer {
 
     batches: Vec<Batch>,
 
-    quad_lookup: HashMap<(usize, usize), usize>,
+    quad_lookup: HashMap<(PaneId, usize), usize>,
 }
 
 impl PaneRenderer {
@@ -820,28 +1017,7 @@ impl PaneRenderer {
     fn batch_key_for(data: &PaneQuadData) -> BatchKey {
         match data {
             PaneQuadData::Plain(_) => BatchKey::Plain,
-            PaneQuadData::Textured(tq) => {
-                let mut detailed_combiner_hash = [0i32; 6];
-                if tq.is_detailed {
-                    for (i, hash) in detailed_combiner_hash.iter_mut().enumerate() {
-                        *hash = tq.detailed_combiner_material.stage_bits[i][0]
-                            ^ tq.detailed_combiner_material.stage_bits[i][1]
-                            ^ tq.detailed_combiner_material.stage_bits[i][2];
-                    }
-                }
-
-                // better batch key needed, material idx defeats puprpose of batching, but for now
-                // helps avoid bad collisions.
-                BatchKey::Textured {
-                    texture_name: tq.texture_name.clone(),
-                    sampler: tq.sampler_0,
-                    material_idx: tq.material_idx,
-                    combine_mode: tq.standard_material.combine_mode,
-                    combine_mode2: tq.standard_material.combine_mode2,
-                    is_detailed: tq.is_detailed,
-                    detailed_combiner_hash,
-                }
-            }
+            PaneQuadData::Textured(tq) => BatchKey::of(tq),
         }
     }
 
@@ -1066,18 +1242,20 @@ impl PaneRenderer {
                             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                         });
 
+                    let (raw1, raw2) = indirect_slots(rep_quad.standard_material.combine_mode);
+
                     let view1 = rep_quad
                         .texture_name1
                         .as_ref()
                         .and_then(|n| texture_cache.get(n))
-                        .map(|t| &t.view)
+                        .map(|t| if raw1 { &t.indirect_view } else { &t.view })
                         .unwrap_or(view0);
 
                     let view2 = rep_quad
                         .texture_name2
                         .as_ref()
                         .and_then(|n| texture_cache.get(n))
-                        .map(|t| &t.view)
+                        .map(|t| if raw2 { &t.indirect_view } else { &t.view })
                         .unwrap_or(view0);
 
                     let sampler0 = make_sampler(rep_quad.sampler_0);
@@ -1144,10 +1322,10 @@ impl PaneRenderer {
 
     fn update_selection(
         batch: &mut Batch,
-        quad_lookup: &HashMap<(usize, usize), usize>,
+        quad_lookup: &HashMap<(PaneId, usize), usize>,
         ordered: &[PaneQuadData],
-        selected_idx: Option<usize>,
-        hidden_panes: &HashSet<usize>,
+        selected: &[PaneId],
+        hidden_panes: &HashSet<PaneId>,
         flags: PaneVisibilityFlags,
     ) -> bool {
         let mut dirty = false;
@@ -1167,13 +1345,13 @@ impl PaneRenderer {
             };
 
             let hidden = hidden_panes.contains(&pane_idx);
-            let selected = Some(pane_idx) == selected_idx;
+            let is_selected = selected.contains(&pane_idx);
 
             let tint = match data {
                 PaneQuadData::Plain(q) => {
                     let base_tint = flags.plain_color(q, hidden);
 
-                    if selected && !hidden {
+                    if is_selected && !hidden {
                         highlight(base_tint)
                     } else {
                         base_tint
@@ -1212,7 +1390,7 @@ impl PaneRenderer {
         device: &wgpu::Device,
         ordered: &[PaneQuadData],
         texture_cache: &TextureCache,
-        quad_lookup: &HashMap<(usize, usize), usize>,
+        quad_lookup: &HashMap<(PaneId, usize), usize>,
         placeholder_view: &TextureView,
         texture_bgl: &BindGroupLayout,
     ) {
@@ -1247,18 +1425,20 @@ impl PaneRenderer {
         let gpu_tex0 = texture_cache.get(tex0_name);
         let view0 = gpu_tex0.map(|t| &t.view).unwrap_or(placeholder_view);
 
+        let (raw1, raw2) = indirect_slots(tq.standard_material.combine_mode);
+
         let view1 = tq
             .texture_name1
             .as_deref()
             .and_then(|n| texture_cache.get(n))
-            .map(|t| &t.view)
+            .map(|t| if raw1 { &t.indirect_view } else { &t.view })
             .unwrap_or(view0);
 
         let view2 = tq
             .texture_name2
             .as_deref()
             .and_then(|n| texture_cache.get(n))
-            .map(|t| &t.view)
+            .map(|t| if raw2 { &t.indirect_view } else { &t.view })
             .unwrap_or(view0);
 
         let make_sampler = |sampler_settings: WgpuSamplerSettings| -> wgpu::Sampler {
@@ -1392,18 +1572,6 @@ impl PaneRenderer {
             (pane_cx, pane_cy)
         };
 
-        let srt_tu = quad
-            .tex_srts
-            .get(layer_idx)
-            .map(|s| s.translate_u)
-            .unwrap_or(0.0);
-
-        let srt_tv = quad
-            .tex_srts
-            .get(layer_idx)
-            .map(|s| s.translate_v)
-            .unwrap_or(0.0);
-
         let proj_scale_x = quad.proj_scales[layer_idx][0];
         let proj_scale_y = quad.proj_scales[layer_idx][1];
 
@@ -1412,40 +1580,47 @@ impl PaneRenderer {
 
         let m_s = 1.0 / (base_w * proj_scale_x);
         let m_t = 1.0 / (base_h * proj_scale_y);
+        let total_x = proj_translate_x + cx;
+        let total_y = proj_translate_y + cy;
 
-        if adjust_sr {
-            let srt = quad.tex_srts.get(layer_idx);
-            let srt_scale_x = srt.map(|s| s.scale_u).unwrap_or(1.0);
-            let srt_scale_y = srt.map(|s| s.scale_v).unwrap_or(1.0);
-            let srt_rotate = srt.map(|s| s.rotate).unwrap_or(0.0);
+        let projection = if adjust_sr {
+            let (sin_r, cos_r) = quad.rotation.z.to_radians().sin_cos();
 
-            let rad = (srt_rotate + quad.rotation.z).to_radians();
-            let (sin_r, cos_r) = rad.sin_cos();
+            let m00 = m_s * cos_r;
+            let m01 = m_s * sin_r;
+            let m10 = -m_t * sin_r;
+            let m11 = m_t * cos_r;
 
-            let base_scale_s = 1.0 / (base_w * proj_scale_x);
-            let base_scale_t = 1.0 / (base_h * proj_scale_y);
-
-            let s_factor = base_scale_s * srt_scale_x;
-            let t_factor = base_scale_t * srt_scale_y;
-
-            let m00 = s_factor * cos_r;
-            let m01 = s_factor * sin_r;
-            let m10 = -t_factor * sin_r;
-            let m11 = t_factor * cos_r;
-
-            let total_x = proj_translate_x + cx;
-            let total_y = proj_translate_y + cy;
-
-            let trans_s = 0.5 - (total_x * m00 + total_y * m01) + srt_tu;
-            let trans_t = 0.5 - (total_x * m10 + total_y * m11) + srt_tv;
-
-            [[m00, m01, 0.0, trans_s], [m10, m11, 0.0, trans_t]]
+            [
+                [m00, m01, 0.0, 0.5 - (total_x * m00 + total_y * m01)],
+                [m10, m11, 0.0, 0.5 - (total_x * m10 + total_y * m11)],
+            ]
         } else {
-            let trans_s = 0.5 - (proj_translate_x + cx) * m_s + srt_tu;
-            let trans_t = 0.5 - (proj_translate_y + cy) * m_t + srt_tv;
+            [
+                [m_s, 0.0, 0.0, 0.5 - total_x * m_s],
+                [0.0, m_t, 0.0, 0.5 - total_y * m_t],
+            ]
+        };
 
-            [[m_s, 0.0, 0.0, trans_s], [0.0, m_t, 0.0, trans_t]]
-        }
+        let Some(srt) = quad.tex_srts.get(layer_idx) else {
+            return projection;
+        };
+
+        let (sin_r, cos_r) = srt.rotate.to_radians().sin_cos();
+        let su = [cos_r * srt.scale_u, -sin_r * srt.scale_v];
+        let sv = [sin_r * srt.scale_u, cos_r * srt.scale_v];
+        let [ps, pt] = projection;
+
+        let row = |k: [f32; 2], offset: f32| -> [f32; 4] {
+            [
+                k[0] * ps[0] + k[1] * pt[0],
+                k[0] * ps[1] + k[1] * pt[1],
+                0.0,
+                k[0] * (ps[3] - 0.5) + k[1] * (pt[3] - 0.5) + offset + 0.5,
+            ]
+        };
+
+        [row(su, srt.translate_u), row(sv, srt.translate_v)]
     }
 
     fn get_texture_size(
@@ -1469,8 +1644,8 @@ impl PaneRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ordered: &mut [PaneQuadData],
-        selected_idx: Option<usize>,
-        hidden_panes: &HashSet<usize>,
+        selected: &[PaneId],
+        hidden_panes: &HashSet<PaneId>,
         flags: PaneVisibilityFlags,
         texture_cache: &TextureCache,
         layout_size: Vector2f,
@@ -1515,7 +1690,7 @@ impl PaneRenderer {
                         batch,
                         &self.quad_lookup,
                         ordered,
-                        selected_idx,
+                        selected,
                         hidden_panes,
                         flags,
                     );
@@ -1536,10 +1711,10 @@ impl PaneRenderer {
     }
 
     fn update_anim(
-        quad_lookup: &HashMap<(usize, usize), usize>,
+        quad_lookup: &HashMap<(PaneId, usize), usize>,
         batch: &mut Batch,
         ordered: &[PaneQuadData],
-        hidden_panes: &HashSet<usize>,
+        hidden_panes: &HashSet<PaneId>,
         flags: PaneVisibilityFlags,
     ) -> bool {
         let mut dirty = false;
@@ -1577,10 +1752,10 @@ impl PaneRenderer {
 
     fn flush_mat_buffers(
         batch: &mut Batch,
-        quad_lookup: &HashMap<(usize, usize), usize>,
+        quad_lookup: &HashMap<(PaneId, usize), usize>,
         queue: &wgpu::Queue,
         ordered: &[PaneQuadData],
-        hidden_panes: &HashSet<usize>,
+        hidden_panes: &HashSet<PaneId>,
     ) {
         if !matches!(batch.key, BatchKey::Textured { .. }) {
             return;

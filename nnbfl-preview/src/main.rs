@@ -1,22 +1,25 @@
+mod anim_edit;
 mod anim_state;
+mod archive;
 mod archive_browser;
 mod camera;
 mod chinese_font;
+mod cli;
 mod edit_history;
 mod error;
 mod font;
 mod game_config;
 mod keybinds;
+mod ops;
+mod pane_factory;
 mod pane_tree;
+mod render;
 mod renderer;
+mod texture_import;
 mod traits;
 mod ui;
 
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Instant,
-};
+use std::{collections::HashMap, path::Path, sync::Arc, time::Instant};
 
 use camera::Camera;
 use chinese_font::{FontError, setup_chinese_fonts};
@@ -43,11 +46,12 @@ use winit::{
 };
 
 use crate::{
+    archive::{DocStore, EntryPath, LayoutSource, anim_owner, file_stem},
     archive_browser::{ArchiveEntry, ArchiveScan},
-    edit_history::EditHistory,
+    edit_history::{AnimSession, EditCtx, EditHistory, MaterialSession, PaneSession, PaneSnapshot},
     error::LoadError,
     font::glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
-    pane_tree::{DirtyFlags, PaneTree},
+    pane_tree::{Anchor, PaneId, PaneTree},
     renderer::{
         selection::{Handle, SelectionRenderer, point_in_quad},
         texture::{TexturePreviewData, TexturePreviewPipeline},
@@ -142,7 +146,7 @@ impl GpuState {
         let preview_pipeline = TexturePreviewPipeline::new(&device, surface_format);
         egui_renderer.callback_resources.insert(TexturePreviewData {
             pipeline: preview_pipeline,
-            bind_groups: std::collections::HashMap::new(),
+            bind_groups: HashMap::new(),
         });
 
         Self {
@@ -177,14 +181,6 @@ impl GpuState {
     ) {
         puffin::GlobalProfiler::lock().new_frame();
         puffin::profile_function!();
-
-        if ctx.ui_state.material_editor.pending_upload
-            && let Some(layout) = ctx.layout_tabs.active_mut()
-        {
-            puffin::profile_scope!("material_recompute");
-            ctx.ui_state.material_editor.pending_upload = false;
-            layout.tree.recompute_dirty_materials();
-        }
 
         if ctx.layout_tabs.glyphs.atlas.is_dirty() {
             ctx.layout_tabs
@@ -280,8 +276,62 @@ impl GpuState {
 
         egui_state.handle_platform_output(window, full_output.platform_output.clone());
 
+        let editing =
+            egui_ctx.input(|i| i.pointer.any_down()) || egui_ctx.egui_wants_keyboard_input();
+
+        if !editing && let Some(layout) = ctx.layout_tabs.active_mut() {
+            layout.commit_sessions();
+        }
+
+        if let Some(layout) = ctx.layout_tabs.active_mut()
+            && let Some(pending_key_edit) = layout.timeline.pending_key_edit.take()
+        {
+            puffin::profile_scope!("pending_key_edit");
+            layout.begin_anim_session();
+            layout
+                .timeline
+                .anim_player
+                .apply_key_edit(&pending_key_edit);
+        }
+
+        if let Some(layout) = ctx.layout_tabs.active_mut()
+            && let Some(frame_count) = layout.timeline.pending_frame_count.take()
+        {
+            layout.begin_anim_session();
+            let player = &mut layout.timeline.anim_player;
+
+            if let Some(anim) = player.active.and_then(|i| player.anims.get_mut(i)) {
+                anim.bflan.anim_info.frame_count = frame_count;
+            }
+        }
+
+        if let Some(layout) = ctx.layout_tabs.active_mut()
+            && let Some(pending_slope_edit) = layout.timeline.pending_slope_edit.take()
+        {
+            puffin::profile_scope!("pending_slope_edit");
+            layout.begin_anim_session();
+            layout
+                .timeline
+                .anim_player
+                .apply_slope_edit(&pending_slope_edit);
+        }
+
         if let Some(layout) = ctx.layout_tabs.active_mut() {
             puffin::profile_scope!("pane_renderer_logic");
+
+            render::prepare_frame(
+                &mut self.pane_renderer,
+                &self.device,
+                &self.queue,
+                &self.texture_cache,
+                layout,
+                &render::FrameView {
+                    selected: &ctx.ui_state.pane_tree_view.selection,
+                    hidden: &ctx.ui_state.pane_tree_view.hidden_panes,
+                    flags: ctx.ui_state.visiblity_flags,
+                },
+            );
+
             match ctx
                 .ui_state
                 .pane_tree_view
@@ -295,21 +345,6 @@ impl GpuState {
                 ),
                 None => self.selection_renderer.clear(),
             }
-
-            let layout_size = layout.tree.layout_size;
-
-            let mut render_quads = layout.tree.collect_render_quads();
-
-            self.pane_renderer.update_visuals(
-                &self.device,
-                &self.queue,
-                &mut render_quads,
-                ctx.ui_state.pane_tree_view.selected_pane,
-                &ctx.ui_state.pane_tree_view.hidden_panes,
-                ctx.ui_state.visiblity_flags,
-                &self.texture_cache,
-                layout_size,
-            );
         }
 
         let paint_jobs = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
@@ -317,26 +352,6 @@ impl GpuState {
             size_in_pixels: [self.config.width, self.config.height],
             pixels_per_point: full_output.pixels_per_point,
         };
-
-        if let Some(layout) = ctx.layout_tabs.active_mut()
-            && let Some(pending_key_edit) = layout.timeline.pending_key_edit.take()
-        {
-            puffin::profile_scope!("pending_key_edit");
-            layout
-                .timeline
-                .anim_player
-                .apply_key_edit(&pending_key_edit);
-        }
-
-        if let Some(layout) = ctx.layout_tabs.active_mut()
-            && let Some(pending_slope_edit) = layout.timeline.pending_slope_edit.take()
-        {
-            puffin::profile_scope!("pending_slope_edit");
-            layout
-                .timeline
-                .anim_player
-                .apply_slope_edit(&pending_slope_edit);
-        }
 
         for (id, delta) in &full_output.textures_delta.set {
             puffin::profile_scope!("egui_update_texture");
@@ -442,14 +457,18 @@ pub struct RenderContext<'a> {
 }
 
 struct DragState {
-    pane_idx: usize,
+    pane_idx: PaneId,
     handle: Handle,
+    start_screen: [f32; 2],
+    moved: bool,
+    cycles: bool,
     start_world: [f32; 2],
     start_translation: Vector3f,
     start_size: Vector2f,
     rotate_z: f32,
 }
 
+#[derive(Default)]
 pub struct LayoutTabs {
     pub items: Vec<LayoutData>,
     pub active_index: usize,
@@ -457,20 +476,17 @@ pub struct LayoutTabs {
 }
 
 impl LayoutTabs {
-    pub fn new() -> Self {
-        Self {
-            items: Vec::new(),
-            active_index: 0,
-            glyphs: GlyphData::new(),
-        }
-    }
-
     pub fn active(&self) -> Option<&LayoutData> {
         self.items.get(self.active_index)
     }
 
     pub fn active_mut(&mut self) -> Option<&mut LayoutData> {
         self.items.get_mut(self.active_index)
+    }
+
+    pub fn active_with_glyphs(&mut self) -> Option<(&mut LayoutData, &mut GlyphData)> {
+        let layout = self.items.get_mut(self.active_index)?;
+        Some((layout, &mut self.glyphs))
     }
 
     pub fn active_timeline(&self) -> Option<&TimelineState> {
@@ -536,17 +552,196 @@ impl LayoutTabs {
 
 pub struct LayoutData {
     pub tree: PaneTree,
+    pub source: Option<LayoutSource>,
     pub is_centered: bool,
     pub parts_size: Vector2f,
     pub file_name: String,
     pub version: VersionFormat,
     pub history: EditHistory,
+    pub bntx_source: Option<EntryPath>,
+    anim_session: Option<AnimSession>,
+    material_session: Option<MaterialSession>,
+    pane_session: Option<PaneSession>,
 
     pub timeline: TimelineState,
 }
 
 impl LayoutData {
-    const EDIT_HISTORY_LIMIT: usize = 20;
+    const EDIT_HISTORY_LIMIT: usize = 200;
+    const EDIT_HISTORY_BUDGET: usize = 256 * 1024 * 1024;
+
+    pub fn edit_ctx<'a>(
+        &'a mut self,
+        glyphs: &'a mut GlyphData,
+    ) -> (&'a mut EditHistory, EditCtx<'a>) {
+        (
+            &mut self.history,
+            EditCtx {
+                tree: &mut self.tree,
+                timeline: &mut self.timeline,
+                glyphs,
+            },
+        )
+    }
+
+    fn begin_anim_session(&mut self) {
+        if self.anim_session.is_some() {
+            return;
+        }
+
+        let player = &self.timeline.anim_player;
+
+        if let Some(anim) = player.active
+            && let Some(instance) = player.anims.get(anim)
+        {
+            self.anim_session = Some(AnimSession {
+                anim,
+                baseline: instance.bflan.anim_info.clone(),
+            });
+        }
+    }
+
+    pub fn commit_sessions(&mut self) {
+        self.commit_anim_session();
+        self.commit_material_session();
+        self.commit_pane_session();
+    }
+
+    pub fn material_baseline(&self, index: u16) -> Option<MaterialSession> {
+        if self
+            .material_session
+            .as_ref()
+            .is_some_and(|s| s.index == index)
+        {
+            return None;
+        }
+
+        let material = self
+            .tree
+            .material_list
+            .as_ref()?
+            .materials
+            .get(index as usize)?;
+        Some(MaterialSession {
+            index,
+            material: material.clone(),
+            textures: self.tree.texture_list.clone(),
+        })
+    }
+
+    pub fn note_material_edit(&mut self, baseline: Option<MaterialSession>) {
+        if let Some(baseline) = baseline {
+            self.commit_material_session();
+            self.material_session = Some(baseline);
+        }
+    }
+
+    fn commit_material_session(&mut self) {
+        let Some(session) = self.material_session.take() else {
+            return;
+        };
+
+        let Some(material) = self
+            .tree
+            .material_list
+            .as_ref()
+            .and_then(|list| list.materials.get(session.index as usize))
+        else {
+            return;
+        };
+
+        let label = format!(
+            "Edit material {}",
+            material.material_name.trim_end_matches('\0')
+        );
+
+        let mut commands = Vec::new();
+        if !same_serialized(material, &session.material) {
+            commands.push(edit_history::AppliedCommand::ReplaceMaterial {
+                index: session.index,
+                before: Box::new(session.material),
+                after: Box::new(material.clone()),
+            });
+        }
+
+        if !same_serialized(&self.tree.texture_list, &session.textures) {
+            commands.push(edit_history::AppliedCommand::ReplaceTextureList {
+                before: Box::new(session.textures),
+                after: Box::new(self.tree.texture_list.clone()),
+            });
+        }
+
+        match commands.len() {
+            0 => {}
+            1 => self.history.record(label, commands.remove(0)),
+            _ => self
+                .history
+                .record(label, edit_history::AppliedCommand::Batch(commands)),
+        }
+    }
+
+    pub fn pane_baseline(&self, pane: PaneId) -> Option<PaneSession> {
+        if self.pane_session.as_ref().is_some_and(|s| s.pane == pane) {
+            return None;
+        }
+
+        let node = self.tree.find_by_idx(pane)?;
+        Some(PaneSession {
+            pane,
+            snapshot: PaneSnapshot::of(node),
+        })
+    }
+
+    pub fn note_pane_edit(&mut self, baseline: Option<PaneSession>) {
+        if let Some(baseline) = baseline {
+            self.commit_pane_session();
+            self.pane_session = Some(baseline);
+        }
+    }
+
+    fn commit_pane_session(&mut self) {
+        let Some(session) = self.pane_session.take() else {
+            return;
+        };
+
+        let Some(node) = self.tree.find_by_idx(session.pane) else {
+            return;
+        };
+
+        let after = PaneSnapshot::of(node);
+        let before = session.snapshot;
+        if same_serialized(&before.section, &after.section)
+            && before.label == after.label
+            && same_serialized(&before.user_data, &after.user_data)
+        {
+            return;
+        }
+
+        let label = format!("Edit {}", after.label.trim_end_matches('\0'));
+        self.history.record(
+            label,
+            edit_history::AppliedCommand::ReplacePane {
+                pane_idx: session.pane,
+                before: Box::new(before),
+                after: Box::new(after),
+            },
+        );
+    }
+
+    fn commit_anim_session(&mut self) {
+        let Some(session) = self.anim_session.take() else {
+            return;
+        };
+
+        if let Some(instance) = self.timeline.anim_player.anims.get(session.anim)
+            && instance.bflan.anim_info != session.baseline
+        {
+            let label = format!("Edit keys in {}", instance.name);
+            let after = instance.bflan.anim_info.clone();
+            self.history
+                .record_anim(label, session.anim, session.baseline, after);
+        }
+    }
 
     pub fn bake_bflyt(&self) -> Bflyt {
         let mut nodes = Vec::new();
@@ -578,35 +773,112 @@ impl LayoutData {
         }
     }
 
+    pub fn save_problems(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+
+        let textures: Vec<&str> = self
+            .tree
+            .texture_list
+            .iter()
+            .flat_map(|list| list.textures.iter().map(String::as_str))
+            .collect();
+
+        for material in self.tree.material_list.iter().flat_map(|l| &l.materials) {
+            if material.material_name.len() > 28 {
+                problems.push(format!(
+                    "Material name '{}' is longer than 28 bytes",
+                    material.material_name
+                ));
+            }
+
+            for tex_map in &material.tex_maps {
+                if !textures.contains(&tex_map.texture_name.as_str()) {
+                    problems.push(format!(
+                        "Material '{}' uses texture '{}', which isn't in the texture list",
+                        material.material_name, tex_map.texture_name
+                    ));
+                }
+            }
+        }
+
+        for node in self.tree.iter().filter(|n| n.parts_source.is_none()) {
+            if node.label.len() > 24 {
+                problems.push(format!(
+                    "Pane name '{}' is longer than 24 bytes",
+                    node.label
+                ));
+            }
+        }
+
+        problems
+    }
+
     pub fn load_from_buffer(
-        all_files: Vec<MagicFiles>,
+        all_files: Vec<(EntryPath, MagicFiles)>,
+        source: Option<LayoutSource>,
         layout_dir: Option<&Path>,
         archive_scan_entries: Option<&[ArchiveEntry]>,
         glyphs: &mut GlyphData,
     ) -> Result<(Self, Vec<String>), LoadError> {
-        let bflyt_bytes = all_files
+        let (bflyt_path, bflyt_bytes) = all_files
             .iter()
-            .find_map(|file| match file {
-                MagicFiles::Bflyt(_, bytes) => Some(bytes),
+            .find_map(|(path, file)| match file {
+                MagicFiles::Bflyt(_, bytes)
+                    if source.as_ref().is_none_or(|source| source.layout == *path) =>
+                {
+                    Some((path, bytes))
+                }
                 _ => None,
             })
             .ok_or(LoadError::NoBflytFound)?;
 
         let bflyt = Bflyt::parse_file(bflyt_bytes).map_err(LoadError::BflytParse)?;
 
+        let mut layout_names: Vec<&str> = all_files
+            .iter()
+            .filter_map(|(_, file)| match file {
+                MagicFiles::Bflyt(Some(name), _) => Some(file_stem(name)),
+                _ => None,
+            })
+            .collect();
+        layout_names.push(&bflyt.layout.name);
+        let owned: Vec<EntryPath> = all_files
+            .iter()
+            .filter_map(|(path, file)| match file {
+                MagicFiles::Bflan(Some(name), _)
+                    if anim_owner(file_stem(name), layout_names.iter().copied())
+                        == Some(bflyt.layout.name.as_str()) =>
+                {
+                    Some(path.clone())
+                }
+                _ => None,
+            })
+            .collect();
+
+        // The opened layout is left out, so it can't become a parts layout of itself
+        let archive_layouts: Vec<(String, Vec<u8>)> = all_files
+            .iter()
+            .filter_map(|(path, file)| match file {
+                MagicFiles::Bflyt(Some(name), bytes) if path != bflyt_path => {
+                    Some((file_stem(name).to_string(), bytes.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+
         let (discovered_bntxs, discovered_bflans) = all_files
             .into_par_iter()
             .fold(
                 || (Vec::new(), Vec::new()),
-                |(mut bntxs, mut bflans), magic_file| {
+                |(mut bntxs, mut bflans), (path, magic_file)| {
                     match magic_file {
                         MagicFiles::Bntx(_, bytes) => match Bntx::parse(&bytes) {
-                            Ok(bntx) => bntxs.push(bntx),
+                            Ok(bntx) => bntxs.push((path, bntx)),
                             Err(e) => log::error!("TextureCache: failed to parse BNTX: {e}"),
                         },
                         MagicFiles::Bflan(file_name, bytes) => {
                             if let Ok(bflan) = Bflan::parse_file(&bytes) {
-                                bflans.push((file_name, bflan));
+                                bflans.push((path, file_name, bflan));
                             }
                         }
                         _ => {}
@@ -624,14 +896,14 @@ impl LayoutData {
             );
 
         let mut timeline = TimelineState::default();
-        for (file_name, bflan) in discovered_bflans {
+        for (path, file_name, bflan) in discovered_bflans {
             if file_name
                 .as_ref()
                 .is_some_and(|f| f.contains(&bflyt.layout.name))
+                || file_name.is_none()
             {
-                timeline.anim_player.load(bflan);
-            } else if file_name.is_none() {
-                timeline.anim_player.load(bflan);
+                let saved_to = (source.is_some() && owned.contains(&path)).then_some(path);
+                timeline.anim_player.load(bflan, saved_to);
             }
         }
 
@@ -659,41 +931,43 @@ impl LayoutData {
             y: bflyt.layout.parts_height,
         };
 
+        let bntx_source = discovered_bntxs
+            .first()
+            .map(|(path, _)| path.clone())
+            .filter(|_| source.is_some());
+
         let tree = PaneTree::from_bflyt(
             bflyt,
             layout_dir,
             layout_name.clone(),
             archive_scan_entries,
-            discovered_bntxs,
+            &archive_layouts,
+            discovered_bntxs.into_iter().map(|(_, bntx)| bntx).collect(),
             glyphs,
         );
 
         let layout_data = Self {
             tree,
+            source,
             timeline,
             is_centered,
             parts_size,
             file_name: layout_name,
             version,
-            history: EditHistory::new(Self::EDIT_HISTORY_LIMIT),
+            history: EditHistory::new(Self::EDIT_HISTORY_LIMIT, Self::EDIT_HISTORY_BUDGET),
+            bntx_source,
+            anim_session: None,
+            material_session: None,
+            pane_session: None,
         };
 
         Ok((layout_data, anim_names))
-    }
-
-    pub fn reset_to_base(&mut self) {
-        self.tree.for_each_mut(|node| {
-            node.textured_quad = node.base_textured_quad.clone();
-            node.dirty
-                .insert(DirtyFlags::TRANSFORM | DirtyFlags::MATERIAL | DirtyFlags::VERTICES);
-        });
-
-        self.tree.recompute_dirty();
     }
 }
 
 struct App {
     tabs: LayoutTabs,
+    docs: DocStore,
     ui_state: UiState,
     camera: Camera,
     egui_ctx: egui::Context,
@@ -707,7 +981,8 @@ struct App {
 impl App {
     fn new() -> Self {
         Self {
-            tabs: LayoutTabs::new(),
+            tabs: LayoutTabs::default(),
+            docs: DocStore::default(),
             ui_state: UiState::default(),
             camera: Camera::new(),
             egui_ctx: egui::Context::default(),
@@ -759,6 +1034,9 @@ impl App {
         self.drag_state = Some(DragState {
             pane_idx: idx,
             handle,
+            start_screen: screen_pos,
+            moved: false,
+            cycles: matches!(handle, Handle::Body),
             start_world: world_pos,
             start_translation: translation,
             start_size: size,
@@ -769,6 +1047,21 @@ impl App {
     }
 
     fn update_drag(&mut self, screen_pos: [f32; 2]) {
+        const DEAD_ZONE: f32 = 4.0;
+
+        if let Some(drag) = &mut self.drag_state
+            && !drag.moved
+        {
+            let dx = screen_pos[0] - drag.start_screen[0];
+            let dy = screen_pos[1] - drag.start_screen[1];
+
+            if dx * dx + dy * dy < DEAD_ZONE * DEAD_ZONE {
+                return;
+            }
+
+            drag.moved = true;
+        }
+
         let Some(drag) = &self.drag_state else { return };
 
         let Some(layout) = self.tabs.active_mut() else {
@@ -879,6 +1172,14 @@ impl App {
             return;
         };
 
+        if !drag.moved {
+            if drag.cycles {
+                self.select_below(self.camera.cursor_screen, drag.pane_idx);
+            }
+
+            return;
+        }
+
         let Some(layout) = self.tabs.active_mut() else {
             return;
         };
@@ -890,6 +1191,14 @@ impl App {
         let Some(base) = node.section.get_base_pane() else {
             return;
         };
+
+        let verb = match drag.handle {
+            Handle::Body => "Move",
+            Handle::Rotation => "Rotate",
+            _ => "Resize",
+        };
+
+        let label = format!("{verb} {}", node.label.trim_end_matches('\0'));
 
         let before = edit_history::PaneTransform {
             translation: drag.start_translation,
@@ -905,19 +1214,41 @@ impl App {
 
         layout
             .history
-            .record_transform(drag.pane_idx, before, after);
+            .record_transform(label, drag.pane_idx, before, after);
     }
 
     fn try_select_at(&mut self, screen_pos: [f32; 2]) {
+        let pane = self.pane_at(screen_pos);
+        self.ui_state.pane_tree_view.select(pane);
+    }
+
+    fn select_below(&mut self, screen_pos: [f32; 2], current: PaneId) {
+        let stack = self.panes_at(screen_pos);
+
+        let next = match stack.iter().position(|&p| p == current) {
+            Some(i) => stack.get((i + 1) % stack.len()).copied(),
+            None => stack.first().copied(),
+        };
+
+        if next.is_some() {
+            self.ui_state.pane_tree_view.select(next);
+        }
+    }
+
+    fn pane_at(&self, screen_pos: [f32; 2]) -> Option<PaneId> {
+        self.panes_at(screen_pos).first().copied()
+    }
+
+    fn panes_at(&self, screen_pos: [f32; 2]) -> Vec<PaneId> {
         let Some(layout) = self.tabs.active() else {
-            return;
+            return Vec::new();
         };
 
         puffin::profile_function!();
 
         let world_pos = self.camera.screen_to_world(screen_pos);
 
-        let mut best = None;
+        let mut stack = Vec::new();
 
         for node in layout.tree.iter() {
             if !node.visible
@@ -936,32 +1267,53 @@ impl App {
                 continue;
             }
 
-            best = Some(node.pane_idx);
+            stack.push(node.pane_idx);
         }
 
-        self.ui_state.pane_tree_view.select(best);
+        stack.reverse();
+        stack
     }
 
-    fn open_file_from_path(&mut self, path: &PathBuf) {
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                let mut detected_files = Vec::new();
-                let file_name = path
-                    .file_name()
-                    .and_then(|f| Some(f.to_string_lossy().to_string()));
-
-                extract_all_files_recursive(bytes, &mut detected_files, file_name);
-                self.open_file_from_buffer(detected_files);
-            }
-
+    fn open_document(&mut self, path: &Path, scope: EntryPath, layout: Option<EntryPath>) {
+        let doc = match self.docs.open(path) {
+            Ok(doc) => doc,
             Err(err) => {
-                log::error!("Failed to read file at {path:?}: {err}");
-                self.ui_state.error_message = Some(format!("Failed to read file: {err}"));
+                log::error!("{err}");
+                self.ui_state.error_message = Some(err);
+                return;
             }
+        };
+
+        let files = self.docs.docs[doc].files(&scope);
+        let layout = layout.or_else(|| {
+            files.iter().find_map(|(path, file)| {
+                matches!(file, MagicFiles::Bflyt(..)).then(|| path.clone())
+            })
+        });
+
+        let Some(layout) = layout else {
+            self.ui_state.error_message = Some(LoadError::NoBflytFound.to_string());
+            return;
+        };
+
+        if let Some(tab) = self.tabs.items.iter().position(|tab| {
+            tab.source
+                .as_ref()
+                .is_some_and(|source| source.doc == doc && source.layout == layout)
+        }) {
+            self.tabs.active_index = tab;
+            self.switch_active_tab();
+            return;
         }
+
+        self.open_file_from_buffer(files, Some(LayoutSource { doc, layout }));
     }
 
-    fn open_file_from_buffer(&mut self, all_files: Vec<MagicFiles>) {
+    fn open_file_from_buffer(
+        &mut self,
+        all_files: Vec<(EntryPath, MagicFiles)>,
+        source: Option<LayoutSource>,
+    ) {
         let is_dir_stale = match (
             &self.ui_state.archive_browser.layout_dir,
             &self.ui_state.archive_browser.archive_scan,
@@ -987,6 +1339,7 @@ impl App {
 
         match LayoutData::load_from_buffer(
             all_files,
+            source,
             layout_dir,
             archive_scan_entries,
             &mut self.tabs.glyphs,
@@ -1060,8 +1413,12 @@ impl App {
     }
 
     fn switch_active_tab(&mut self) {
+        for layout in &mut self.tabs.items {
+            layout.commit_sessions();
+        }
+
         self.ui_state.anim_names = self.tabs.active_anim_names();
-        self.ui_state.pane_tree_view.selected_pane = None;
+        self.ui_state.pane_tree_view.select(None);
 
         if let Some(gpu) = &mut self.gpu {
             self.tabs
@@ -1105,7 +1462,7 @@ impl App {
     }
 
     fn clear_active_view(&mut self) {
-        self.ui_state.pane_tree_view.selected_pane = None;
+        self.ui_state.pane_tree_view.select(None);
         self.ui_state.texture_editor.selected_texture = None;
         self.ui_state.anim_names.clear();
 
@@ -1127,38 +1484,183 @@ impl App {
     }
 
     fn perform_pane_edit(&mut self, edit: edit_history::PaneEdit) {
-        let Some(layout) = self.tabs.active_mut() else {
+        self.perform_pane_edits(|_| vec![edit]);
+    }
+
+    fn perform_pane_edits(&mut self, edits: impl FnOnce(&PaneTree) -> Vec<edit_history::PaneEdit>) {
+        let Some((layout, glyphs)) = self.tabs.active_with_glyphs() else {
             return;
         };
 
-        let target_idx = match &edit {
-            edit_history::PaneEdit::Delete { target_idx } => Some(*target_idx),
-            edit_history::PaneEdit::Duplicate { source_idx } => Some(*source_idx),
-            edit_history::PaneEdit::Insert { .. } => None,
-            edit_history::PaneEdit::Move { source_idx, .. } => Some(*source_idx),
-        };
-
-        if let Some(idx) = target_idx
-            && layout
+        let is_parts_content = |idx: PaneId| {
+            layout
                 .tree
                 .find_by_idx(idx)
                 .is_some_and(|n| n.parts_source.is_some())
-        {
+        };
+
+        let edits: Vec<_> = edits(&layout.tree)
+            .into_iter()
+            .filter(|edit| {
+                let target_idx = edit.target_pane();
+
+                !target_idx.is_some_and(is_parts_content)
+            })
+            .collect();
+
+        if edits.is_empty() {
             return;
         }
 
-        let resulting_idx = layout.history.perform(&mut layout.tree, edit);
-        self.ui_state.pane_tree_view.select(resulting_idx);
+        layout.commit_sessions();
+        let (history, mut edit) = layout.edit_ctx(glyphs);
+        let touches_panes = edits.iter().any(|edit| edit.touches_panes());
+        let resulting = history.perform_all(&mut edit, edits);
+
+        if touches_panes {
+            self.ui_state.pane_tree_view.select_many(resulting);
+        }
 
         self.after_structural_edit();
     }
 
-    fn after_structural_edit(&mut self) {
-        let Some(layout) = self.tabs.active_mut() else {
+    fn select_material(&mut self, index: usize) {
+        let count = self
+            .tabs
+            .active()
+            .and_then(|layout| layout.tree.material_list.as_ref())
+            .map_or(0, |list| list.materials.len());
+
+        self.ui_state.material_editor.selected_material = index.min(count.saturating_sub(1));
+    }
+
+    fn import_texture(
+        &mut self,
+        template: &str,
+        new_name: Option<String>,
+        png: &Path,
+        resize: bool,
+    ) {
+        let Some(layout) = self.tabs.active() else {
             return;
         };
 
+        let result = (|| {
+            if layout.bntx_source.is_none() {
+                return Err(
+                    "Textures can only be edited in layouts opened from an archive".to_string(),
+                );
+            }
+
+            let textures = &layout
+                .tree
+                .main_bntx
+                .as_ref()
+                .ok_or("This layout has no BNTX")?
+                .textures;
+
+            let index = textures
+                .iter()
+                .position(|t| t.name == template)
+                .ok_or_else(|| format!("Texture {template} is not in the BNTX"))?;
+
+            let template = &textures[index];
+            let image =
+                texture_import::load_png(png, (template.info.width, template.info.height), resize)?;
+
+            let name = new_name.clone().unwrap_or_else(|| template.name.clone());
+            let texture = Box::new(texture_import::encode_like(&image, template, &name)?);
+
+            Ok(match new_name {
+                Some(_) => edit_history::PaneEdit::ImportTexture { texture },
+                None => edit_history::PaneEdit::ReplaceTexture { index, texture },
+            })
+        })();
+
+        match result {
+            Ok(edit) => self.perform_pane_edit(edit),
+            Err(err) => self.ui_state.error_message = Some(err),
+        }
+    }
+
+    fn sync_textures(&mut self) {
+        let tabs = &mut self.tabs;
+        let Some(layout) = tabs.items.get_mut(tabs.active_index) else {
+            return;
+        };
+
+        let changed = std::mem::take(&mut layout.tree.texture_changes);
+        if changed.is_empty() {
+            return;
+        }
+
+        let shared = layout
+            .source
+            .as_ref()
+            .map(|s| s.doc)
+            .zip(layout.bntx_source.clone());
+
+        let bntx = layout.tree.main_bntx.clone();
+
+        if let Some((doc, entry)) = shared {
+            for (index, tab) in tabs.items.iter_mut().enumerate() {
+                if index != tabs.active_index
+                    && tab.source.as_ref().is_some_and(|s| s.doc == doc)
+                    && tab.bntx_source.as_ref() == Some(&entry)
+                {
+                    tab.tree.main_bntx = bntx.clone();
+                    tab.tree.bntx_edited = true;
+
+                    let users: Vec<u16> = tab.tree.material_users.keys().copied().collect();
+                    for material in users {
+                        tab.tree.mark_material_dirty(material);
+                    }
+                }
+            }
+        }
+
+        if let (Some(gpu), Some(bntx)) = (&mut self.gpu, &bntx) {
+            for name in &changed {
+                gpu.texture_cache.remove(name);
+            }
+
+            gpu.texture_cache
+                .load_from_bntx(&gpu.device, &gpu.queue, bntx);
+        }
+
+        let tabs = &mut self.tabs;
+
+        if let Some(layout) = tabs.items.get_mut(tabs.active_index) {
+            let users: Vec<u16> = layout.tree.material_users.keys().copied().collect();
+
+            for material in users {
+                layout.tree.mark_material_dirty(material);
+            }
+        }
+    }
+
+    fn after_structural_edit(&mut self) {
+        self.sync_textures();
+
+        let tabs = &mut self.tabs;
+        let Some(layout) = tabs.items.get_mut(tabs.active_index) else {
+            return;
+        };
+
+        let exists = |id: &PaneId| layout.tree.path_map.contains_key(id);
+        let tree_view = &mut self.ui_state.pane_tree_view;
+        tree_view.hidden_panes.retain(exists);
+
+        tree_view.retain(exists);
+
+        let selection = tree_view.selection.clone();
+        tree_view.reveal(&layout.tree, &selection);
+        tree_view.collapse_empty(&layout.tree);
+
         layout.tree.recompute_dirty();
+        layout.tree.recompute_dirty_materials(&mut tabs.glyphs);
+        layout.tree.update_animation_visuals();
+        layout.tree.take_rebatch();
 
         let Some(gpu) = &mut self.gpu else { return };
 
@@ -1178,23 +1680,100 @@ impl App {
         }
     }
 
-    fn extract_layout_from_sarc_bytes(path: &PathBuf) -> Option<Vec<MagicFiles>> {
-        let mut file_bytes = std::fs::read(path).ok()?;
-        let filename = path.file_name()?.to_string_lossy();
+    fn save_active(&mut self, choose_path: bool) {
+        let Some(source) = self.tabs.active().and_then(|layout| layout.source.as_ref()) else {
+            return;
+        };
+        let doc_id = source.doc;
+        let doc = &self.docs.docs[doc_id];
 
-        file_bytes = decompress_if_needed(file_bytes, &filename);
+        let target = match (&doc.save_path, choose_path) {
+            (Some(path), false) => path.clone(),
+            _ => {
+                let dialog = rfd::FileDialog::new()
+                    .set_title("Save archive as")
+                    .set_file_name(doc.file_name().unwrap_or_default());
+                let Some(path) = dialog.save_file() else {
+                    return;
+                };
+                path
+            }
+        };
 
-        let mut all_files = Vec::new();
-        extract_all_files_recursive(file_bytes, &mut all_files, Some(filename.to_string()));
+        let mut edits = HashMap::new();
+        let mut problems = Vec::new();
+        let raw = |path: &EntryPath| doc.root.at(path).map(|node| node.raw().to_vec());
 
-        let has_bflyt = all_files
-            .iter()
-            .any(|f| matches!(f, MagicFiles::Bflyt(_, _)));
-        if !has_bflyt {
-            return None;
+        for tab in &self.tabs.items {
+            let Some(source) = tab.source.as_ref().filter(|s| s.doc == doc_id) else {
+                continue;
+            };
+            problems.extend(tab.save_problems());
+
+            let bflyt = tab.bake_bflyt().write_file().buffer;
+            if raw(&source.layout).as_ref() != Some(&bflyt) {
+                edits.insert(source.layout.clone(), bflyt);
+            }
+
+            if tab.tree.bntx_edited
+                && let (Some(path), Some(bntx)) = (&tab.bntx_source, &tab.tree.main_bntx)
+                && !edits.contains_key(path)
+            {
+                match bntx.write() {
+                    Ok(bytes) => {
+                        if raw(path).as_ref() != Some(&bytes) {
+                            edits.insert(path.clone(), bytes);
+                        }
+                    }
+                    Err(err) => problems.push(format!("The BNTX can't be written: {err}")),
+                }
+            }
+
+            for anim in &tab.timeline.anim_player.anims {
+                let Some(path) = &anim.source else { continue };
+                let bflan = anim.bflan.write_file().buffer;
+                if raw(path).as_ref() != Some(&bflan) {
+                    edits.insert(path.clone(), bflan);
+                }
+            }
         }
 
-        Some(all_files)
+        if !problems.is_empty() {
+            self.ui_state.error_message = Some(problems.join("\n"));
+            return;
+        }
+
+        let changed = edits.len();
+        match self.docs.docs[doc_id].save(&target, &edits) {
+            Ok(()) => log::info!("Saved {target:?} with {changed} changed files"),
+            Err(err) => {
+                log::error!("{err}");
+                self.ui_state.error_message = Some(err);
+            }
+        }
+    }
+
+    fn export_bflyt(&mut self) {
+        let Some(layout) = self.tabs.active() else {
+            return;
+        };
+
+        let dialog = rfd::FileDialog::new()
+            .set_title("Export .bflyt")
+            .add_filter("BFLYT Layout", &["bflyt"])
+            .set_file_name(&layout.file_name);
+        let Some(target_path) = dialog.save_file() else {
+            return;
+        };
+
+        let writer = layout.bake_bflyt().write_file();
+        match std::fs::write(&target_path, &writer.buffer) {
+            Ok(_) => log::info!("File succesfully written to: {target_path:?}"),
+            Err(e) => {
+                log::error!("Failed writing to disk: {e:?}");
+                self.ui_state.error_message = Some(format!("Write error: {e}"));
+            }
+        }
     }
 
     fn purge_unused_textures(&mut self) {
@@ -1214,6 +1793,7 @@ pub fn extract_all_files_recursive(
     let current_file = SarcFile {
         name: current_file_name,
         hash: 0,
+        alignment: None,
         data,
     };
 
@@ -1404,53 +1984,40 @@ impl ApplicationHandler for App {
                         return;
                     };
 
-                    let path_str = path.to_string_lossy().to_lowercase();
-
-                    let is_sarc = SUPPORTED_SARC_EXTENSIONS
-                        .iter()
-                        .any(|ext| path_str.ends_with(&format!(".{}", ext.to_lowercase())));
-
                     self.ui_state.reset();
-
-                    if is_sarc {
-                        if let Some(all_files) = Self::extract_layout_from_sarc_bytes(&path) {
-                            self.open_file_from_buffer(all_files);
-                        }
-                    } else {
-                        self.open_file_from_path(&path);
-                    }
+                    self.open_document(&path, Vec::new(), None);
 
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
                 }
 
-                UiAction::SaveFile => {
-                    if let Some(layout) = self.tabs.active() {
-                        let mut dialog = rfd::FileDialog::new()
-                            .set_title("Save as .bflyt")
-                            .add_filter("BFLYT Layout", &["bflyt"]);
+                UiAction::SaveFile => self.save_active(false),
+                UiAction::SaveFileAs => self.save_active(true),
+                UiAction::ExportBflyt => self.export_bflyt(),
 
-                        dialog = dialog.set_file_name(&layout.file_name);
+                UiAction::ImportTexture {
+                    template,
+                    name,
+                    png,
+                    resize,
+                } => self.import_texture(&template, Some(name), &png, resize),
 
-                        if let Some(target_path) = dialog.save_file() {
-                            let baked_bflyt = layout.bake_bflyt();
-                            let writer = baked_bflyt.write_file();
+                UiAction::ReplaceTexture { name, png, resize } => {
+                    self.import_texture(&name, None, &png, resize)
+                }
 
-                            match std::fs::write(&target_path, &writer.buffer) {
-                                Ok(_) => {
-                                    log::info!("File succesfully written to: {target_path:?}",);
-                                }
-                                Err(e) => {
-                                    log::error!("Failed writing to disk: {e:?}");
-                                    self.ui_state.error_message = Some(format!("Write error: {e}"));
-                                }
-                            }
-                        } else {
-                            log::error!(
-                                "Failed baking layout fields into file model layout structures."
-                            );
-                        }
+                UiAction::EditAnim { label, info } => {
+                    if let Some(anim) = self
+                        .tabs
+                        .active()
+                        .and_then(|layout| layout.timeline.anim_player.active)
+                    {
+                        self.perform_pane_edit(edit_history::PaneEdit::EditAnim {
+                            anim,
+                            label,
+                            info,
+                        });
                     }
                 }
 
@@ -1470,82 +2037,161 @@ impl ApplicationHandler for App {
                 }
 
                 UiAction::LoadArchiveEntry(entry) => {
-                    let resolved = std::fs::read(&entry.path).ok().and_then(|bytes| {
-                        archive_browser::resolve_nested_package_bytes(&bytes, &entry.nested_path)
-                    });
-
                     self.ui_state.reset();
 
-                    let file_name = entry
-                        .path
-                        .file_name()
-                        .and_then(|f| Some(f.to_string_lossy().to_string()));
-
-                    match resolved {
-                        Some(package_bytes) => {
-                            let mut all_files = Vec::new();
-                            extract_all_files_recursive(package_bytes, &mut all_files, file_name);
-
-                            let mut final_files = Vec::new();
-                            let mut target_layout = None;
-
-                            for (idx, file) in all_files.into_iter().enumerate() {
-                                if matches!(file, MagicFiles::Bflyt(_, _)) && idx == entry.file_idx
-                                {
-                                    target_layout = Some(file);
-                                } else {
-                                    final_files.push(file);
-                                }
-                            }
-
-                            if let Some(target) = target_layout {
-                                final_files.insert(0, target);
-                            }
-
-                            self.open_file_from_buffer(final_files);
-                        }
-
-                        None => {
-                            self.ui_state.error_message =
-                                Some(format!("Failed to unpack '{}'.", entry.display_name));
-                        }
-                    }
+                    let mut layout = entry.nested_path.clone();
+                    layout.push(entry.file_idx);
+                    self.open_document(&entry.path, entry.nested_path.clone(), Some(layout));
 
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
                 }
 
-                UiAction::DeletePane(target_idx) => {
-                    self.perform_pane_edit(edit_history::PaneEdit::Delete { target_idx })
+                UiAction::RenamePane { target_idx, name } => {
+                    self.perform_pane_edit(edit_history::PaneEdit::Rename { target_idx, name })
                 }
 
-                UiAction::DuplicatePane(source_idx) => {
-                    self.perform_pane_edit(edit_history::PaneEdit::Duplicate { source_idx })
-                }
-
-                UiAction::MovePane {
-                    source_idx,
-                    new_parent,
-                    position,
-                } => self.perform_pane_edit(edit_history::PaneEdit::Move {
-                    source_idx,
-                    new_parent,
-                    position,
+                UiAction::OverrideSection {
+                    owner,
+                    pane,
+                    toggle,
+                } => self.perform_pane_edit(edit_history::PaneEdit::OverrideSection {
+                    owner,
+                    pane,
+                    toggle,
                 }),
 
+                UiAction::DeletePanes(panes) => self.perform_pane_edits(|tree| {
+                    tree.selection_roots(&panes)
+                        .into_iter()
+                        .map(|target_idx| edit_history::PaneEdit::Delete { target_idx })
+                        .collect()
+                }),
+
+                UiAction::DuplicatePanes(panes) => {
+                    let options = self.ui_state.duplicate_dialog.options;
+
+                    self.perform_pane_edits(|tree| {
+                        tree.selection_roots(&panes)
+                            .into_iter()
+                            .map(|source_idx| edit_history::PaneEdit::Duplicate {
+                                source_idx,
+                                names: None,
+                                options,
+                            })
+                            .collect()
+                    })
+                }
+
+                UiAction::OpenDuplicateDialog(source) => {
+                    if let Some(layout) = self.tabs.active() {
+                        self.ui_state.duplicate_dialog.open(&layout.tree, source);
+                    }
+                }
+
+                UiAction::DuplicateWithNames {
+                    source,
+                    names,
+                    options,
+                } => self.perform_pane_edit(edit_history::PaneEdit::Duplicate {
+                    source_idx: source,
+                    names: Some(names),
+                    options,
+                }),
+
+                UiAction::AddPane {
+                    parent,
+                    anchor,
+                    kind,
+                } => self.perform_pane_edit(edit_history::PaneEdit::Add {
+                    parent,
+                    anchor,
+                    kind,
+                }),
+
+                UiAction::MovePanes {
+                    sources,
+                    new_parent,
+                    anchor,
+                } => self.perform_pane_edits(|tree| {
+                    let mut anchor = anchor;
+
+                    tree.selection_roots(&sources)
+                        .into_iter()
+                        .map(|source_idx| {
+                            let edit = edit_history::PaneEdit::Move {
+                                source_idx,
+                                new_parent,
+                                anchor,
+                            };
+                            anchor = Anchor::After(source_idx);
+                            edit
+                        })
+                        .collect()
+                }),
+
+                UiAction::AddMaterial => {
+                    self.perform_pane_edit(edit_history::PaneEdit::AddMaterial);
+                    self.select_material(usize::MAX);
+                }
+
+                UiAction::DuplicateMaterial(index) => {
+                    self.perform_pane_edit(edit_history::PaneEdit::DuplicateMaterial { index });
+                    self.select_material(index as usize + 1);
+                }
+
+                UiAction::DeleteMaterial(index) => {
+                    self.perform_pane_edit(edit_history::PaneEdit::DeleteMaterial { index });
+                    self.select_material(index as usize);
+                }
+
+                UiAction::RenameMaterial { index, name } => {
+                    self.perform_pane_edit(edit_history::PaneEdit::RenameMaterial { index, name })
+                }
+
                 UiAction::Undo => {
-                    if let Some(layout) = self.tabs.active_mut() {
-                        let resulting_idx = layout.history.undo(&mut layout.tree);
-                        self.ui_state.pane_tree_view.select(resulting_idx);
+                    if let Some((layout, glyphs)) = self.tabs.active_with_glyphs() {
+                        layout.commit_sessions();
+                        let (history, mut edit) = layout.edit_ctx(glyphs);
+
+                        let resulting = history.undo(&mut edit);
+                        self.ui_state.pane_tree_view.select_many(resulting);
+                        self.after_structural_edit();
+                    }
+                }
+
+                UiAction::JumpToHistory(target) => {
+                    if let Some((layout, glyphs)) = self.tabs.active_with_glyphs() {
+                        layout.commit_sessions();
+
+                        let mut resulting = Vec::new();
+
+                        loop {
+                            let position = layout.history.position();
+                            let (history, mut edit) = layout.edit_ctx(glyphs);
+
+                            if position > target {
+                                resulting = history.undo(&mut edit);
+                            } else if position < target && position < history.steps().count() {
+                                resulting = history.redo(&mut edit);
+                            } else {
+                                break;
+                            }
+                        }
+
+                        self.ui_state.pane_tree_view.select_many(resulting);
                         self.after_structural_edit();
                     }
                 }
 
                 UiAction::Redo => {
-                    if let Some(layout) = self.tabs.active_mut() {
-                        let resulting_idx = layout.history.redo(&mut layout.tree);
-                        self.ui_state.pane_tree_view.select(resulting_idx);
+                    if let Some((layout, glyphs)) = self.tabs.active_with_glyphs() {
+                        layout.commit_sessions();
+                        let (history, mut edit) = layout.edit_ctx(glyphs);
+
+                        let resulting = history.redo(&mut edit);
+                        self.ui_state.pane_tree_view.select_many(resulting);
                         self.after_structural_edit();
                     }
                 }
@@ -1581,15 +2227,26 @@ impl ApplicationHandler for App {
                     if !egui_wants_pointer {
                         let pos = self.camera.cursor_screen;
 
-                        self.egui_ctx.input(|i| {
-                            if i.key_down(egui::Key::Space) {
-                                self.camera.start_pan(pos);
-                            }
-                        });
+                        let (space, toggle) = self
+                            .egui_ctx
+                            .input(|i| (i.key_down(egui::Key::Space), i.modifiers.command));
 
-                        if !self.try_start_drag(pos) && !self.camera.is_panning {
+                        if space {
+                            self.camera.start_pan(pos);
+                        }
+
+                        if toggle && !space {
+                            if let Some(pane) = self.pane_at(pos) {
+                                self.ui_state.pane_tree_view.toggle(pane);
+                            }
+                        } else if !self.try_start_drag(pos) && !self.camera.is_panning {
                             self.try_select_at(pos);
-                            self.try_start_drag(pos);
+
+                            if self.try_start_drag(pos)
+                                && let Some(drag) = &mut self.drag_state
+                            {
+                                drag.cycles = false;
+                            }
                         }
                     }
                 }
@@ -1657,7 +2314,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::DroppedFile(path) => {
                 if path.extension().and_then(|s| s.to_str()) == Some("bflyt") {
-                    self.open_file_from_path(&path);
+                    self.open_document(&path, Vec::new(), None);
                 } else {
                     self.ui_state.error_message =
                         Some("Invalid file type. Please drop a .bflyt file".to_string());
@@ -1698,11 +2355,6 @@ impl ApplicationHandler for App {
                                     &layout.tree,
                                     &mut self.ui_state.pane_tree_view.hidden_panes,
                                 );
-                            }
-
-                            if layout.timeline.anim_player.is_playing() {
-                                layout.reset_to_base();
-                                layout.timeline.anim_player.apply(&mut layout.tree);
                             }
                         }
                     }
@@ -1762,8 +2414,16 @@ impl ApplicationHandler for App {
 
 fn main() {
     env_logger::init();
+
+    if let Some(code) = cli::run_if_command() {
+        std::process::exit(code);
+    }
     let event_loop = EventLoop::new().expect("create event loop");
     let mut app = App::new();
 
     event_loop.run_app(&mut app).expect("run event loop");
+}
+
+fn same_serialized<T: serde::Serialize>(a: &T, b: &T) -> bool {
+    serde_json::to_string(a).ok() == serde_json::to_string(b).ok()
 }

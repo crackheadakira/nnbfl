@@ -210,13 +210,25 @@ impl ReadWriteable for MaterialTextureMap {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialTextureSrt {
     pub translate_u: f32,
     pub translate_v: f32,
     pub rotate: f32,
     pub scale_u: f32,
     pub scale_v: f32,
+}
+
+impl Default for MaterialTextureSrt {
+    fn default() -> Self {
+        Self {
+            translate_u: 0.0,
+            translate_v: 0.0,
+            rotate: 0.0,
+            scale_u: 1.0,
+            scale_v: 1.0,
+        }
+    }
 }
 
 impl ReadWriteable for MaterialTextureSrt {

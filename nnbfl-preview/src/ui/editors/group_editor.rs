@@ -2,7 +2,7 @@ use nnbfl::bflyt::list::Group;
 
 use crate::{
     pane_tree::{PaneNode, PaneTree},
-    ui::DrawUiWith,
+    ui::{DrawUiWith, array_editor::ArrayEditor},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -49,28 +49,12 @@ impl DrawUiWith<&mut PaneTree> for GroupEditor {
                         changed |= tree.group.data.draw_with(ui, &mut available_panes);
 
                         ui.separator();
-                        ui.heading("Subgroups");
-
-                        let mut subgroup_to_delete = None;
-
-                        for (i, child) in tree.group.children.iter_mut().enumerate() {
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .button("❌")
-                                    .on_hover_text("Delete this entire subgroup")
-                                    .clicked()
-                                {
-                                    subgroup_to_delete = Some(i);
-                                }
-
-                                changed |= child.draw_with(ui, &mut available_panes);
-                            });
-                        }
-
-                        if let Some(idx) = subgroup_to_delete {
-                            tree.group.children.remove(idx);
-                            changed |= true;
-                        }
+                        changed |= ArrayEditor::new("subgroups", &mut tree.group.children)
+                            .title("Subgroups")
+                            .addable(false)
+                            .duplicable(false)
+                            .show(ui, |ui, _, group| group.draw_with(ui, &mut available_panes))
+                            .changed;
 
                         ui.separator();
 
@@ -112,20 +96,13 @@ impl DrawUiWith<&mut [String]> for Group {
         ui.collapsing(format!("Group: {}", self.group_name), |ui| {
             ui.weak(format!("Contains {} bound items", self.child_names.len()));
 
-            let mut pane_to_remove = None;
-            for (i, child_name) in self.child_names.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(child_name);
-                    if ui.small_button("❌").clicked() {
-                        pane_to_remove = Some(i);
-                    }
-                });
-            }
-
-            if let Some(idx) = pane_to_remove {
-                self.child_names.remove(idx);
-                changed |= true;
-            }
+            changed |=
+                ArrayEditor::new(("group_children", &self.group_name), &mut self.child_names)
+                    .addable(false)
+                    .duplicable(false)
+                    .item_label(|_, name| name.clone())
+                    .show(ui, |_, _, _| false)
+                    .changed;
 
             ui.add_space(4.0);
 

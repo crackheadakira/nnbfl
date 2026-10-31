@@ -1,3 +1,4 @@
+use crate::pane_tree::PaneId;
 use nnbfl::bflyt::flags::WindowKind;
 use nnbfl::bflyt::list::MaterialList;
 use nnbfl::bflyt::pane::{TextureFlip, TextureUv, WindowPane};
@@ -475,7 +476,7 @@ pub fn derive_from_window(
     material_list: &MaterialList,
     corners: [[f32; 2]; 4],
     is_visible: bool,
-    pane_idx: usize,
+    pane_idx: PaneId,
     bntxs: &[&Bntx],
 ) -> Vec<TexturedQuad> {
     let mut out = Vec::new();
@@ -604,13 +605,13 @@ pub fn derive_from_window(
                 &win.content.bottom_right_vertex_color,
             )
         } else {
-            static EMPTY: Color4u8 = Color4u8 {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 0,
+            static WHITE: Color4u8 = Color4u8 {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
             };
-            (&EMPTY, &EMPTY, &EMPTY, &EMPTY)
+            (&WHITE, &WHITE, &WHITE, &WHITE)
         };
 
         let corner_tints = interpolate_slice_corners(geom.corners, corners, frame_colors);
@@ -666,14 +667,7 @@ pub fn interpolate_slice_corners(
     window_corners: [[f32; 2]; 4],
     global_colors: (&Color4u8, &Color4u8, &Color4u8, &Color4u8),
 ) -> [[f32; 4]; 4] {
-    let to_f32_rgba = |color: &Color4u8| -> [f32; 4] {
-        let rgba: [f32; 4] = (*color).into();
-        if rgba[3] > 0.0 {
-            rgba
-        } else {
-            [1.0, 1.0, 1.0, 1.0]
-        }
-    };
+    let to_f32_rgba = |color: &Color4u8| -> [f32; 4] { (*color).into() };
 
     let tl = to_f32_rgba(global_colors.0);
     let tr = to_f32_rgba(global_colors.1);

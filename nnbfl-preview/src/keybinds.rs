@@ -15,6 +15,7 @@ pub struct KeyBind {
 
 #[derive(Clone, Copy)]
 pub enum Action {
+    Save,
     SaveAs,
     TogglePlayback,
     Deselect,
@@ -32,6 +33,16 @@ pub const BINDINGS: &[KeyBind] = &[
     KeyBind {
         key: Key::S,
         modifiers: Modifiers::COMMAND,
+        action: Action::Save,
+        description: "Save",
+    },
+    KeyBind {
+        key: Key::S,
+        modifiers: Modifiers {
+            command: true,
+            shift: true,
+            ..Modifiers::NONE
+        },
         action: Action::SaveAs,
         description: "Save As...",
     },
@@ -51,7 +62,7 @@ pub const BINDINGS: &[KeyBind] = &[
         key: Key::F,
         modifiers: Modifiers::NONE,
         action: Action::FitTimeline,
-        description: "Reset the timeline's zoom/pan",
+        description: "Frame the selected curve in the timeline, or all curves",
     },
     KeyBind {
         key: Key::Delete,
@@ -148,37 +159,40 @@ fn apply(action: Action, state: &mut UiState, timeline: Option<&mut TimelineStat
                 && let Some(anim) = timeline.anim_player.anims.get_mut(idx)
             {
                 anim.playing = !anim.playing;
+                timeline.anim_player.preview_enabled = true;
             }
         }
 
         Action::Deselect => {
-            state.pane_tree_view.selected_pane = None;
+            state.pane_tree_view.select(None);
             state.context_menu.is_open = false;
         }
 
         Action::FitTimeline => {
             if let Some(timeline) = timeline {
-                timeline.zoom = 1.0;
-                timeline.pan_frame = 0.0;
+                timeline.frame_view();
             }
         }
 
         Action::DeleteSelected => {
-            if let Some(pane_idx) = state.pane_tree_view.selected_pane {
-                state.pending_action = Some(UiAction::DeletePane(pane_idx));
+            if !state.pane_tree_view.selection.is_empty() {
+                let panes = state.pane_tree_view.selection.clone();
+                state.pending_action = Some(UiAction::DeletePanes(panes));
             }
         }
 
         Action::DuplicateSelected => {
-            if let Some(pane_idx) = state.pane_tree_view.selected_pane {
-                state.pending_action = Some(UiAction::DuplicatePane(pane_idx));
+            if !state.pane_tree_view.selection.is_empty() {
+                let panes = state.pane_tree_view.selection.clone();
+                state.pending_action = Some(UiAction::DuplicatePanes(panes));
             }
         }
 
         Action::Undo => state.pending_action = Some(UiAction::Undo),
         Action::Redo => state.pending_action = Some(UiAction::Redo),
         Action::Open => state.pending_action = Some(UiAction::LoadFile),
-        Action::SaveAs => state.pending_action = Some(UiAction::SaveFile),
+        Action::Save => state.pending_action = Some(UiAction::SaveFile),
+        Action::SaveAs => state.pending_action = Some(UiAction::SaveFileAs),
         Action::SetLayoutDirectory => state.pending_action = Some(UiAction::SetBlarcDir),
         Action::ToggleArchiveBrowser => {
             state.archive_browser.is_visible = !state.archive_browser.is_visible

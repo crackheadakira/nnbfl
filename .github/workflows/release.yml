@@ -150,9 +150,11 @@ jobs:
               if: matrix.job.os == 'windows-latest'
               shell: pwsh
               run: |
-                  echo "CXX=clang" >> $env:GITHUB_ENV
-                  echo "CC=clang" >> $env:GITHUB_ENV
-                  clang --version
+                  echo "CXX=clang-cl" >> $env:GITHUB_ENV
+                  echo "CC=clang-cl" >> $env:GITHUB_ENV
+                  echo "CXXFLAGS=-msse4.1 -mpopcnt" >> $env:GITHUB_ENV
+                  echo "CFLAGS=-msse4.1 -mpopcnt" >> $env:GITHUB_ENV
+                  clang-cl --version
 
             - name: Build Workspace (Optimized Release)
               run: cargo build --release --workspace --target ${{ matrix.job.target }}

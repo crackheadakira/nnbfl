@@ -1,25 +1,35 @@
+use std::collections::HashSet;
+
+use crate::{
+    edit_history::OverrideToggle,
+    ops::duplicate::{DuplicateNames, DuplicateOptions},
+    pane_factory::NewPaneKind,
+    pane_tree::{Anchor, PaneId},
+};
 use egui::Ui;
 use nnbfl::{
-    bflyt::{
-        file::BflytSection,
-        list::Layout,
-        pane::{HorizontalPosition, VerticalPosition},
-        pane::{Pane, TextAlignment},
-    },
+    bflan::anim_info::AnimType,
+    bflyt::{file::BflytSection, list::Layout, pane::Pane},
     ui2d::types::{Vector2f, Vector3f},
 };
 
 use crate::{
     RenderContext,
-    anim_state::all_quads_mut,
-    pane_tree::{DirtyFlags, PaneNode},
+    anim_edit::{Animatable, PaneBase},
+    edit_history::EditHistory,
+    font::glyph_atlas::GLYPH_ATLAS_TEXTURE_NAME,
+    pane_tree::PaneNode,
     renderer::textured_quad::PaneQuadData,
     traits::Displaying,
     ui::{
         DrawUi, DrawUiWith,
         archive_browser::ArchiveBrowser,
         context_menu::{ContextMenu, ContextMenuAction, ContextMenuState},
-        editors::{GroupEditor, MaterialEditor, PaneEditor, TextureEditor},
+        dialogs::duplicate::DuplicateDialog,
+        editors::{
+            GroupEditor, MaterialEditor, MaterialEditorContext, OverrideRequest, OverrideTarget,
+            PaneEditor, PaneEditorContext, TextureEditState, TextureEditor,
+        },
         shortcuts::Shortcuts,
         tree_view::TreeView,
     },
@@ -54,6 +64,7 @@ pub struct UiState {
     pub pane_editor: PaneEditor,
     pub group_editor: GroupEditor,
     pub texture_editor: TextureEditor,
+    pub duplicate_dialog: DuplicateDialog,
     pub show_statistics_window: bool,
     pub enable_puffin: bool,
 }
@@ -61,7 +72,7 @@ pub struct UiState {
 impl UiState {
     pub fn reset(&mut self) {
         self.pane_tree_view.hidden_panes.clear();
-        self.pane_tree_view.selected_pane = None;
+        self.pane_tree_view.select(None);
     }
 }
 
@@ -125,21 +136,114 @@ pub enum UiAction {
     CancelArchiveScan,
     LoadArchiveEntry(crate::archive_browser::ArchiveEntry),
     SaveFile,
+    SaveFileAs,
+    ExportBflyt,
 
     SwitchActiveTab,
     PurgeUnusedTexturesAndSwitch(bool),
 
-    DeletePane(usize),
-    DuplicatePane(usize),
+    DeletePanes(Vec<PaneId>),
+    DuplicatePanes(Vec<PaneId>),
+    OpenDuplicateDialog(PaneId),
+    DuplicateWithNames {
+        source: PaneId,
+        names: DuplicateNames,
+        options: DuplicateOptions,
+    },
+    RenamePane {
+        target_idx: PaneId,
+        name: String,
+    },
+    OverrideSection {
+        owner: PaneId,
+        pane: String,
+        toggle: OverrideToggle,
+    },
 
-    MovePane {
-        source_idx: usize,
-        new_parent: Option<usize>,
-        position: usize,
+    AddPane {
+        parent: Option<PaneId>,
+        anchor: Anchor,
+        kind: NewPaneKind,
+    },
+
+    MovePanes {
+        sources: Vec<PaneId>,
+        new_parent: Option<PaneId>,
+        anchor: Anchor,
+    },
+
+    AddMaterial,
+    DuplicateMaterial(u16),
+    DeleteMaterial(u16),
+    RenameMaterial {
+        index: u16,
+        name: String,
+    },
+    ImportTexture {
+        template: String,
+        name: String,
+        png: std::path::PathBuf,
+        resize: bool,
+    },
+    ReplaceTexture {
+        name: String,
+        png: std::path::PathBuf,
+        resize: bool,
+    },
+    EditAnim {
+        label: String,
+        info: Box<nnbfl::bflan::anim_info::PaneAnimInfo>,
     },
 
     Undo,
     Redo,
+    JumpToHistory(usize),
+}
+
+fn draw_history(ui: &mut Ui, history: &EditHistory) -> Option<usize> {
+    let mut jump = None;
+
+    egui::CollapsingHeader::new("History")
+        .default_open(true)
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("edit_history")
+                .max_height(160.0)
+                .auto_shrink([false, true])
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    ui.weak(format!(
+                        "~{:.1} MB held",
+                        history.size() as f64 / (1024.0 * 1024.0)
+                    ));
+
+                    let position = history.position();
+
+                    let first = if history.dropped() {
+                        "Oldest kept step"
+                    } else {
+                        "Opened"
+                    };
+
+                    for (target, label) in std::iter::once(first).chain(history.steps()).enumerate()
+                    {
+                        let text = if target > position {
+                            egui::RichText::new(label).weak()
+                        } else {
+                            egui::RichText::new(label)
+                        };
+
+                        let current = target == position;
+
+                        if ui.selectable_label(current, text).clicked() && !current {
+                            jump = Some(target);
+                        }
+                    }
+                });
+        });
+
+    ui.separator();
+    jump
 }
 
 pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h: f32) {
@@ -268,22 +372,23 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
     if let Some(layout) = ctx.layout_tabs.active()
         && let Some(node) = layout.tree.find_by_idx(ctx.ui_state.context_menu.pane_idx)
     {
+        let pane_idx = ctx.ui_state.context_menu.pane_idx;
+
         let state = ContextMenuState {
             node,
-            is_hidden: ctx
-                .ui_state
-                .pane_tree_view
-                .hidden_panes
-                .contains(&ctx.ui_state.context_menu.pane_idx),
+            is_hidden: ctx.ui_state.pane_tree_view.hidden_panes.contains(&pane_idx),
+            targets: ctx.ui_state.pane_tree_view.targets(pane_idx),
         };
 
         if let Some(action) = ctx.ui_state.context_menu.draw_with(ui, state) {
             match action {
-                ContextMenuAction::HidePane(pane_idx) => {
-                    ctx.ui_state.pane_tree_view.hidden_panes.insert(pane_idx);
+                ContextMenuAction::HidePanes(panes) => {
+                    ctx.ui_state.pane_tree_view.hidden_panes.extend(panes);
                 }
-                ContextMenuAction::ShowPane(pane_idx) => {
-                    ctx.ui_state.pane_tree_view.hidden_panes.remove(&pane_idx);
+                ContextMenuAction::ShowPanes(panes) => {
+                    for pane in &panes {
+                        ctx.ui_state.pane_tree_view.hidden_panes.remove(pane);
+                    }
                 }
                 ContextMenuAction::Action(ui_action) => {
                     ctx.ui_state.pending_action = Some(ui_action);
@@ -306,8 +411,18 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                     ui.close();
                 }
 
-                if ui.button("Save File As...").clicked() {
+                if ui.button("Save").clicked() {
                     ctx.ui_state.pending_action = Some(UiAction::SaveFile);
+                    ui.close();
+                }
+
+                if ui.button("Save As...").clicked() {
+                    ctx.ui_state.pending_action = Some(UiAction::SaveFileAs);
+                    ui.close();
+                }
+
+                if ui.button("Export .bflyt...").clicked() {
+                    ctx.ui_state.pending_action = Some(UiAction::ExportBflyt);
                     ui.close();
                 }
             });
@@ -483,6 +598,12 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
             .default_size(300.0)
             .resizable(true)
             .show(ui, |ui| {
+                if let Some(layout) = ctx.layout_tabs.active()
+                    && let Some(target) = draw_history(ui, &layout.history)
+                {
+                    ctx.ui_state.pending_action = Some(UiAction::JumpToHistory(target));
+                }
+
                 ui.horizontal(|ui| {
                     ui.selectable_value(
                         &mut ctx.ui_state.right_sidebar_tab,
@@ -505,6 +626,7 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                         if let Some(layout) = ctx.layout_tabs.active_mut() {
                             ui.vertical(|ui| {
                                 if let Some(idx) = ctx.ui_state.pane_tree_view.selected_pane {
+                                    let baseline = layout.pane_baseline(idx);
                                     let changed = {
                                         if let Some(node) = layout.tree.find_by_idx_mut(idx) {
                                             draw_pane_properties(ui, node)
@@ -519,6 +641,7 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                                         }
 
                                         layout.tree.recompute_dirty();
+                                        layout.note_pane_edit(baseline);
                                     }
                                 } else {
                                     ui.centered_and_justified(|ui| {
@@ -583,16 +706,19 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                                                 if anim.playing { "Pause" } else { "Play" };
                                             if ui.button(play_toggle).clicked() {
                                                 anim.playing = !anim.playing;
+                                                timeline.anim_player.preview_enabled = true;
                                                 anim.autoplay = !anim.autoplay;
                                             }
 
                                             if ui.button("Stop").clicked() {
+                                                timeline.anim_player.preview_enabled = false;
                                                 anim.frame = 0.0;
                                                 anim.playing = false;
                                                 anim.autoplay = false;
                                             }
 
                                             if ui.button("Loop").clicked() {
+                                                timeline.anim_player.preview_enabled = true;
                                                 anim.toggle_looping();
                                                 anim.frame = 0.0;
                                                 anim.playing = true;
@@ -611,6 +737,7 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                                         );
 
                                         if slider_res.changed() {
+                                            timeline.anim_player.preview_enabled = true;
                                             anim.frame = temporary_frame;
                                             if slider_res.dragged() {
                                                 anim.playing = false;
@@ -680,50 +807,293 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
             });
     };
 
+    let taken_textures: HashSet<String> = if ctx.ui_state.texture_editor.is_editor_visible {
+        ctx.layout_tabs
+            .items
+            .iter()
+            .flat_map(|tab| tab.tree.all_bntxs())
+            .flat_map(|bntx| bntx.textures.iter().map(|t| t.name.clone()))
+            .chain([GLYPH_ATLAS_TEXTURE_NAME.to_string()])
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
     if let Some(layout) = ctx.layout_tabs.items.get_mut(ctx.layout_tabs.active_index) {
-        if let Some(material_list) = layout.tree.material_list.as_mut() {
-            let changed = ctx.ui_state.material_editor.draw_with(ui, material_list);
+        let mut materials_changed = false;
 
-            // TODO: clean this up perchance?
+        if ctx.ui_state.material_editor.is_editor_visible {
+            let index = ctx.ui_state.material_editor.selected_material as u16;
+            let baseline = layout.material_baseline(index);
 
-            if changed {
-                layout.tree.for_each_mut(|node| {
-                    let mut is_dirty = false;
+            let bntx_textures: Vec<String> = layout
+                .tree
+                .all_bntxs()
+                .flat_map(|bntx| bntx.textures.iter().map(|t| t.name.clone()))
+                .collect();
 
-                    for tq in all_quads_mut(node) {
-                        if tq.material_idx as usize
-                            == ctx.ui_state.material_editor.selected_material
-                        {
-                            is_dirty = true;
-                        }
-                    }
+            let tree = &mut layout.tree;
 
-                    if is_dirty {
-                        node.dirty.insert(DirtyFlags::MATERIAL);
-                    }
-                });
+            if let Some(list) = tree.material_list.as_mut() {
+                let output = ctx.ui_state.material_editor.draw(
+                    ui,
+                    MaterialEditorContext {
+                        list,
+                        textures: &mut tree.texture_list,
+                        bntx_textures: &bntx_textures,
+                        users: &tree.material_users,
+                    },
+                );
+
+                if let Some(action) = output.action {
+                    ctx.ui_state.pending_action = Some(action);
+                }
+
+                if output.changed {
+                    tree.mark_material_dirty(index);
+                    layout.note_material_edit(baseline);
+                    materials_changed = true;
+                }
             }
         }
 
         if let Some(idx) = ctx.ui_state.pane_tree_view.selected_pane
-            && let Some(node) = layout.tree.find_by_idx_mut(idx)
+            && ctx.ui_state.pane_editor.is_editor_visible
         {
-            ctx.ui_state.pane_editor.draw_with(ui, node);
+            let editor = &mut ctx.ui_state.pane_editor;
+            let name_error = editor
+                .pending_name(idx)
+                .and_then(|name| layout.tree.pane_name_error(name, Some(idx)));
+
+            let baseline = layout.pane_baseline(idx);
+
+            let materials: Vec<String> = layout
+                .tree
+                .material_list
+                .as_ref()
+                .map(|list| {
+                    list.materials
+                        .iter()
+                        .map(|m| m.material_name.trim_end_matches('\0').to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let fonts: Vec<String> = layout
+                .tree
+                .font_list
+                .as_ref()
+                .map(|list| list.fonts.clone())
+                .unwrap_or_default();
+
+            let owner = layout
+                .tree
+                .find_by_idx(idx)
+                .filter(|n| n.parts_source.is_some())
+                .and_then(|_| layout.tree.parts_owner(idx))
+                .filter(|&o| {
+                    layout
+                        .tree
+                        .find_by_idx(o)
+                        .is_some_and(|n| n.parts_source.is_none())
+                });
+
+            let mut owner_parts = owner.and_then(|o| {
+                let node = layout.tree.find_by_idx(o)?;
+
+                let BflytSection::PartsPane(parts) = &node.section else {
+                    return None;
+                };
+
+                Some((
+                    o,
+                    node.label.trim_end_matches('\0').to_string(),
+                    parts.clone(),
+                ))
+            });
+
+            let owner_baseline = owner.map(|o| layout.pane_baseline(o));
+
+            let parts_content: Vec<(PaneId, String)> = layout
+                .tree
+                .find_by_idx(idx)
+                .filter(|n| {
+                    n.parts_source.is_none() && matches!(n.section, BflytSection::PartsPane(_))
+                })
+                .map(|n| {
+                    n.parts_children
+                        .iter()
+                        .flat_map(|c| c.iter())
+                        .filter(|c| !c.plain_quad.is_parts_root)
+                        .filter(|c| layout.tree.parts_owner(c.pane_idx) == Some(idx))
+                        .map(|c| (c.pane_idx, c.label.trim_end_matches('\0').to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let mut select = None;
+            let mut edited = None;
+            let mut overridden = false;
+            let mut request = None;
+
+            if let Some(node) = layout.tree.find_by_idx_mut(idx) {
+                let materials_before = node.material_indices();
+                let label = node.label.trim_end_matches('\0').to_string();
+
+                let output = editor.draw_with(
+                    ui,
+                    (
+                        &mut *node,
+                        PaneEditorContext {
+                            name_error: name_error.as_deref(),
+                            materials: &materials,
+                            fonts: &fonts,
+                            overrides: owner_parts.as_mut().map(|(_, owner, parts)| {
+                                OverrideTarget {
+                                    owner: owner.as_str(),
+                                    parts,
+                                }
+                            }),
+                            parts_content: &parts_content,
+                        },
+                    ),
+                );
+
+                select = output.select;
+                overridden = output.override_changed;
+                request = output.request.map(|r| (r, label));
+
+                if output.changed {
+                    node.mark_transform_dirty();
+                    edited = Some((node.material_indices() != materials_before, output.reexpand));
+                }
+            }
+
+            if overridden && let Some((owner, _, parts)) = owner_parts {
+                if let Some(node) = layout.tree.find_by_idx_mut(owner)
+                    && let BflytSection::PartsPane(own) = &mut node.section
+                {
+                    *own = parts;
+                }
+
+                layout.tree.rebuild_maps();
+                let ids = layout.tree.parts_content_ids(owner);
+
+                layout
+                    .tree
+                    .rebuild_parts(owner, Some(ids), &mut ctx.layout_tabs.glyphs);
+
+                if let Some(node) = layout.tree.find_by_idx_mut(owner) {
+                    node.mark_transform_dirty();
+                }
+
+                layout.tree.mark_pane_dirty(owner);
+                layout.tree.recompute_dirty();
+                layout.note_pane_edit(owner_baseline.flatten());
+
+                materials_changed = true;
+            }
+
+            if let Some(pane) = select {
+                ctx.ui_state.pane_tree_view.select(Some(pane));
+                ctx.ui_state.pane_tree_view.reveal(&layout.tree, &[pane]);
+            }
+
+            match request {
+                Some((OverrideRequest::Section(toggle), pane)) => {
+                    if let Some(owner) = owner {
+                        ctx.ui_state.pending_action = Some(UiAction::OverrideSection {
+                            owner,
+                            pane,
+                            toggle,
+                        });
+                    }
+                }
+                Some((OverrideRequest::OpenMaterial(index), _)) => {
+                    ctx.ui_state.material_editor.is_editor_visible = true;
+                    ctx.ui_state.material_editor.selected_material = index as usize;
+                }
+                None => {}
+            }
+
+            if let Some((rematerialed, reexpand)) = edited {
+                if rematerialed {
+                    layout.tree.rebuild_maps();
+                }
+
+                if reexpand {
+                    let ids = layout.tree.parts_content_ids(idx);
+                    layout
+                        .tree
+                        .rebuild_parts(idx, Some(ids), &mut ctx.layout_tabs.glyphs);
+
+                    if let Some(node) = layout.tree.find_by_idx_mut(idx) {
+                        node.mark_transform_dirty();
+                    }
+                }
+
+                layout.tree.mark_pane_dirty(idx);
+                layout.tree.recompute_dirty();
+                layout.note_pane_edit(baseline);
+                materials_changed = true;
+            }
+
+            if let Some(name) = editor.take_rename() {
+                ctx.ui_state.pending_action = Some(UiAction::RenamePane {
+                    target_idx: idx,
+                    name,
+                });
+            }
         }
 
-        ctx.ui_state.texture_editor.draw_with(
+        if materials_changed {
+            layout
+                .tree
+                .recompute_dirty_materials(&mut ctx.layout_tabs.glyphs);
+            layout.tree.update_animation_visuals();
+        }
+
+        if let Some(action) = ctx.ui_state.texture_editor.draw_with(
             ui,
-            (
-                layout.tree.main_bntx.as_ref(),
-                &ctx.layout_tabs.glyphs.atlas,
-            ),
-        );
+            TextureEditState {
+                main_bntx: layout.tree.main_bntx.as_ref(),
+                atlas: &ctx.layout_tabs.glyphs.atlas,
+                editable: layout.bntx_source.is_some(),
+                taken: &taken_textures,
+            },
+        ) {
+            ctx.ui_state.pending_action = Some(action);
+        }
 
         ctx.ui_state.group_editor.draw_with(ui, &mut layout.tree);
+
+        if let Some(action) = ctx.ui_state.duplicate_dialog.show(ui.ctx(), &layout.tree) {
+            ctx.ui_state.pending_action = Some(action);
+        }
     }
 
-    if let Some(timeline) = ctx.layout_tabs.active_timeline_mut() {
-        timeline.draw(ui);
+    if let Some(layout) = ctx.layout_tabs.active_mut() {
+        let materials = layout
+            .tree
+            .material_list
+            .as_ref()
+            .map_or(0, |list| list.materials.len());
+
+        let key = (layout.tree.animation_binding_revision, materials);
+
+        if layout.timeline.animatable_key != Some(key) {
+            layout.timeline.animatable = animatable(&layout.tree);
+            layout.timeline.animatable_key = Some(key);
+        }
+
+        layout.timeline.draw(ui);
+
+        if let Some((label, info)) = layout.timeline.pending_anim_edit.take() {
+            ctx.ui_state.pending_action = Some(UiAction::EditAnim {
+                label,
+                info: Box::new(info),
+            });
+        }
     }
 
     if let Some(action) = ctx.ui_state.archive_browser.draw(ui) {
@@ -741,7 +1111,7 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
             .resizable(true)
             .open(&mut ctx.ui_state.show_statistics_window)
             .show(ui, |ui| {
-                ui.label(format!("Total Panes: {}", layout.tree.max_pane_idx + 1));
+                ui.label(format!("Total Panes: {}", layout.tree.iter().count()));
 
                 let total_textured = layout
                     .tree
@@ -789,75 +1159,79 @@ fn draw_pane_properties(ui: &mut Ui, pane: &mut PaneNode) -> bool {
             ui.heading("Transform");
             ui.add_space(4.0);
 
+            let editable = pane.parts_source.is_none();
+
             if let Some(base) = pane.section.get_base_pane_mut() {
-                egui::Grid::new("pane_transform_grid")
-                    .num_columns(2)
-                    .striped(true)
-                    .spacing([12.0, 4.0])
-                    .show(ui, |ui| {
-                        ui.label("Translate X");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.translation.x).speed(0.5))
-                            .changed();
-                        ui.end_row();
+                ui.add_enabled_ui(editable, |ui| {
+                    egui::Grid::new("pane_transform_grid")
+                        .num_columns(2)
+                        .striped(true)
+                        .spacing([12.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Translate X");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.translation.x).speed(0.5))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Translate Y");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.translation.y).speed(0.5))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Translate Y");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.translation.y).speed(0.5))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Translate Z");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.translation.z).speed(0.5))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Translate Z");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.translation.z).speed(0.5))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Rotate X");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.rotation.x).speed(0.1))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Rotate X");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.rotation.x).speed(0.1))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Rotate Y");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.rotation.y).speed(0.1))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Rotate Y");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.rotation.y).speed(0.1))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Rotate Z");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.rotation.z).speed(0.1))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Rotate Z");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.rotation.z).speed(0.1))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Scale X");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.scale.x).speed(0.01))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Scale X");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.scale.x).speed(0.01))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Scale Y");
-                        if ui
-                            .add(egui::DragValue::new(&mut base.scale.y).speed(0.01))
-                            .changed()
-                        {
-                            changed = true;
-                        }
-                        ui.end_row();
+                            ui.label("Scale Y");
+                            if ui
+                                .add(egui::DragValue::new(&mut base.scale.y).speed(0.01))
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            ui.end_row();
 
-                        ui.label("Size X");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.size.x).speed(0.5))
-                            .changed();
-                        ui.end_row();
+                            ui.label("Size X");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.size.x).speed(0.5))
+                                .changed();
+                            ui.end_row();
 
-                        ui.label("Size Y");
-                        changed |= ui
-                            .add(egui::DragValue::new(&mut base.size.y).speed(0.5))
-                            .changed();
-                        ui.end_row();
-                    });
+                            ui.label("Size Y");
+                            changed |= ui
+                                .add(egui::DragValue::new(&mut base.size.y).speed(0.5))
+                                .changed();
+                            ui.end_row();
+                        });
+                });
             }
 
             ui.add_space(8.0);
@@ -973,4 +1347,46 @@ fn draw_prop_f32(ui: &mut Ui, label: &str, value: f32) {
     ui.strong(label);
     ui.label(format!("{:.2}", value));
     ui.end_row();
+}
+
+fn animatable(tree: &crate::pane_tree::PaneTree) -> Vec<Animatable> {
+    let mut out: Vec<Animatable> = tree
+        .roots
+        .iter()
+        .flat_map(|root| root.iter())
+        .filter(|n| n.parts_source.is_none())
+        .filter_map(|n| {
+            let base = n.section.get_base_pane()?;
+
+            Some(Animatable {
+                name: n.label.trim_end_matches('\0').to_string(),
+                anim_type: AnimType::Pane,
+                base: Some(PaneBase {
+                    translate: [base.translation.x, base.translation.y, base.translation.z],
+                    rotate: [base.rotation.x, base.rotation.y, base.rotation.z],
+                    scale: [base.scale.x, base.scale.y],
+                    size: [base.size.x, base.size.y],
+                    alpha: base.alpha as f32,
+                    visible: base.pane_flags.is_visible,
+                }),
+                layers: 0,
+            })
+        })
+        .collect();
+
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+
+    out.extend(
+        tree.material_list
+            .iter()
+            .flat_map(|list| &list.materials)
+            .map(|m| Animatable {
+                name: m.material_name.trim_end_matches('\0').to_string(),
+                anim_type: AnimType::Material,
+                base: None,
+                layers: m.tex_maps.len(),
+            }),
+    );
+
+    out
 }

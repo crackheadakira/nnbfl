@@ -36,7 +36,7 @@ pub enum AnimInfoType {
     VectorGraphicsAnim = tchar_code32(b"FVGA"),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, IntoPrimitive, FromPrimitive, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoPrimitive, FromPrimitive, Default)]
 #[repr(u8)]
 pub enum AnimType {
     #[default]
@@ -47,7 +47,7 @@ pub enum AnimType {
     StateMachine,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AnimInfo {
     Standard {
         anim_type: AnimInfoType,
@@ -156,7 +156,7 @@ impl ReadWriteable for AnimInfo {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ExtendedUserDataAnim {
     pub header_size: u32,
     pub unk_1: u16,
@@ -231,7 +231,7 @@ impl ReadWriteable for ExtendedUserDataAnim {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct PaneAnimInfo {
     pub frame_count: u16,
     pub is_looping: bool,
@@ -335,7 +335,7 @@ impl ReadWriteable for PaneAnimInfo {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AnimContent {
     pub name: String,
     pub anim_type: AnimType,

@@ -1,40 +1,43 @@
 # TODO
 
-- [x] Better animation graph editor
+- [ ] Better animation graph editor
     - [ ] Curve easing
     - [ ] Adding / deleting keyframes
-- [x] Smarter material upload
-- [x] Material creation
-    - [x] Adding entries to material
+    - [ ] Fix the graph editor zoom in resulting in the graph overlapping UI elements
+- [ ] Material creation
+    - [ ] Adding entries to material
     - [ ] Allow modification of TexMap texture index
     - [ ] Assigning materials to pane
-- [x] Animation group support
-- [x] Group editor
-- [x] Parent rotation affects children
-- [x] Window pane support
+- [ ] Window pane support
     - [ ] Fix window panes with one corner defined having incorrect UV anchor-point for bottom left & right
-- [x] Space + mouse to drag panes
+    - [x] Smarter material upload
 - [ ] Config / options system
     - [ ] Zstd dictionary support
     - [ ] Game-config system
 - [ ] Font rendering system for text box panes
     - [x] Bfttf / Bfotf parsing
     - [ ] Bffnt / Bfcpx(?) support
+    - [ ] Per character animations & rendering
 - [ ] Detailed pane editor (!!)
     - [ ] User data editing (!!)
     - [ ] PartsPane override editing
 - [ ] Texture uploading / replacing
+    - [ ] BNTX texture setting editing
 - [ ] Intuitive selection
-- [ ] Saving file as a packed SARC
-- [ ] Auto-remove orphans?
-- [x] Pane tree view
+- [ ] Pane tree view
     - [x] Fix 'draw only pane outlines'
     - [x] Fix 'draw pane outlines for textures'
     - [ ] Adding new panes
+        - [ ] Importing PartsPanes
+        - [ ] Creating a PartsPane layout
     - [ ] Multi-select panes
-    - [ ] Reordering panes
+    - [x] Reordering panes
 - [ ] Scissor pane support
-- [ ] Captor pane support? (is this something rendering specific for in-game, or is it also used in bflyts)
 - [ ] Pop-up when loading from a SARC asking for which bflyt file to load
-- [x] Tab system
 - [ ] Add support for scaling by the handle's origin rather than center origin depending on shortcut pressed.
+- [x] Animation group support
+- [x] Group editor
+- [x] Parent rotation affects children
+- [x] Space + mouse to drag panes
+- [x] Saving file as a packed SARC
+- [x] Tab system
