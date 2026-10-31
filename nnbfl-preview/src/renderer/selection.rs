@@ -76,7 +76,7 @@ impl SelectionRenderer {
             device,
             "selection",
             include_str!("../shaders/selection.wgsl"),
-            &[SelectionVertex::desc()],
+            &[Some(SelectionVertex::desc())],
             surface_format,
             Uniforms::from_matrix(identity),
             wgpu::ShaderStages::VERTEX,

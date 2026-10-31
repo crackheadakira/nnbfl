@@ -356,7 +356,7 @@ impl FontCache {
         }
 
         let bytes = crate::chinese_font::load_chinese_font()
-            .map(|data| data.font.into_owned())
+            .map(|data| (*data.font).as_ref().to_vec())
             .map_err(|e| log::warn!("No placeholder font installed: {e}"))
             .ok()?;
 

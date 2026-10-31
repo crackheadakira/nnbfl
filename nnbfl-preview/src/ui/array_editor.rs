@@ -67,7 +67,7 @@ pub struct ArrayEditor<'a, T> {
 impl<'a, T: Clone + Default> ArrayEditor<'a, T> {
     pub fn new(id_salt: impl Hash + Debug, items: &'a mut Vec<T>) -> Self {
         Self {
-            id: egui::Id::new(id_salt),
+            id: egui::Id::unique(id_salt),
             items,
             title: None,
             max: usize::MAX,

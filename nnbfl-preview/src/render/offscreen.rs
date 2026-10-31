@@ -148,6 +148,7 @@ impl OffscreenRenderer {
                 power_preference: wgpu::PowerPreference::default(),
                 compatible_surface: None,
                 force_fallback_adapter: options.software,
+                apply_limit_buckets: false,
             })
             .block_on()
             .map_err(|e| RenderError::Adapter(e.to_string()))?;
@@ -339,7 +340,9 @@ impl OffscreenRenderer {
 
         let mut rgba = Vec::with_capacity((row * height) as usize);
         {
-            let mapped = buffer.get_mapped_range(..);
+            let mapped = buffer
+                .get_mapped_range(..)
+                .map_err(|e| RenderError::Readback(e.to_string()))?;
             for chunk in mapped.chunks(padded_row as usize) {
                 rgba.extend_from_slice(&chunk[..row as usize]);
             }

@@ -103,6 +103,7 @@ impl GpuState {
                 power_preference: wgpu::PowerPreference::default(),
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .block_on()
             .expect("find adapter");
@@ -136,6 +137,7 @@ impl GpuState {
             desired_maximum_frame_latency: 2,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
+            color_space: wgpu::SurfaceColorSpace::Auto,
         };
 
         surface.configure(&device, &config);
@@ -380,10 +382,12 @@ impl GpuState {
             pixels_per_point: full_output.pixels_per_point,
         };
 
-        for (id, delta) in &full_output.textures_delta.set {
+        for (id, deltas) in &full_output.textures_delta.set {
             puffin::profile_scope!("egui_update_texture");
-            self.egui_renderer
-                .update_texture(&self.device, &self.queue, *id, delta);
+            for delta in deltas {
+                self.egui_renderer
+                    .update_texture(&self.device, &self.queue, *id, delta);
+            }
         }
 
         for id in &full_output.textures_delta.free {
@@ -498,7 +502,7 @@ impl GpuState {
         }
 
         self.queue.submit(std::iter::once(render_encoder.finish()));
-        output.present();
+        self.queue.present(output);
     }
 }
 

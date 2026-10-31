@@ -10,11 +10,11 @@ path = "src/main.rs"
 [dependencies]
 nnbfl = { path = "../nnbfl" }
 
-wgpu = "29"
+wgpu = "30"
 winit = "0.30"
-egui = "0.35"
-egui-wgpu = "0.35"
-egui-winit = "0.35"
+egui = "0.37"
+egui-wgpu = "0.37"
+egui-winit = "0.37"
 bytemuck = { version = "1.16", features = ["derive"] }
 pollster = "0.4"
 log = "0.4"
@@ -27,9 +27,9 @@ rayon = "1.12"
 
 szs = { git = "https://github.com/snailspeed3/RiiStudio/", rev = "8af2650ca7d13b3447b5d1712acc5dba5b1024ea", version = "0.3.7" }
 bitflags = "2.13.0"
-puffin = { git = "https://github.com/EmbarkStudios/puffin", package = "puffin" }
-puffin_egui = { git = "https://github.com/EmbarkStudios/puffin", package = "puffin_egui" }
-egui_ltreeview = "0.8"
+puffin = { git = "https://github.com/EmbarkStudios/puffin", rev = "39c8970abd6a95871bcaf0d3581c494885f2edd5", package = "puffin" }
+puffin_egui = { git = "https://github.com/EmbarkStudios/puffin", rev = "39c8970abd6a95871bcaf0d3581c494885f2edd5", package = "puffin_egui" }
+egui_ltreeview = "0.10"
 thiserror = "2.0.19"
 ttf-parser = "0.25"
 fontdue = "0.9"

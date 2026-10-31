@@ -49,7 +49,7 @@ impl DrawUiWith<ContextMenuState<'_>, Option<ContextMenuAction>> for ContextMenu
         let label = state.node.label.trim_end_matches("\0");
         let is_parts_content = state.node.parts_source.is_some();
 
-        let area_response = egui::Area::new(egui::Id::new("pane_context_menu"))
+        let area_response = egui::Area::new(egui::Id::unique("pane_context_menu"))
         .fixed_pos(pos)
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {

@@ -107,7 +107,7 @@ impl DrawUiWith<&mut [String]> for Group {
             ui.add_space(4.0);
 
             ui.horizontal(|ui| {
-                let dropdown_id = egui::Id::new("add_to_group").with(&self.group_name);
+                let dropdown_id = egui::Id::unique("add_to_group").with(&self.group_name);
 
                 egui::ComboBox::from_id_salt(dropdown_id)
                     .selected_text("➕ Add Pane...")

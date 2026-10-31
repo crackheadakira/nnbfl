@@ -132,7 +132,7 @@ pub fn combo<T: Copy + Into<u8> + From<u8>>(
         let current: u8 = (*value).into();
         let mut changed = false;
 
-        egui::ComboBox::from_id_salt((label, ui.id()))
+        egui::ComboBox::from_id_salt((label, ui.scope_id()))
             .selected_text(names.get(current as usize).copied().unwrap_or("?"))
             .show_ui(ui, |ui| {
                 for (i, name) in names.iter().enumerate() {
@@ -156,7 +156,7 @@ pub fn index_combo(ui: &mut Ui, label: &str, index: &mut u16, names: &[String]) 
             .get(*index as usize)
             .map_or_else(|| format!("#{index} (missing)"), |name| name.clone());
 
-        egui::ComboBox::from_id_salt((label, ui.id()))
+        egui::ComboBox::from_id_salt((label, ui.scope_id()))
             .selected_text(current)
             .show_ui(ui, |ui| {
                 for (i, name) in names.iter().enumerate() {

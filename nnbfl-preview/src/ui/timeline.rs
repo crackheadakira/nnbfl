@@ -1025,13 +1025,13 @@ impl TimelineState {
 
         let canvas = ui.interact(
             rects.graph,
-            ui.id().with("timeline_graph"),
+            ui.scope_id().with("timeline_graph"),
             egui::Sense::click_and_drag(),
         );
 
         let ruler = ui.interact(
             rects.ruler,
-            ui.id().with("timeline_ruler"),
+            ui.scope_id().with("timeline_ruler"),
             egui::Sense::click_and_drag(),
         );
 
@@ -1130,7 +1130,7 @@ impl TimelineState {
                     egui::Vec2::splat(TIMELINE_MARKER_RADIUS * 2.5),
                 );
 
-                let point_id = ui.id().with((
+                let point_id = ui.scope_id().with((
                     "timeline_key",
                     track.content_idx,
                     track.info_idx,
@@ -1210,7 +1210,7 @@ impl TimelineState {
                         egui::Vec2::splat(TIMELINE_MARKER_RADIUS * 2.0),
                     );
 
-                    let handle_id = ui.id().with((
+                    let handle_id = ui.scope_id().with((
                         "timeline_handle",
                         track.content_idx,
                         track.info_idx,

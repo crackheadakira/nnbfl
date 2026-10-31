@@ -119,7 +119,7 @@ impl RenderPipelineContainer {
         device: &wgpu::Device,
         label: &str,
         shader_src: &str,
-        vertex_buffers: &[wgpu::VertexBufferLayout],
+        vertex_buffers: &[Option<wgpu::VertexBufferLayout>],
         surface_format: wgpu::TextureFormat,
         initial_uniforms: U,
         visibility: wgpu::ShaderStages,
