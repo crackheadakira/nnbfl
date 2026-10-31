@@ -5,6 +5,7 @@ mod archive_browser;
 mod camera;
 mod chinese_font;
 mod cli;
+mod config;
 mod edit_history;
 mod error;
 mod font;
@@ -980,10 +981,14 @@ struct App {
 
 impl App {
     fn new() -> Self {
+        let mut ui_state = UiState::default();
+        ui_state.config = config::AppConfig::load();
+        ui_state.archive_browser.layout_dir = ui_state.config.layout_dir.clone();
+
         Self {
             tabs: LayoutTabs::default(),
             docs: DocStore::default(),
-            ui_state: UiState::default(),
+            ui_state,
             camera: Camera::new(),
             egui_ctx: egui::Context::default(),
             egui_state: None,
@@ -1946,7 +1951,9 @@ impl ApplicationHandler for App {
                         return;
                     };
 
-                    self.ui_state.archive_browser.layout_dir = Some(dir);
+                    self.ui_state.archive_browser.layout_dir = Some(dir.clone());
+                    self.ui_state.config.layout_dir = Some(dir);
+                    self.ui_state.config.save();
 
                     if let Some(w) = &self.window {
                         w.request_redraw();

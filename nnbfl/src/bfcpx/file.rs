@@ -353,7 +353,7 @@ impl BitPackable<u8> for BfcpxFontFlags {
             is_ignore_proportional_alternate_width: (raw & 0x01) != 0,
             is_override_bearing_x: ((raw >> 1) & 0x01) != 0,
             is_override_char_width: ((raw >> 2) & 0x01) != 0,
-            is_exclude_from_height_calculation: ((raw >> 4) & 0x01) != 0,
+            is_exclude_from_height_calculation: ((raw >> 3) & 0x01) != 0,
         }
     }
 

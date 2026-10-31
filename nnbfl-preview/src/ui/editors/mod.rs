@@ -1,4 +1,4 @@
-mod fields;
+pub(crate) mod fields;
 mod group_editor;
 mod material_editor;
 mod pane_editor;

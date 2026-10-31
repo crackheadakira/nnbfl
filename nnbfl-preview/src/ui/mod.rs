@@ -4,6 +4,7 @@ pub mod context_menu;
 pub mod dialogs;
 pub mod editors;
 pub mod general;
+pub mod settings;
 pub mod shortcuts;
 pub mod timeline;
 pub mod tree_view;

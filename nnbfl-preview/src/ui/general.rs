@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::{
+    config::AppConfig,
     edit_history::OverrideToggle,
     ops::duplicate::{DuplicateNames, DuplicateOptions},
     pane_factory::NewPaneKind,
@@ -30,6 +31,7 @@ use crate::{
             GroupEditor, MaterialEditor, MaterialEditorContext, OverrideRequest, OverrideTarget,
             PaneEditor, PaneEditorContext, TextureEditState, TextureEditor,
         },
+        settings::{SettingsWindow, profile_combo},
         shortcuts::Shortcuts,
         tree_view::TreeView,
     },
@@ -67,6 +69,9 @@ pub struct UiState {
     pub duplicate_dialog: DuplicateDialog,
     pub show_statistics_window: bool,
     pub enable_puffin: bool,
+
+    pub config: AppConfig,
+    pub settings: SettingsWindow,
 }
 
 impl UiState {
@@ -429,6 +434,16 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
 
             if ui.button("Browse Archives...").clicked() {
                 ctx.ui_state.archive_browser.is_visible = true;
+            }
+
+            if ui.button("Settings").clicked() {
+                ctx.ui_state.settings.is_open = true;
+            }
+
+            ui.label("Profile:");
+
+            if profile_combo(ui, "menu_active_profile", &mut ctx.ui_state.config) {
+                ctx.ui_state.config.save();
             }
 
             if let Some(layout) = ctx.layout_tabs.active() {
@@ -1101,6 +1116,12 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
     };
 
     ctx.ui_state.shortcuts_window.draw(ui);
+
+    let state = &mut *ctx.ui_state;
+    if state.settings.draw_with(ui, &mut state.config) {
+        state.config.save();
+    }
+
     if ctx.ui_state.enable_puffin {
         puffin_egui::profiler_window(ui.ctx());
     }
