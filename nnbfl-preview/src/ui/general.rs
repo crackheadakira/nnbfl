@@ -96,6 +96,9 @@ pub struct PaneVisibilityFlags {
     /// Show the plain outline on top of panes that have a texture.
     pub quad_for_textured: bool,
 
+    /// Hide text box glyphs.
+    pub no_text: bool,
+
     /// Where to stop the shader for debugging purposes.
     pub active_debug_stage: u32,
 }
@@ -114,7 +117,10 @@ impl PaneVisibilityFlags {
         tq: &crate::renderer::textured_quad::TexturedQuad,
         hidden: bool,
     ) -> [f32; 4] {
-        if hidden || self.no_textured {
+        if hidden
+            || self.no_textured
+            || (self.no_text && tq.texture_name == GLYPH_ATLAS_TEXTURE_NAME)
+        {
             [0.0; 4]
         } else {
             tq.tint

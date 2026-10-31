@@ -74,6 +74,10 @@ struct RenderArgs {
     #[arg(long)]
     profile: Option<String>,
 
+    /// Leaves text box glyphs out
+    #[arg(long)]
+    no_text: bool,
+
     /// Renders on a software adapter
     #[arg(long)]
     software: bool,
@@ -272,11 +276,12 @@ fn render(args: &RenderArgs) -> i32 {
         }
     };
 
-    let settings = RenderSettings {
+    let mut settings = RenderSettings {
         scale: args.scale,
         background: args.background,
         ..Default::default()
     };
+    settings.flags.no_text = args.no_text;
     let range = match (args.frame, args.frames) {
         (Some(frame), _) => FrameRange {
             start: frame,
