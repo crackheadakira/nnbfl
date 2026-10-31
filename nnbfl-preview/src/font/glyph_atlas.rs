@@ -206,6 +206,11 @@ pub struct FontFace {
     pub ascender: f32,
     pub descender: f32,
     pub line_gap: f32,
+
+    pub win_ascent: f32,
+    pub win_descent: f32,
+    pub bbox_y_max: f32,
+    pub bbox_y_min: f32,
 }
 
 impl FontFace {
@@ -217,6 +222,15 @@ impl FontFace {
         let ascender = face.ascender() as f32;
         let descender = face.descender() as f32;
         let line_gap = face.line_gap() as f32;
+
+        let (win_ascent, win_descent) = face.tables().os2.map_or((ascender, -descender), |os2| {
+            (
+                f32::from(os2.windows_ascender() as u16),
+                (-i32::from(os2.windows_descender())) as u16 as f32,
+            )
+        });
+
+        let bbox = face.global_bounding_box();
 
         let fontdue_font = {
             puffin::profile_scope!("fontdue::Font::from_bytes");
@@ -239,6 +253,10 @@ impl FontFace {
             ascender,
             descender,
             line_gap,
+            win_ascent,
+            win_descent,
+            bbox_y_max: f32::from(bbox.y_max),
+            bbox_y_min: f32::from(bbox.y_min),
         })
     }
 

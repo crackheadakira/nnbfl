@@ -74,6 +74,129 @@ pub struct MemberMetrics {
     pub bearing_x: i16,
     pub char_width: Option<u16>,
     pub exclude_from_height: bool,
+    pub base_size: u32,
+    pub line_feed_delta: i32,
+
+    /// Which scalable descriptor of the bfcpx this member belongs to
+    pub group: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextFontMetrics {
+    pub width: f32,
+    pub height: f32,
+    pub ascent: f32,
+    pub baseline_pos: f32,
+    pub line_feed: f32,
+}
+
+impl TextFontMetrics {
+    pub fn from_bffnt(bytes: &[u8]) -> Option<Self> {
+        let big_endian = bytes.get(4..6)? == [0xFE, 0xFF];
+        let u16_at = |at: usize| {
+            let raw = [*bytes.get(at)?, *bytes.get(at + 1)?];
+
+            Some(if big_endian {
+                u16::from_be_bytes(raw)
+            } else {
+                u16::from_le_bytes(raw)
+            })
+        };
+
+        let u32_at = |at: usize| {
+            let raw: [u8; 4] = bytes.get(at..at + 4)?.try_into().ok()?;
+
+            Some(if big_endian {
+                u32::from_be_bytes(raw)
+            } else {
+                u32::from_le_bytes(raw)
+            })
+        };
+
+        let section = |magic: &[u8; 4]| {
+            let mut at = usize::from(u16_at(6)?);
+
+            while let Some(size) = u32_at(at + 4) {
+                if bytes.get(at..at + 4)? == magic {
+                    return Some(at);
+                }
+
+                at = at.checked_add(usize::try_from(size).ok().filter(|&s| s > 0)?)?;
+            }
+
+            None
+        };
+
+        let finf = section(b"FINF")?;
+        let tglp = section(b"TGLP")?;
+
+        Some(Self {
+            height: f32::from(*bytes.get(finf + 9)?),
+            width: f32::from(*bytes.get(finf + 10)?),
+            ascent: f32::from(*bytes.get(finf + 11)?),
+            line_feed: f32::from(u16_at(finf + 12)?),
+            baseline_pos: f32::from(u16_at(tglp + 16)?),
+        })
+    }
+
+    fn pair(self, other: Self) -> Self {
+        let first = self.height >= other.height;
+        let taller = if first { self } else { other };
+
+        Self {
+            width: self.width.max(other.width),
+            height: self.height.max(other.height),
+            ascent: taller.ascent,
+            baseline_pos: taller.baseline_pos,
+            line_feed: self.line_feed.max(other.line_feed),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FaceRatios {
+    ascent: f32,
+    height: f32,
+    bbox_ascent: f32,
+    bbox_height: f32,
+}
+
+impl FaceRatios {
+    fn of(face: &FontFace, metrics: &MemberMetrics) -> Self {
+        let em = face.units_per_em.max(1.0);
+        let (mut ascent, mut descent) = (face.win_ascent, face.win_descent);
+        let (mut bbox_max, mut bbox_min) = (face.bbox_y_max, face.bbox_y_min);
+
+        if metrics.ascent != 0 {
+            ascent = f32::from(metrics.ascent);
+            bbox_max = ascent;
+        }
+
+        if metrics.descent != 0 {
+            descent = f32::from(metrics.descent);
+            bbox_min = -descent;
+        }
+
+        Self {
+            ascent: ascent / em,
+            height: (ascent + descent) / em,
+            bbox_ascent: bbox_max / em,
+            bbox_height: (bbox_max - bbox_min) / em,
+        }
+    }
+
+    fn at(self, size: f32, line_feed_delta: i32) -> TextFontMetrics {
+        let round = |v: f32| (v + 0.5).floor();
+        let height = round(self.height * size);
+
+        TextFontMetrics {
+            width: size,
+            height,
+            ascent: round(self.ascent * size),
+            baseline_pos: round(self.bbox_ascent * size),
+            line_feed: height + line_feed_delta as f32,
+        }
+    }
 }
 
 impl Default for MemberMetrics {
@@ -87,6 +210,9 @@ impl Default for MemberMetrics {
             bearing_x: 0,
             char_width: None,
             exclude_from_height: false,
+            base_size: 0,
+            line_feed_delta: 0,
+            group: 0,
         }
     }
 }
@@ -105,6 +231,7 @@ impl From<&BfcpxFont> for MemberMetrics {
                 .is_override_char_width
                 .then_some(font.override_char_width),
             exclude_from_height: font.flags.is_exclude_from_height_calculation,
+            ..Default::default()
         }
     }
 }
@@ -124,6 +251,7 @@ pub struct FontMember {
     pub file: String,
     pub ranges: Vec<(u32, u32)>,
     pub metrics: MemberMetrics,
+    pub bitmap: Option<TextFontMetrics>,
     pub source: MemberSource,
     data: FaceData,
     face: Option<Option<usize>>,
@@ -222,7 +350,7 @@ impl FontCache {
 
         match self.lookup(archive, name) {
             Some(file) if file.kind == FontKind::Complex => match Bfcpx::parse_file(&file.bytes) {
-                Ok(bfcpx) => self.flatten(archive, &bfcpx.description, &mut members),
+                Ok(bfcpx) => self.flatten(archive, &bfcpx.description, &mut members, &mut 0),
                 Err(e) => log::warn!("Couldn't read complex font '{name}': {e}"),
             },
             Some(_) => members.push(self.member(archive, name, 0, Vec::new(), Default::default())),
@@ -240,6 +368,7 @@ impl FontCache {
                 file: name.to_string(),
                 ranges: Vec::new(),
                 metrics: Default::default(),
+                bitmap: None,
                 source: MemberSource::Missing,
                 data: FaceData::Placeholder(None),
                 face: None,
@@ -292,6 +421,74 @@ impl FontCache {
         order.extend(0..members.len());
 
         order.into_iter().find_map(|i| self.member_face(font, i))
+    }
+
+    pub fn text_metrics(&mut self, font: usize, fallback_size: f32) -> Option<TextFontMetrics> {
+        let groups: Vec<u16> = {
+            let mut groups: Vec<u16> = self.fonts[font]
+                .members
+                .iter()
+                .filter(|m| m.metrics.base_size > 0 || m.bitmap.is_some())
+                .map(|m| m.metrics.group)
+                .collect();
+
+            groups.dedup();
+            groups
+        };
+
+        if groups.is_empty() {
+            let face = self.primary_face(font)?;
+            let ratios = FaceRatios::of(&self.faces[face], &MemberMetrics::default());
+            return Some(ratios.at((fallback_size + 0.5).floor().max(1.0), 0));
+        }
+
+        groups
+            .into_iter()
+            .filter_map(|group| self.group_metrics(font, group))
+            .reduce(TextFontMetrics::pair)
+    }
+
+    fn group_metrics(&mut self, font: usize, group: u16) -> Option<TextFontMetrics> {
+        if let Some(bitmap) = self.fonts[font]
+            .members
+            .iter()
+            .find(|m| m.metrics.group == group && m.bitmap.is_some())
+            .and_then(|m| m.bitmap)
+        {
+            return Some(bitmap);
+        }
+
+        let members: Vec<usize> = (0..self.fonts[font].members.len())
+            .filter(|&i| self.fonts[font].members[i].metrics.group == group)
+            .filter(|&i| self.fonts[font].members[i].metrics.base_size > 0)
+            .collect();
+
+        let first = *members.first()?;
+        let metrics = self.fonts[font].members[first].metrics;
+        let mut tallest: Option<FaceRatios> = None;
+        let mut any = None;
+
+        for i in members {
+            let Some(face) = self.member_face(font, i) else {
+                continue;
+            };
+
+            let member = self.fonts[font].members[i].metrics;
+            let ratios = FaceRatios::of(&self.faces[face], &member);
+            any.get_or_insert(ratios);
+
+            if !member.exclude_from_height
+                && tallest.is_none_or(|t| ratios.bbox_height > t.bbox_height)
+            {
+                tallest = Some(ratios);
+            }
+        }
+
+        Some(
+            tallest
+                .or(any)?
+                .at(metrics.base_size as f32, metrics.line_feed_delta),
+        )
     }
 
     fn member_face(&mut self, font: usize, member: usize) -> Option<usize> {
@@ -372,36 +569,60 @@ impl FontCache {
         id
     }
 
-    fn flatten(&mut self, archive: &FontIndex, desc: &BfcpxDescription, out: &mut Vec<FontMember>) {
+    fn flatten(
+        &mut self,
+        archive: &FontIndex,
+        desc: &BfcpxDescription,
+        out: &mut Vec<FontMember>,
+        group: &mut u16,
+    ) {
         match desc {
             BfcpxDescription::Multi(multi) => {
-                self.flatten(archive, &multi.child, out);
-                self.flatten(archive, &multi.next, out);
+                self.flatten(archive, &multi.child, out, group);
+                self.flatten(archive, &multi.next, out, group);
             }
             BfcpxDescription::Scalable(scalable) => {
                 for font in &scalable.font_array {
                     let ranges = font.char_ranges.iter().map(|r| (r.min, r.max)).collect();
+                    let metrics = MemberMetrics {
+                        base_size: (scalable.width + 0.5) as u32,
+                        line_feed_delta: scalable.line_feed_delta as i32,
+                        group: *group,
+                        ..font.into()
+                    };
 
                     out.push(self.member(
                         archive,
                         &font.font_name,
                         font.ttc_font_idx,
                         ranges,
-                        font.into(),
+                        metrics,
                     ));
                 }
+
+                *group += 1;
             }
             BfcpxDescription::Res(res) => {
                 let ranges = res.char_ranges.iter().map(|r| (r.min, r.max)).collect();
+                let bitmap = self
+                    .lookup(archive, &res.font_name)
+                    .and_then(|file| TextFontMetrics::from_bffnt(&file.bytes));
 
                 out.push(FontMember {
                     file: res.font_name.clone(),
                     ranges,
-                    metrics: Default::default(),
+                    metrics: MemberMetrics {
+                        group: *group,
+                        base_size: bitmap.map_or(0, |b| b.height as u32),
+                        ..Default::default()
+                    },
+                    bitmap,
                     source: MemberSource::BitmapStandIn,
                     data: FaceData::Placeholder(None),
                     face: None,
                 });
+
+                *group += 1;
             }
         }
     }
@@ -414,7 +635,18 @@ impl FontCache {
         ranges: Vec<(u32, u32)>,
         metrics: MemberMetrics,
     ) -> FontMember {
-        let (source, data) = match self.lookup(archive, name) {
+        let file = self.lookup(archive, name);
+        let bitmap = file
+            .as_ref()
+            .filter(|file| file.kind == FontKind::Bitmap)
+            .and_then(|file| TextFontMetrics::from_bffnt(&file.bytes));
+
+        let metrics = MemberMetrics {
+            base_size: bitmap.map_or(metrics.base_size, |b| b.height as u32),
+            ..metrics
+        };
+
+        let (source, data) = match file {
             Some(file) if file.kind == FontKind::Bitmap => {
                 (MemberSource::BitmapStandIn, FaceData::Placeholder(None))
             }
@@ -446,6 +678,7 @@ impl FontCache {
             file: name.to_string(),
             ranges,
             metrics,
+            bitmap,
             source,
             data,
             face: None,

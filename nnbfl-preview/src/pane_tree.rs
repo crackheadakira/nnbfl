@@ -2928,16 +2928,27 @@ fn build_text_glyph_quads(
         .unwrap_or("");
 
     let font_ref = glyphs.fonts.resolve(fonts, font_name);
-    let Some(primary) = glyphs.fonts.primary_face(font_ref) else {
+    let Some(metrics) = glyphs.fonts.text_metrics(font_ref, txt.font_size.y) else {
         return quads;
     };
 
-    const FONT_SCALE_BASE_SIZE: f32 = 36.0;
-    let font_size_px = if txt.text_flags.is_keeping_font_scale {
-        FONT_SCALE_BASE_SIZE * txt.font_size.y
+    let font_size = if txt.text_flags.is_keeping_font_scale {
+        Vector2f::new(
+            txt.font_size.x * metrics.width,
+            txt.font_size.y * metrics.height,
+        )
     } else {
-        txt.font_size.y
+        txt.font_size
     };
+
+    let font_size_px = metrics.width;
+    let raster_size = |member: MemberMetrics| match member.base_size {
+        0 => font_size_px,
+        size => size as f32,
+    };
+
+    let scale_x = font_size.x / metrics.width.max(1.0);
+    let scale_y = font_size.y / metrics.height.max(1.0);
 
     let lines: Vec<Vec<GlyphChoice>> = text
         .split('\n')
@@ -2949,10 +2960,7 @@ fn build_text_glyph_quads(
         .collect();
 
     let (font_cache, atlas) = (&glyphs.fonts, &mut glyphs.atlas);
-    let font = font_cache.face(primary);
-    let scale = font_size_px / font.units_per_em.max(1.0);
-    let line_height =
-        (font.ascender - font.descender + font.line_gap) * font_size_px + txt.line_space;
+    let line_height = metrics.line_feed * scale_y + txt.line_space;
 
     let box_w = world_size.x;
     let box_h = world_size.y;
@@ -2969,10 +2977,14 @@ fn build_text_glyph_quads(
 
     let line_widths: Vec<_> = lines
         .iter()
-        .map(|line| measure_line_width(font_cache, line, font_size_px, txt.character_space))
+        .map(|line| {
+            measure_line_width(font_cache, line, font_size_px, scale_x, txt.character_space)
+        })
         .collect();
 
-    let total_text_height = line_height * lines.len() as f32;
+    let total_text_height =
+        line_height * lines.len().saturating_sub(1) as f32 + metrics.height * scale_y;
+
     let start_y = box_ly
         + match txt.text_origin.vertical {
             VerticalPosition::Top => 0.0,
@@ -2998,11 +3010,11 @@ fn build_text_glyph_quads(
             };
 
         let mut pen_x = start_x;
-        let pen_y = start_y + line_idx as f32 * line_height + font.ascender * scale;
+        let pen_y = start_y + line_idx as f32 * line_height + metrics.ascent * scale_y;
         let mut prev_glyph = None;
 
         for &(ch, choice) in line {
-            let Some((face_id, metrics)) = choice else {
+            let Some((face_id, member)) = choice else {
                 prev_glyph = None;
                 continue;
             };
@@ -3014,14 +3026,15 @@ fn build_text_glyph_quads(
             };
 
             if ch != ' '
-                && let Some(atlas_glyph) = atlas.glyph(face, face_id, glyph_id, font_size_px)
+                && let Some(atlas_glyph) = atlas.glyph(face, face_id, glyph_id, raster_size(member))
                 && atlas_glyph.width > 0.0
                 && atlas_glyph.height > 0.0
             {
-                let width = atlas_glyph.width * metrics.width_scale;
-                let height = atlas_glyph.height * metrics.height_scale;
-                let local_left = pen_x + atlas_glyph.bearing_x * metrics.width_scale;
-                let local_top = pen_y - atlas_glyph.bearing_y * metrics.height_scale - height;
+                let (sx, sy) = (scale_x * member.width_scale, scale_y * member.height_scale);
+                let width = atlas_glyph.width * sx;
+                let height = atlas_glyph.height * sy;
+                let local_left = pen_x + atlas_glyph.bearing_x * sx;
+                let local_top = pen_y - atlas_glyph.bearing_y * sy - height;
                 let local_right = local_left + width;
                 let local_bottom = local_top + height;
 
@@ -3080,8 +3093,16 @@ fn build_text_glyph_quads(
                 }
             }
 
-            pen_x += glyph_advance(face, face_id, glyph_id, prev_glyph, metrics, font_size_px)
+            pen_x += glyph_advance(
+                face,
+                face_id,
+                glyph_id,
+                prev_glyph,
+                member,
+                raster_size(member),
+            ) * scale_x
                 + txt.character_space;
+
             prev_glyph = Some((face_id, glyph_id));
         }
     }
@@ -3110,6 +3131,7 @@ fn measure_line_width(
     fonts: &FontCache,
     line: &[GlyphChoice],
     font_size_px: f32,
+    scale_x: f32,
     character_space: f32,
 ) -> f32 {
     let mut width = 0.0;
@@ -3128,7 +3150,12 @@ fn measure_line_width(
             continue;
         };
 
-        width += glyph_advance(face, face_id, glyph_id, prev_glyph, metrics, font_size_px)
+        let size = match metrics.base_size {
+            0 => font_size_px,
+            size => size as f32,
+        };
+
+        width += glyph_advance(face, face_id, glyph_id, prev_glyph, metrics, size) * scale_x
             + character_space;
 
         prev_glyph = Some((face_id, glyph_id));
