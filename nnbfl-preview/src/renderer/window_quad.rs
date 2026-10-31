@@ -318,6 +318,7 @@ pub struct WindowPieceGeometry {
     pub width: f32,
     pub height: f32,
     pub corners: [[f32; 2]; 4],
+    pub local_size: Vector2f,
     pub frame_kind: Option<FrameKind>,
 }
 
@@ -325,11 +326,6 @@ impl WindowPieceGeometry {
     pub fn flip_horizontal(&mut self) {
         self.corners.swap(0, 1);
         self.corners.swap(2, 3);
-    }
-
-    pub fn flip_vertical(&mut self) {
-        self.corners.swap(0, 2);
-        self.corners.swap(1, 3);
     }
 }
 
@@ -375,6 +371,7 @@ pub fn calculate_window_layout(win: &WindowPane, corners: [[f32; 2]; 4]) -> Wind
             width,
             height,
             corners: piece_corners,
+            local_size: Vector2f::new(rect.width, rect.height),
             frame_kind: rect.frame_kind,
         }
     };
@@ -414,25 +411,7 @@ pub fn calculate_window_layout(win: &WindowPane, corners: [[f32; 2]; 4]) -> Wind
                 let all_local_frames = calculate_frame_rects_four(effective_size, fs);
 
                 for rect in all_local_frames {
-                    let mut world_frame = map_local_to_world(rect);
-
-                    if let Some(kind) = rect.frame_kind {
-                        match kind {
-                            FrameKind::TopRight => {
-                                world_frame.flip_horizontal();
-                            }
-                            FrameKind::BottomLeft => {
-                                world_frame.flip_vertical();
-                            }
-                            FrameKind::BottomRight => {
-                                world_frame.flip_horizontal();
-                                world_frame.flip_vertical();
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    frames.push(world_frame);
+                    frames.push(map_local_to_world(rect));
                 }
             }
 
@@ -510,7 +489,16 @@ pub fn derive_from_window(
             &win.content.bottom_right_vertex_color,
         );
 
-        let corner_tints = interpolate_slice_corners(geom.corners, corners, content_colors);
+        let corner_tints = if win.flag.use_vertex_color_for_all_window {
+            interpolate_slice_corners(geom.corners, corners, content_colors)
+        } else {
+            [
+                (*content_colors.0).into(),
+                (*content_colors.1).into(),
+                (*content_colors.2).into(),
+                (*content_colors.3).into(),
+            ]
+        };
 
         if let Some(tq) = TexturedQuad::derive_from_material(
             MaterialPaneData {
@@ -586,8 +574,8 @@ pub fn derive_from_window(
         let effective_flip = flip_override.unwrap_or(frame_data.texture_flip_mode);
 
         let frame_uvs = calculate_scaled_frame_uvs(
-            geom.width,
-            geom.height,
+            geom.local_size.x,
+            geom.local_size.y,
             tex_w,
             tex_h,
             kind,
@@ -708,35 +696,32 @@ pub fn calculate_scaled_frame_uvs(
     texture_maps_count: usize,
     frames_len: usize,
 ) -> Vec<TextureUv> {
+    if window_kind == WindowKind::Around {
+        let flip = if frames_len == 1 {
+            single_frame_flip(kind)
+        } else {
+            flip_mode
+        };
+
+        let uv = around_frame_uvs(
+            geom_width,
+            geom_height,
+            tex_w,
+            tex_h,
+            kind,
+            frames_len,
+            flip,
+        );
+        return vec![uv; texture_maps_count];
+    }
+
     let mut frame_uvs = flipped_plain_uvs(texture_maps_count, TextureFlip::None);
 
     let scale_factor = (geom_width / tex_w).min(geom_height / tex_h);
 
     let u_scale = (geom_width / scale_factor) / tex_w;
-    let v_scale = (geom_height / scale_factor) / tex_h;
 
-    if window_kind == WindowKind::Around {
-        for uv_set in &mut frame_uvs {
-            let (anchor_u, anchor_v) = if frames_len == 1 {
-                (0.0, 0.0)
-            } else {
-                match kind {
-                    FrameKind::TopLeft => (0.0, 0.0),
-                    FrameKind::Top => (0.5, 0.0),
-                    FrameKind::TopRight => (1.0, 0.0),
-                    FrameKind::Left => (0.0, 0.5),
-                    FrameKind::Right => (1.0, 0.5),
-                    FrameKind::BottomLeft => (0.0, 1.0),
-                    FrameKind::Bottom => (0.5, 1.0),
-                    FrameKind::BottomRight => (1.0, 1.0),
-                }
-            };
-
-            apply_anchored_scale(uv_set, u_scale, v_scale, anchor_u, anchor_v);
-        }
-    } else if window_kind == WindowKind::Horizontal
-        || window_kind == WindowKind::HorizontalNoContent
-    {
+    if window_kind == WindowKind::Horizontal || window_kind == WindowKind::HorizontalNoContent {
         let is_stretchy_piece =
             window_kind == WindowKind::HorizontalNoContent && kind == FrameKind::Left;
 
@@ -760,7 +745,6 @@ pub fn calculate_scaled_frame_uvs(
         }
     }
 
-    // TODO: didn't seem to fix 1-frame issue for around being anchored to wrong positions.
     for uv_set in &mut frame_uvs {
         let corners = [
             [uv_set.top_left.x, uv_set.top_left.y],
@@ -778,6 +762,93 @@ pub fn calculate_scaled_frame_uvs(
     }
 
     frame_uvs
+}
+
+fn single_frame_flip(kind: FrameKind) -> TextureFlip {
+    match kind {
+        FrameKind::TopRight => TextureFlip::FlipU,
+        FrameKind::BottomLeft => TextureFlip::FlipV,
+        FrameKind::BottomRight => TextureFlip::Rotate180,
+        _ => TextureFlip::None,
+    }
+}
+
+fn around_frame_uvs(
+    width: f32,
+    height: f32,
+    tex_w: f32,
+    tex_h: f32,
+    kind: FrameKind,
+    frames_len: usize,
+    flip: TextureFlip,
+) -> TextureUv {
+    let (dot_u, dot_v, align_right, align_bottom) = if frames_len == 8 {
+        match kind {
+            FrameKind::Left => (false, true, false, true),
+            FrameKind::Right => (false, true, false, false),
+            FrameKind::Top => (true, false, false, false),
+            FrameKind::Bottom => (true, false, true, false),
+            _ => (false, false, false, false),
+        }
+    } else {
+        match kind {
+            FrameKind::TopRight => (false, true, false, false),
+            FrameKind::BottomLeft => (false, true, false, true),
+            FrameKind::BottomRight => (true, false, true, false),
+            _ => (true, false, false, false),
+        }
+    };
+
+    let swap = matches!(flip, TextureFlip::Rotate90 | TextureFlip::Rotate270);
+    let flip_u = matches!(
+        flip,
+        TextureFlip::FlipU | TextureFlip::Rotate90 | TextureFlip::Rotate180
+    );
+
+    let flip_v = matches!(
+        flip,
+        TextureFlip::FlipV | TextureFlip::Rotate180 | TextureFlip::Rotate270
+    );
+
+    let (scale_u, scale_v) = if swap {
+        (width / tex_h, height / tex_w)
+    } else {
+        (width / tex_w, height / tex_h)
+    };
+
+    let corner = |u: f32, v: f32| {
+        let mut u = if dot_u { u * scale_u } else { u };
+        let mut v = if dot_v { v * scale_v } else { v };
+
+        if align_right {
+            u += 1.0 - scale_u;
+        }
+
+        if align_bottom {
+            v += 1.0 - scale_v;
+        }
+
+        if flip_u {
+            u = 1.0 - u;
+        }
+
+        if flip_v {
+            v = 1.0 - v;
+        }
+
+        if swap {
+            std::mem::swap(&mut u, &mut v);
+        }
+
+        Vector2f::new(u, v)
+    };
+
+    TextureUv {
+        top_left: corner(0.0, 0.0),
+        top_right: corner(1.0, 0.0),
+        bottom_left: corner(0.0, 1.0),
+        bottom_right: corner(1.0, 1.0),
+    }
 }
 
 fn apply_anchored_scale(

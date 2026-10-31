@@ -552,8 +552,8 @@ impl PaneNode {
                         let effective_flip = flip_override.unwrap_or(frame_data.texture_flip_mode);
 
                         let texture_uvs = calculate_scaled_frame_uvs(
-                            geom.width,
-                            geom.height,
+                            geom.local_size.x,
+                            geom.local_size.y,
                             tex_w,
                             tex_h,
                             kind,

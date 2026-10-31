@@ -60,7 +60,7 @@ pub const PRESETS: &[Preset] = &[
     Preset {
         name: "Animal Crossing: New Horizons",
         font_files: &["*.sarc.zs"],
-        output_gamma: OutputGamma::Unorm,
+        output_gamma: OutputGamma::Srgb,
         hint: "Fonts: romfs/Font, layouts: romfs/Layout",
     },
     Preset {

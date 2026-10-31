@@ -1,3 +1,4 @@
+pub mod blend;
 pub mod canvas;
 pub mod quad;
 pub mod selection;

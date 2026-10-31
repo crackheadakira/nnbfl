@@ -586,18 +586,6 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
                 apply_config(ctx);
             }
 
-            let config = &mut ctx.ui_state.config;
-            let mut gamma = config.output_gamma();
-            let hover = match config.active() {
-                Some(profile) => format!("Output for the {} profile\n\n{GAMMA_HINT}", profile.name),
-                None => format!("Output without a profile\n\n{GAMMA_HINT}"),
-            };
-
-            if gamma_toggle(ui, &mut gamma, Some(&hover)) {
-                config.set_output_gamma(gamma);
-                apply_config(ctx);
-            }
-
             ui.menu_button("Help", |ui| {
                 if ui.button("Keyboard Shortcuts").clicked() {
                     ctx.ui_state.shortcuts_window.is_visible = true;

@@ -12,6 +12,7 @@ use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use wgpu::util::DeviceExt;
 use wgpu::{BindGroupLayout, TextureView};
 
+use super::blend::material_blend;
 use super::quad::Quad;
 use super::texture::TextureCache;
 use crate::anim_state::{MaterialAnimation, PaneAnimation};
@@ -225,6 +226,7 @@ pub struct TexturedQuad {
     pub is_detailed: bool,
     pub standard_material: StandardMaterial,
     pub detailed_combiner_material: DetailedCombinerMaterial,
+    pub blend: Option<wgpu::BlendState>,
 
     pub proj_scales: [[f32; 2]; 3],
     pub proj_translations: [[f32; 2]; 3],
@@ -537,6 +539,7 @@ impl TexturedQuad {
             standard_material,
             detailed_combiner_material,
             is_detailed,
+            blend: material_blend(mat),
             pane_idx,
             tex_srts: mat.tex_srts.clone(),
             proj_scales,
@@ -702,6 +705,10 @@ fn highlight(color: [f32; 4]) -> [f32; 4] {
     ]
 }
 
+fn quad_indices(base: u32) -> [u32; 6] {
+    [base, base + 1, base + 3, base, base + 3, base + 2]
+}
+
 fn corner_vertex(data: &PaneQuadData, corner: usize, tint: [f32; 4]) -> Vertex {
     match data {
         PaneQuadData::Plain(q) => Vertex {
@@ -742,6 +749,7 @@ pub enum BatchKey {
         combine_mode2: u32,
         is_detailed: bool,
         detailed_combiner_hash: [i32; 6],
+        blend: Option<wgpu::BlendState>,
     },
 }
 
@@ -766,6 +774,7 @@ impl BatchKey {
             combine_mode2: tq.standard_material.combine_mode2,
             is_detailed: tq.is_detailed,
             detailed_combiner_hash,
+            blend: tq.blend,
         }
     }
 }
@@ -795,9 +804,13 @@ struct Batch {
     piece_keys: Vec<(PaneId, usize)>,
 }
 
+type PipelineKey = (bool, Option<wgpu::BlendState>);
+
 pub struct PaneRenderer {
-    pipeline_standard: wgpu::RenderPipeline,
-    pipeline_detailed: wgpu::RenderPipeline,
+    shader: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
+    format: wgpu::TextureFormat,
+    pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     texture_bgl: BindGroupLayout,
@@ -897,36 +910,16 @@ impl PaneRenderer {
             immediate_size: 0,
         });
 
-        let create_pipeline = |entry: &str| -> wgpu::RenderPipeline {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(&format!("pane_pipeline_{}", entry)),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Vertex::desc()],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(entry),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-
-        let pipeline_standard = create_pipeline("fs_standard");
-        let pipeline_detailed = create_pipeline("fs_detailed");
+        let mut pipelines = HashMap::new();
+        for key in [
+            (false, Some(wgpu::BlendState::ALPHA_BLENDING)),
+            (true, Some(wgpu::BlendState::ALPHA_BLENDING)),
+        ] {
+            pipelines.insert(
+                key,
+                Self::create_pipeline(device, &shader, &pipeline_layout, surface_format, key),
+            );
+        }
 
         let placeholder_texture = device.create_texture_with_data(
             queue,
@@ -960,8 +953,10 @@ impl PaneRenderer {
         });
 
         Self {
-            pipeline_standard,
-            pipeline_detailed,
+            shader,
+            pipeline_layout,
+            format: surface_format,
+            pipelines,
             uniform_buffer,
             uniform_bind_group,
             texture_bgl,
@@ -970,6 +965,55 @@ impl PaneRenderer {
             placeholder_sampler,
             batches: Vec::new(),
             quad_lookup: HashMap::new(),
+        }
+    }
+
+    fn create_pipeline(
+        device: &wgpu::Device,
+        shader: &wgpu::ShaderModule,
+        layout: &wgpu::PipelineLayout,
+        format: wgpu::TextureFormat,
+        (detailed, blend): PipelineKey,
+    ) -> wgpu::RenderPipeline {
+        let entry = if detailed {
+            "fs_detailed"
+        } else {
+            "fs_standard"
+        };
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("pane_pipeline_{entry}")),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_main"),
+                buffers: &[Vertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(entry),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
+    fn pipeline_key(key: &BatchKey) -> PipelineKey {
+        match key {
+            BatchKey::Plain => (false, Some(wgpu::BlendState::ALPHA_BLENDING)),
+            BatchKey::Textured {
+                is_detailed, blend, ..
+            } => (*is_detailed, *blend),
         }
     }
 
@@ -1046,14 +1090,7 @@ impl PaneRenderer {
             {
                 let base = last.vertices.len() as u32;
                 last.vertices.extend_from_slice(&verts);
-                last.indices.extend_from_slice(&[
-                    base,
-                    base + 1,
-                    base + 2,
-                    base + 1,
-                    base + 3,
-                    base + 2,
-                ]);
+                last.indices.extend_from_slice(&quad_indices(base));
                 last.piece_keys.push(piece_key);
                 match_found = true;
             }
@@ -1076,7 +1113,7 @@ impl PaneRenderer {
 
                 self.batches.push(Batch {
                     vertices: verts.to_vec(),
-                    indices: vec![0, 1, 2, 1, 3, 2],
+                    indices: quad_indices(0).to_vec(),
                     vertex_buffer: None,
                     index_buffer: None,
                     bind_group: None,
@@ -1108,6 +1145,17 @@ impl PaneRenderer {
             if batch.vertices.is_empty() {
                 continue;
             }
+
+            let pipeline_key = Self::pipeline_key(&batch.key);
+            self.pipelines.entry(pipeline_key).or_insert_with(|| {
+                Self::create_pipeline(
+                    device,
+                    &self.shader,
+                    &self.pipeline_layout,
+                    self.format,
+                    pipeline_key,
+                )
+            });
 
             batch.vertex_buffer = Some(device.create_buffer_init(
                 &wgpu::util::BufferInitDescriptor {
@@ -1809,19 +1857,11 @@ impl PaneRenderer {
                 continue;
             };
 
-            let use_detailed = matches!(
-                &batch.key,
-                BatchKey::Textured {
-                    is_detailed: true,
-                    ..
-                }
-            );
+            let Some(pipeline) = self.pipelines.get(&Self::pipeline_key(&batch.key)) else {
+                continue;
+            };
 
-            if use_detailed {
-                rpass.set_pipeline(&self.pipeline_detailed);
-            } else {
-                rpass.set_pipeline(&self.pipeline_standard);
-            }
+            rpass.set_pipeline(pipeline);
 
             rpass.set_bind_group(1, bg, &[]);
             rpass.set_vertex_buffer(0, vb.slice(..));
