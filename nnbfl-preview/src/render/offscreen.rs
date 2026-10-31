@@ -10,12 +10,11 @@ use super::frame::{FrameView, prepare_frame};
 use crate::{
     LayoutData,
     camera::Camera,
+    config::OutputGamma,
     font::glyph_atlas::GlyphData,
-    renderer::{texture::TextureCache, textured_quad::PaneRenderer},
+    renderer::{canvas::Canvas, texture::TextureCache, textured_quad::PaneRenderer},
     ui::general::PaneVisibilityFlags,
 };
-
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 #[derive(Error, Debug)]
 pub enum RenderError {
@@ -36,6 +35,7 @@ pub enum RenderError {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DeviceOptions {
     pub software: bool,
+    pub gamma: OutputGamma,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -47,7 +47,7 @@ pub struct Pose {
 #[derive(Debug, Clone, Copy)]
 pub struct RenderSettings {
     pub scale: f32,
-    /// sRGB-encoded RGBA
+    /// RGBA as stored in the image
     pub background: [f32; 4],
     pub flags: PaneVisibilityFlags,
 }
@@ -98,7 +98,7 @@ impl FrameRange {
 pub struct Image {
     pub width: u32,
     pub height: u32,
-    /// sRGB-encoded, alpha not premultiplied
+    /// Alpha not premultiplied
     pub rgba: Vec<u8>,
 }
 
@@ -130,6 +130,7 @@ pub struct OffscreenRenderer {
     queue: wgpu::Queue,
     pane_renderer: PaneRenderer,
     texture_cache: TextureCache,
+    gamma: OutputGamma,
 }
 
 impl OffscreenRenderer {
@@ -163,13 +164,14 @@ impl OffscreenRenderer {
             .block_on()
             .map_err(|e| RenderError::Device(e.to_string()))?;
 
-        let pane_renderer = PaneRenderer::new(&device, &queue, FORMAT);
+        let pane_renderer = PaneRenderer::new(&device, &queue, Canvas::format(options.gamma));
 
         Ok(Self {
             device,
             queue,
             pane_renderer,
             texture_cache: TextureCache::new(),
+            gamma: options.gamma,
         })
     }
 
@@ -247,7 +249,7 @@ impl OffscreenRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
+            format: Canvas::format(self.gamma),
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
@@ -262,7 +264,7 @@ impl OffscreenRenderer {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear_color(settings.background)),
+                        load: wgpu::LoadOp::Clear(clear_color(settings.background, self.gamma)),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -353,11 +355,13 @@ impl OffscreenRenderer {
     }
 }
 
-fn clear_color([r, g, b, a]: [f32; 4]) -> wgpu::Color {
+fn clear_color([r, g, b, a]: [f32; 4], gamma: OutputGamma) -> wgpu::Color {
     let linear = |c: f32| {
         let c = f64::from(c);
 
-        if c <= 0.04045 {
+        if gamma == OutputGamma::Unorm {
+            c
+        } else if c <= 0.04045 {
             c / 12.92
         } else {
             ((c + 0.055) / 1.055).powf(2.4)

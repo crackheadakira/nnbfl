@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::{
-    config::{AppConfig, GameProfile, PRESETS},
+    config::{AppConfig, GameProfile, OutputGamma, PRESETS},
     game_config::Language,
     ui::{
         DrawUiWith,
@@ -48,6 +48,14 @@ impl DrawUiWith<&mut AppConfig, bool> for SettingsWindow {
                         row(ui, "Default", |ui| {
                             language_combo(ui, "settings_default_language", &mut config.language)
                         })
+                    });
+
+                    ui.separator();
+                    ui.heading("Output");
+                    ui.weak(GAMMA_HINT);
+
+                    changed |= grid(ui, "settings_output", |ui| {
+                        row(ui, "Without Profile", |ui| gamma_toggle(ui, &mut config.output_gamma, None))
                     });
 
                     ui.separator();
@@ -112,6 +120,27 @@ impl DrawUiWith<&mut AppConfig, bool> for SettingsWindow {
     }
 }
 
+pub const GAMMA_HINT: &str = "Whether the game draws to a UNORM framebuffer (the usual) or an sRGB one \
+     (a linear workflow).";
+
+pub fn gamma_toggle(ui: &mut egui::Ui, gamma: &mut OutputGamma, hover: Option<&str>) -> bool {
+    let mut changed = false;
+
+    ui.horizontal(|ui| {
+        for value in [OutputGamma::Unorm, OutputGamma::Srgb] {
+            let mut response = ui.selectable_value(gamma, value, value.label());
+
+            if let Some(hover) = hover {
+                response = response.on_hover_text(hover);
+            }
+
+            changed |= response.changed();
+        }
+    });
+
+    changed
+}
+
 pub fn profile_combo(ui: &mut egui::Ui, id: &str, config: &mut AppConfig) -> bool {
     let shown = config
         .active()
@@ -153,6 +182,10 @@ fn profile_fields(ui: &mut egui::Ui, i: usize, profile: &mut GameProfile) -> boo
 
         changed |= row(ui, "Layouts", |ui| {
             path_picker(ui, &mut profile.layouts, false)
+        });
+
+        changed |= row(ui, "Output", |ui| {
+            gamma_toggle(ui, &mut profile.output_gamma, None)
         });
 
         let mut patterns = profile.font_files.join(", ");

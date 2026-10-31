@@ -32,7 +32,7 @@ use crate::{
             GroupEditor, MaterialEditor, MaterialEditorContext, OverrideRequest, OverrideTarget,
             PaneEditor, PaneEditorContext, TextureEditState, TextureEditor,
         },
-        settings::{SettingsWindow, profile_combo},
+        settings::{GAMMA_HINT, SettingsWindow, gamma_toggle, profile_combo},
         shortcuts::Shortcuts,
         tree_view::TreeView,
     },
@@ -583,6 +583,18 @@ pub fn draw_ui(ui: &mut Ui, ctx: &mut RenderContext<'_>, screen_w: f32, screen_h
             ui.label("Profile:");
 
             if profile_combo(ui, "menu_active_profile", &mut ctx.ui_state.config) {
+                apply_config(ctx);
+            }
+
+            let config = &mut ctx.ui_state.config;
+            let mut gamma = config.output_gamma();
+            let hover = match config.active() {
+                Some(profile) => format!("Output for the {} profile\n\n{GAMMA_HINT}", profile.name),
+                None => format!("Output without a profile\n\n{GAMMA_HINT}"),
+            };
+
+            if gamma_toggle(ui, &mut gamma, Some(&hover)) {
+                config.set_output_gamma(gamma);
                 apply_config(ctx);
             }
 

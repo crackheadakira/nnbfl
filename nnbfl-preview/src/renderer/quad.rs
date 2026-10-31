@@ -37,11 +37,12 @@ pub struct GridUniforms {
     pub proj: [[f32; 4]; 4],
     pub resolution: [f32; 2],
     pub zoom: f32,
-    pub _padding: f32,
+    pub encode: u32,
 }
 
 pub struct GridRenderer {
     pub grid_pipeline: RenderPipelineContainer,
+    encode: bool,
 }
 
 impl GridRenderer {
@@ -63,13 +64,14 @@ impl GridRenderer {
                 proj: matrix,
                 resolution: [1920.0, 1080.0],
                 zoom: 1.0,
-                _padding: 0.0,
+                encode: 0,
             },
             wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
         );
 
         Self {
             grid_pipeline: grid_container,
+            encode: !surface_format.is_srgb(),
         }
     }
 
@@ -88,7 +90,7 @@ impl GridRenderer {
             proj: matrix,
             resolution: [width, height],
             zoom: camera.zoom,
-            _padding: 0.0,
+            encode: self.encode as u32,
         };
 
         queue.write_buffer(

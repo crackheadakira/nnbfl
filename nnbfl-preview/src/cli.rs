@@ -6,7 +6,7 @@ use nnbfl::sarc::file::MagicFiles;
 use crate::{
     LayoutData,
     archive::{DocStore, EntryPath, LayoutSource, file_stem},
-    config::AppConfig,
+    config::{AppConfig, OutputGamma},
     font::glyph_atlas::GlyphData,
     font::resolve::FontEnvironment,
     render::{
@@ -73,6 +73,10 @@ struct RenderArgs {
     /// The config profile fonts are looked up in, the config's active profile when not given
     #[arg(long)]
     profile: Option<String>,
+
+    /// Whether the game renders to a UNORM or an sRGB framebuffer, the profile's choice when not given
+    #[arg(long, value_enum)]
+    gamma: Option<OutputGamma>,
 
     /// Leaves text box glyphs out
     #[arg(long)]
@@ -229,7 +233,14 @@ fn list(file: &Path) -> i32 {
 }
 
 fn render(args: &RenderArgs) -> i32 {
-    let fonts = FontEnvironment::from_config(&AppConfig::load(), args.profile.as_deref());
+    let config = AppConfig::load();
+    let fonts = FontEnvironment::from_config(&config, args.profile.as_deref());
+    let gamma = args.gamma.unwrap_or_else(|| {
+        fonts
+            .profile
+            .as_ref()
+            .map_or(config.output_gamma, |p| p.output_gamma)
+    });
     let layout_dir = args.layout_dir.clone().or_else(|| {
         fonts
             .profile
@@ -268,6 +279,7 @@ fn render(args: &RenderArgs) -> i32 {
 
     let mut renderer = match OffscreenRenderer::new(DeviceOptions {
         software: args.software,
+        gamma,
     }) {
         Ok(renderer) => renderer,
         Err(e) => {

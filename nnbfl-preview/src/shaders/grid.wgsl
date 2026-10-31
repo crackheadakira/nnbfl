@@ -2,6 +2,7 @@ struct Uniforms {
     proj: mat4x4<f32>,
     resolution: vec2<f32>,
     zoom: f32,
+    encode: u32,
 };
 
 @group(0) @binding(0)
@@ -36,9 +37,14 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let is_x_line = grid_x < line_width || grid_x > (grid_size - line_width);
     let is_y_line = grid_y < line_width || grid_y > (grid_size - line_width);
 
+    var color = vec3<f32>(0.01, 0.01, 0.014);
     if is_x_line || is_y_line {
-        return vec4<f32>(0.032, 0.032, 0.051, 1.0);
+        color = vec3<f32>(0.032, 0.032, 0.051);
     }
 
-    return vec4<f32>(0.01, 0.01, 0.014, 1.0);
+    if uniforms.encode != 0u {
+        color = select(1.055 * pow(color, vec3<f32>(1.0 / 2.4)) - 0.055, color * 12.92, color <= vec3<f32>(0.0031308));
+    }
+
+    return vec4<f32>(color, 1.0);
 }

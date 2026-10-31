@@ -34,6 +34,7 @@ use nnbfl::{
 };
 use pollster::FutureExt;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use renderer::canvas::Canvas;
 use renderer::quad::GridRenderer;
 use renderer::texture::TextureCache;
 use renderer::textured_quad::PaneRenderer;
@@ -74,6 +75,7 @@ struct GpuState {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
 
+    canvas: Canvas,
     grid_renderer: GridRenderer,
     pane_renderer: PaneRenderer,
     selection_renderer: SelectionRenderer,
@@ -83,7 +85,7 @@ struct GpuState {
 }
 
 impl GpuState {
-    fn new(window: Arc<Window>) -> Self {
+    fn new(window: Arc<Window>, gamma: config::OutputGamma) -> Self {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -138,12 +140,13 @@ impl GpuState {
 
         surface.configure(&device, &config);
 
-        let grid_renderer = GridRenderer::new(&device, surface_format);
+        let canvas = Canvas::new(&device, surface_format, (size.width, size.height), gamma);
+        let grid_renderer = GridRenderer::new(&device, Canvas::format(gamma));
 
         let selection_renderer = SelectionRenderer::new(&device, surface_format);
 
         let texture_cache = TextureCache::new();
-        let pane_renderer = PaneRenderer::new(&device, &queue, surface_format);
+        let pane_renderer = PaneRenderer::new(&device, &queue, Canvas::format(gamma));
 
         let mut egui_renderer =
             egui_wgpu::Renderer::new(&device, surface_format, RendererOptions::default());
@@ -159,6 +162,7 @@ impl GpuState {
             device,
             queue,
             config,
+            canvas,
             grid_renderer,
             pane_renderer,
             texture_cache,
@@ -175,6 +179,15 @@ impl GpuState {
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
+        self.canvas
+            .resize(&self.device, (new_size.width, new_size.height));
+    }
+
+    fn set_output_gamma(&mut self, gamma: config::OutputGamma) {
+        let format = Canvas::format(gamma);
+        self.canvas.set_gamma(&self.device, gamma);
+        self.grid_renderer = GridRenderer::new(&self.device, format);
+        self.pane_renderer = PaneRenderer::new(&self.device, &self.queue, format);
     }
 
     fn render(
@@ -186,6 +199,15 @@ impl GpuState {
     ) {
         puffin::GlobalProfiler::lock().new_frame();
         puffin::profile_function!();
+
+        let gamma = ctx.ui_state.config.output_gamma();
+        if gamma != self.canvas.gamma {
+            self.set_output_gamma(gamma);
+
+            if let Some(layout) = ctx.layout_tabs.active_mut() {
+                layout.tree.request_rebatch();
+            }
+        }
 
         if ctx.layout_tabs.glyphs.atlas.is_dirty() {
             ctx.layout_tabs
@@ -410,17 +432,17 @@ impl GpuState {
 
         {
             let mut rpass = render_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("main_pass"),
+                label: Some("canvas_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: self.canvas.target(),
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                        load: wgpu::LoadOp::Clear(self.canvas.clear_color(wgpu::Color {
                             r: 0.10,
                             g: 0.10,
                             b: 0.12,
                             a: 1.0,
-                        }),
+                        })),
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -438,6 +460,31 @@ impl GpuState {
             }
 
             self.pane_renderer.render(&mut rpass);
+        }
+
+        {
+            let mut rpass = render_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("main_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            self.canvas.copy_to_surface(&mut rpass);
+
+            if let Some((sx, sy, sw, sh)) = scissor_rect {
+                rpass.set_scissor_rect(sx, sy, sw, sh);
+            }
 
             self.selection_renderer.render(&mut rpass);
 
@@ -1963,7 +2010,7 @@ impl ApplicationHandler for App {
         self.camera
             .fit(1280.0, 720.0, size.width as f32, size.height as f32);
 
-        let gpu = GpuState::new(window.clone());
+        let gpu = GpuState::new(window.clone(), self.ui_state.config.output_gamma());
 
         self.egui_state = Some(egui_state);
         self.gpu = Some(gpu);

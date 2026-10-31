@@ -949,6 +949,10 @@ impl PaneTree {
         }
     }
 
+    pub fn request_rebatch(&mut self) {
+        self.needs_rebatch = true;
+    }
+
     pub fn take_rebatch(&mut self) -> bool {
         std::mem::take(&mut self.needs_rebatch)
     }

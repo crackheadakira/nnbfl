@@ -3262,8 +3262,7 @@ checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 [[package]]
 name = "tomolib"
 version = "1.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9ac6aaa07b802223b36130dda7ea2047d1dd7ab22b008d6304d0eed7e702c20"
+source = "git+https://github.com/crackheadakira/tomo?rev=8042277c26e49310e22b75fb7fd291b027ff13be#8042277c26e49310e22b75fb7fd291b027ff13be"
 dependencies = [
  "aes",
  "base64",

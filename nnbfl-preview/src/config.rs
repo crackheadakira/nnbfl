@@ -11,7 +11,24 @@ pub struct AppConfig {
     pub system_font_dir: Option<PathBuf>,
     pub layout_dir: Option<PathBuf>,
     pub language: Language,
+    pub output_gamma: OutputGamma,
     pub profiles: Vec<GameProfile>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+pub enum OutputGamma {
+    #[default]
+    Unorm,
+    Srgb,
+}
+
+impl OutputGamma {
+    pub fn label(self) -> &'static str {
+        match self {
+            OutputGamma::Unorm => "UNORM",
+            OutputGamma::Srgb => "sRGB",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -23,11 +40,13 @@ pub struct GameProfile {
 
     /// File name patterns (`*` wildcards) picking the font sources in `fonts`
     pub font_files: Vec<String>,
+    pub output_gamma: OutputGamma,
 }
 
 pub struct Preset {
     pub name: &'static str,
     pub font_files: &'static [&'static str],
+    pub output_gamma: OutputGamma,
     pub hint: &'static str,
 }
 
@@ -35,22 +54,26 @@ pub const PRESETS: &[Preset] = &[
     Preset {
         name: "Generic",
         font_files: &[],
+        output_gamma: OutputGamma::Unorm,
         hint: "Every file in the font folder",
     },
     Preset {
         name: "Animal Crossing: New Horizons",
         font_files: &["*.sarc.zs"],
+        output_gamma: OutputGamma::Unorm,
         hint: "Fonts: romfs/Font, layouts: romfs/Layout",
     },
     Preset {
         name: "Tomodachi Life: Living the Dream",
         font_files: &["Font*.bfarc.zs"],
+        output_gamma: OutputGamma::Srgb,
         hint: "Fonts: romfs/Font, layouts: romfs/Layout",
     },
     Preset {
         name: "Mario Kart 8 Deluxe",
         font_files: &["font.sarc"],
-        hint: "Fonts: romfs/UI/<language> (bitmap fonts), layouts: romfs/UI",
+        output_gamma: OutputGamma::Unorm,
+        hint: "Fonts: romfs/UI/<language> (bitmap fonts), layouts: romfs/UI; UNORM output is a guess",
     },
 ];
 
@@ -59,6 +82,7 @@ impl GameProfile {
         Self {
             name: preset.name.to_string(),
             font_files: preset.font_files.iter().map(|p| p.to_string()).collect(),
+            output_gamma: preset.output_gamma,
             ..Default::default()
         }
     }
@@ -127,6 +151,19 @@ impl AppConfig {
 
     pub fn profile(&self, name: &str) -> Option<&GameProfile> {
         self.profiles.iter().find(|p| p.name == name)
+    }
+
+    pub fn output_gamma(&self) -> OutputGamma {
+        self.active().map_or(self.output_gamma, |p| p.output_gamma)
+    }
+
+    pub fn set_output_gamma(&mut self, gamma: OutputGamma) {
+        let name = self.active_profile.clone();
+
+        match name.and_then(|n| self.profiles.iter_mut().find(|p| p.name == n)) {
+            Some(profile) => profile.output_gamma = gamma,
+            None => self.output_gamma = gamma,
+        }
     }
 
     pub fn layout_dir(&self) -> Option<PathBuf> {
