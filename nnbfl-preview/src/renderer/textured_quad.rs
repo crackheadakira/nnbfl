@@ -260,20 +260,11 @@ pub fn vertex_corners_color_to_corner_tints(
     bottom_left_vertex_color: &Color4u8,
     bottom_right_vertex_color: &Color4u8,
 ) -> [[f32; 4]; 4] {
-    let to_f32_rgba = |color: &Color4u8| -> [f32; 4] {
-        let rgba: [f32; 4] = (*color).into();
-        if rgba[3] > 0.0 {
-            rgba
-        } else {
-            [1.0, 1.0, 1.0, 1.0]
-        }
-    };
-
     [
-        to_f32_rgba(top_left_vertex_color),
-        to_f32_rgba(top_right_vertex_color),
-        to_f32_rgba(bottom_left_vertex_color),
-        to_f32_rgba(bottom_right_vertex_color),
+        (*top_left_vertex_color).into(),
+        (*top_right_vertex_color).into(),
+        (*bottom_left_vertex_color).into(),
+        (*bottom_right_vertex_color).into(),
     ]
 }
 
