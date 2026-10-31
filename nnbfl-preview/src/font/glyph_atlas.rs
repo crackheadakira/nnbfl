@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use ttf_parser::{Face, GlyphId};
 
+use super::resolve::MemberMetrics;
 use crate::renderer::texture::TextureCache;
 
 pub const GLYPH_ATLAS_TEXTURE_NAME: &str = "__glyph_atlas";
@@ -20,6 +21,20 @@ pub struct AtlasGlyph {
     pub bearing_x: f32,
     pub bearing_y: f32,
     pub advance: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GlyphCell {
+    pub bitmap: AtlasGlyph,
+    pub width: f32,
+    pub height: f32,
+    pub bitmap_row: f32,
+    pub rows: f32,
+    pub advance: f32,
+    pub left: f32,
+
+    /// How far the cell top is above the baseline
+    pub top: f32,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -126,6 +141,52 @@ impl GlyphAtlas {
 
         self.glyphs.insert(key, entry);
         Some(entry)
+    }
+
+    pub fn cell(
+        &mut self,
+        font: &FontFace,
+        font_id: usize,
+        glyph_index: GlyphId,
+        size: f32,
+        ascent: f32,
+        member: &MemberMetrics,
+    ) -> Option<GlyphCell> {
+        let bitmap = self.glyph(font, font_id, glyph_index, size)?;
+        let (w, h) = (bitmap.width, bitmap.height);
+        let (scale_w, scale_h) = (member.width_scale, member.height_scale);
+        let bearing = f32::from(member.bearing_x);
+
+        let offset_from_top = ascent - (bitmap.bearing_y + h);
+        let cached_height = h + offset_from_top;
+
+        let (advance, left) = if member.override_bearing && w != 0.0 {
+            (
+                ((w + bearing) * scale_w).trunc(),
+                ((bearing / 2.0).trunc() * scale_w).trunc(),
+            )
+        } else if let Some(char_width) = member.char_width.map(f32::from) {
+            (
+                (char_width * scale_w).trunc(),
+                (((char_width - w) / 2.0).trunc() * scale_w).trunc(),
+            )
+        } else {
+            (
+                ((bitmap.advance.round() + bearing) * scale_w).trunc(),
+                ((bitmap.bearing_x + (bearing / 2.0).trunc()) * scale_w).trunc(),
+            )
+        };
+
+        Some(GlyphCell {
+            bitmap,
+            width: (w * scale_w).trunc(),
+            height: (cached_height * scale_h).trunc() + 1.0,
+            bitmap_row: offset_from_top,
+            rows: cached_height + 1.0,
+            advance,
+            left,
+            top: (ascent * scale_h + f32::from(member.baseline_offset)).trunc(),
+        })
     }
 
     fn allocate(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
@@ -273,13 +334,6 @@ impl FontFace {
 
     pub fn scale_factor(&self, size_px: f32) -> f32 {
         size_px / self.units_per_em
-    }
-
-    pub fn advance_width(&self, glyph_id: GlyphId, size_px: f32) -> f32 {
-        puffin::profile_function!();
-
-        let metrics = self.fontdue_font.metrics_indexed(glyph_id.0, size_px);
-        metrics.advance_width
     }
 
     pub fn kerning(&self, left: GlyphId, right: GlyphId, size_px: f32) -> f32 {

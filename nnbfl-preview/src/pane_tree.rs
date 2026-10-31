@@ -39,7 +39,7 @@ use crate::{
     archive_browser::{ArchiveEntry, resolve_nested_package_bytes},
     decompress_if_needed, extract_all_files_recursive,
     font::{
-        glyph_atlas::{FontFace, GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
+        glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphCell, GlyphData},
         library::FontIndex,
         resolve::{FontCache, MemberMetrics},
     },
@@ -2941,25 +2941,19 @@ fn build_text_glyph_quads(
         txt.font_size
     };
 
-    let font_size_px = metrics.width;
-    let raster_size = |member: MemberMetrics| match member.base_size {
-        0 => font_size_px,
-        size => size as f32,
-    };
-
     let scale_x = font_size.x / metrics.width.max(1.0);
     let scale_y = font_size.y / metrics.height.max(1.0);
 
-    let lines: Vec<Vec<GlyphChoice>> = text
+    let lines: Vec<Vec<Option<PlacedGlyph>>> = text
         .split('\n')
         .map(|line| {
             line.chars()
-                .map(|ch| (ch, glyphs.fonts.face_for(font_ref, ch)))
+                .map(|ch| place_glyph(glyphs, font_ref, ch, metrics.width))
                 .collect()
         })
         .collect();
 
-    let (font_cache, atlas) = (&glyphs.fonts, &mut glyphs.atlas);
+    let font_cache = &glyphs.fonts;
     let line_height = metrics.line_feed * scale_y + txt.line_space;
 
     let box_w = world_size.x;
@@ -2977,9 +2971,7 @@ fn build_text_glyph_quads(
 
     let line_widths: Vec<_> = lines
         .iter()
-        .map(|line| {
-            measure_line_width(font_cache, line, font_size_px, scale_x, txt.character_space)
-        })
+        .map(|line| line_width(font_cache, line, scale_x, txt.character_space))
         .collect();
 
     let total_text_height =
@@ -3002,41 +2994,38 @@ fn build_text_glyph_quads(
     let mut next_piece_id: usize = 1;
 
     for (line_idx, line) in lines.iter().enumerate() {
-        let start_x = box_lx
+        let mut pen_x = box_lx
             + match txt.text_alignment {
                 TextAlignment::Left | TextAlignment::Synchronous => 0.0,
                 TextAlignment::Center => (box_w - line_widths[line_idx]) * 0.5,
                 TextAlignment::Right => box_w - line_widths[line_idx],
             };
 
-        let mut pen_x = start_x;
-        let pen_y = start_y + line_idx as f32 * line_height + metrics.ascent * scale_y;
-        let mut prev_glyph = None;
+        let baseline = start_y + line_idx as f32 * line_height + metrics.ascent * scale_y;
+        let mut prev: Option<&PlacedGlyph> = None;
 
-        for &(ch, choice) in line {
-            let Some((face_id, member)) = choice else {
-                prev_glyph = None;
+        for placed in line {
+            let Some(placed) = placed else {
+                prev = None;
                 continue;
             };
 
-            let face = font_cache.face(face_id);
-            let Some(glyph_id) = face.glyph_id_for_char(ch) else {
-                prev_glyph = None;
-                continue;
-            };
+            if let Some(prev) = prev {
+                pen_x += txt.character_space + kerning(font_cache, prev, placed) * scale_x;
+            }
 
-            if ch != ' '
-                && let Some(atlas_glyph) = atlas.glyph(face, face_id, glyph_id, raster_size(member))
-                && atlas_glyph.width > 0.0
-                && atlas_glyph.height > 0.0
-            {
-                let (sx, sy) = (scale_x * member.width_scale, scale_y * member.height_scale);
-                let width = atlas_glyph.width * sx;
-                let height = atlas_glyph.height * sy;
-                let local_left = pen_x + atlas_glyph.bearing_x * sx;
-                let local_top = pen_y - atlas_glyph.bearing_y * sy - height;
-                let local_right = local_left + width;
-                let local_bottom = local_top + height;
+            let cell = &placed.cell;
+            let bitmap = &cell.bitmap;
+
+            if bitmap.width > 0.0 && bitmap.height > 0.0 {
+                // The cell's texture rows, from the ascent line down, stretch over its scaled height
+                let row_height = cell.height * scale_y / cell.rows;
+                let cell_top = baseline - cell.top * scale_y;
+
+                let local_left = pen_x + cell.left * scale_x;
+                let local_right = local_left + cell.width * scale_x;
+                let local_top = cell_top + cell.bitmap_row * row_height;
+                let local_bottom = local_top + bitmap.height * row_height;
 
                 let corners = [
                     Corners::rotate_point(
@@ -3075,17 +3064,17 @@ fn build_text_glyph_quads(
                     },
                     mat,
                     Vector2f::new(local_left, local_top),
-                    Vector2f::new(width, height),
+                    Vector2f::new(local_right - local_left, local_bottom - local_top),
                     corners.map(|c| c.into()),
                     is_visible,
                     pane_idx,
                     Some(GlyphQuadOverride {
                         texture_name: GLYPH_ATLAS_TEXTURE_NAME,
                         uvs: [
-                            atlas_glyph.uv_min,
-                            [atlas_glyph.uv_max[0], atlas_glyph.uv_min[1]],
-                            [atlas_glyph.uv_min[0], atlas_glyph.uv_max[1]],
-                            atlas_glyph.uv_max,
+                            bitmap.uv_min,
+                            [bitmap.uv_max[0], bitmap.uv_min[1]],
+                            [bitmap.uv_min[0], bitmap.uv_max[1]],
+                            bitmap.uv_max,
                         ],
                     }),
                 ) {
@@ -3093,77 +3082,86 @@ fn build_text_glyph_quads(
                 }
             }
 
-            pen_x += glyph_advance(
-                face,
-                face_id,
-                glyph_id,
-                prev_glyph,
-                member,
-                raster_size(member),
-            ) * scale_x
-                + txt.character_space;
-
-            prev_glyph = Some((face_id, glyph_id));
+            pen_x += cell.advance * scale_x;
+            prev = Some(placed);
         }
     }
 
     quads
 }
 
-type GlyphChoice = (char, Option<(usize, MemberMetrics)>);
-
-fn glyph_advance(
-    face: &FontFace,
-    face_id: usize,
-    glyph_id: GlyphId,
-    prev: Option<(usize, GlyphId)>,
-    metrics: MemberMetrics,
-    font_size_px: f32,
-) -> f32 {
-    let kerning = prev
-        .filter(|&(prev_face, _)| prev_face == face_id)
-        .map_or(0.0, |(_, prev)| face.kerning(prev, glyph_id, font_size_px));
-
-    (face.advance_width(glyph_id, font_size_px) + kerning) * metrics.width_scale
+struct PlacedGlyph {
+    face: usize,
+    glyph: GlyphId,
+    member: MemberMetrics,
+    size: f32,
+    cell: GlyphCell,
 }
 
-fn measure_line_width(
+fn place_glyph(
+    glyphs: &mut GlyphData,
+    font: usize,
+    ch: char,
+    fallback_size: f32,
+) -> Option<PlacedGlyph> {
+    let (face_id, member) = glyphs.fonts.face_for(font, ch)?;
+    let glyph = glyphs.fonts.face(face_id).glyph_id_for_char(ch)?;
+
+    let size = match member.base_size {
+        0 => (fallback_size + 0.5).floor().max(1.0),
+        size => size as f32,
+    };
+
+    let ascent = glyphs.fonts.cell_ascent(font, member, face_id, size);
+    let face = glyphs.fonts.face(face_id);
+    let cell = glyphs
+        .atlas
+        .cell(face, face_id, glyph, size, ascent, &member)?;
+
+    Some(PlacedGlyph {
+        face: face_id,
+        glyph,
+        member,
+        size,
+        cell,
+    })
+}
+
+fn kerning(fonts: &FontCache, prev: &PlacedGlyph, next: &PlacedGlyph) -> f32 {
+    let fixed = |m: &MemberMetrics| m.override_bearing || m.char_width.is_some();
+
+    if prev.face != next.face || fixed(&prev.member) || fixed(&next.member) {
+        return 0.0;
+    }
+
+    (fonts
+        .face(next.face)
+        .kerning(prev.glyph, next.glyph, next.size)
+        * next.member.width_scale)
+        .trunc()
+}
+
+fn line_width(
     fonts: &FontCache,
-    line: &[GlyphChoice],
-    font_size_px: f32,
+    line: &[Option<PlacedGlyph>],
     scale_x: f32,
     character_space: f32,
 ) -> f32 {
     let mut width = 0.0;
-    let mut prev_glyph = None;
-    let mut any_glyph = false;
+    let mut prev: Option<&PlacedGlyph> = None;
 
-    for &(ch, choice) in line {
-        let Some((face_id, metrics)) = choice else {
-            prev_glyph = None;
+    for placed in line {
+        let Some(placed) = placed else {
+            prev = None;
             continue;
         };
 
-        let face = fonts.face(face_id);
-        let Some(glyph_id) = face.glyph_id_for_char(ch) else {
-            prev_glyph = None;
-            continue;
-        };
+        if let Some(prev) = prev {
+            width += character_space + kerning(fonts, prev, placed) * scale_x;
+        }
 
-        let size = match metrics.base_size {
-            0 => font_size_px,
-            size => size as f32,
-        };
-
-        width += glyph_advance(face, face_id, glyph_id, prev_glyph, metrics, size) * scale_x
-            + character_space;
-
-        prev_glyph = Some((face_id, glyph_id));
-        any_glyph = true;
-    }
-
-    if any_glyph {
-        width -= character_space;
+        width += placed.cell.advance * scale_x;
+        prev = Some(placed);
     }
 
     width.max(0.0)

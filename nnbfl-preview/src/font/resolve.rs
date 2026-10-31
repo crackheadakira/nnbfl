@@ -73,6 +73,7 @@ pub struct MemberMetrics {
     pub descent: u16,
     pub bearing_x: i16,
     pub char_width: Option<u16>,
+    pub override_bearing: bool,
     pub exclude_from_height: bool,
     pub base_size: u32,
     pub line_feed_delta: i32,
@@ -209,6 +210,7 @@ impl Default for MemberMetrics {
             descent: 0,
             bearing_x: 0,
             char_width: None,
+            override_bearing: false,
             exclude_from_height: false,
             base_size: 0,
             line_feed_delta: 0,
@@ -230,6 +232,7 @@ impl From<&BfcpxFont> for MemberMetrics {
                 .flags
                 .is_override_char_width
                 .then_some(font.override_char_width),
+            override_bearing: font.flags.is_override_bearing_x,
             exclude_from_height: font.flags.is_exclude_from_height_calculation,
             ..Default::default()
         }
@@ -458,9 +461,38 @@ impl FontCache {
             return Some(bitmap);
         }
 
+        let (ratios, metrics) = self.group_ratios(font, group)?;
+        Some(ratios.at(metrics.base_size as f32, metrics.line_feed_delta))
+    }
+
+    pub fn cell_ascent(
+        &mut self,
+        font: usize,
+        member: MemberMetrics,
+        face: usize,
+        size: f32,
+    ) -> f32 {
+        let ratio = self.fonts[font]
+            .members
+            .iter()
+            .any(|m| {
+                m.metrics.group == member.group && m.bitmap.is_none() && m.metrics.base_size > 0
+            })
+            .then(|| self.group_ratios(font, member.group))
+            .flatten()
+            .map_or_else(
+                || FaceRatios::of(&self.faces[face], &member).bbox_ascent,
+                |(ratios, _)| ratios.bbox_ascent,
+            );
+
+        (ratio * size + 0.5).floor()
+    }
+
+    fn group_ratios(&mut self, font: usize, group: u16) -> Option<(FaceRatios, MemberMetrics)> {
         let members: Vec<usize> = (0..self.fonts[font].members.len())
             .filter(|&i| self.fonts[font].members[i].metrics.group == group)
             .filter(|&i| self.fonts[font].members[i].metrics.base_size > 0)
+            .filter(|&i| self.fonts[font].members[i].bitmap.is_none())
             .collect();
 
         let first = *members.first()?;
@@ -484,11 +516,7 @@ impl FontCache {
             }
         }
 
-        Some(
-            tallest
-                .or(any)?
-                .at(metrics.base_size as f32, metrics.line_feed_delta),
-        )
+        Some((tallest.or(any)?, metrics))
     }
 
     fn member_face(&mut self, font: usize, member: usize) -> Option<usize> {
