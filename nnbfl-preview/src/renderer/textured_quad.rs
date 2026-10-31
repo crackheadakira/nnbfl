@@ -278,15 +278,6 @@ fn uv_sets_by_source(mat: &Material, texture_uvs: &[TextureUv]) -> Vec<TextureUv
         .collect()
 }
 
-fn indirect_slots(combine_mode: u32) -> (bool, bool) {
-    let mode = combine_mode & 0xFF;
-    let each = mode == CombinerTevMode::EachIndirect as u32;
-    let single =
-        mode == CombinerTevMode::Indirect as u32 || mode == CombinerTevMode::BlendIndirect as u32;
-
-    (single || each, each)
-}
-
 pub fn vertex_corners_color_to_corner_tints(
     top_left_vertex_color: &Color4u8,
     top_right_vertex_color: &Color4u8,
@@ -1242,20 +1233,18 @@ impl PaneRenderer {
                             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                         });
 
-                    let (raw1, raw2) = indirect_slots(rep_quad.standard_material.combine_mode);
-
                     let view1 = rep_quad
                         .texture_name1
                         .as_ref()
                         .and_then(|n| texture_cache.get(n))
-                        .map(|t| if raw1 { &t.indirect_view } else { &t.view })
+                        .map(|t| &t.view)
                         .unwrap_or(view0);
 
                     let view2 = rep_quad
                         .texture_name2
                         .as_ref()
                         .and_then(|n| texture_cache.get(n))
-                        .map(|t| if raw2 { &t.indirect_view } else { &t.view })
+                        .map(|t| &t.view)
                         .unwrap_or(view0);
 
                     let sampler0 = make_sampler(rep_quad.sampler_0);
@@ -1425,20 +1414,18 @@ impl PaneRenderer {
         let gpu_tex0 = texture_cache.get(tex0_name);
         let view0 = gpu_tex0.map(|t| &t.view).unwrap_or(placeholder_view);
 
-        let (raw1, raw2) = indirect_slots(tq.standard_material.combine_mode);
-
         let view1 = tq
             .texture_name1
             .as_deref()
             .and_then(|n| texture_cache.get(n))
-            .map(|t| if raw1 { &t.indirect_view } else { &t.view })
+            .map(|t| &t.view)
             .unwrap_or(view0);
 
         let view2 = tq
             .texture_name2
             .as_deref()
             .and_then(|n| texture_cache.get(n))
-            .map(|t| if raw2 { &t.indirect_view } else { &t.view })
+            .map(|t| &t.view)
             .unwrap_or(view0);
 
         let make_sampler = |sampler_settings: WgpuSamplerSettings| -> wgpu::Sampler {

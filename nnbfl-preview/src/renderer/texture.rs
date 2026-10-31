@@ -131,9 +131,9 @@ impl egui_wgpu::CallbackTrait for PreviewCallback {
 
 pub struct GpuTexture {
     pub _texture: wgpu::Texture,
+
+    /// Decoded on sampling only for sRGB formats
     pub view: wgpu::TextureView,
-    /// Decoded only for sRGB formats
-    pub indirect_view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
 }
@@ -211,7 +211,7 @@ impl TextureCache {
         width: u32,
         height: u32,
     ) {
-        self.insert_rgba_as(device, queue, name, data, (width, height), true);
+        self.insert_rgba_as(device, queue, name, data, (width, height), false);
     }
 
     pub fn insert_rgba_as(
@@ -235,24 +235,22 @@ impl TextureCache {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+                view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
             },
             wgpu::util::TextureDataOrder::LayerMajor,
             data,
         );
 
-        let view = _texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let indirect_view = _texture.create_view(&wgpu::TextureViewDescriptor {
-            format: (!srgb).then_some(wgpu::TextureFormat::Rgba8Unorm),
+        let view = _texture.create_view(&wgpu::TextureViewDescriptor {
+            format: srgb.then_some(wgpu::TextureFormat::Rgba8UnormSrgb),
             ..Default::default()
         });
 
         let gpu_tex = GpuTexture {
             _texture,
             view,
-            indirect_view,
             width,
             height,
         };
