@@ -560,6 +560,10 @@ pub fn derive_from_window(
             mat.tex_maps = original_mat.tex_maps.clone();
         }
 
+        if mat.tex_maps.is_empty() {
+            continue;
+        }
+
         let (tex_w, tex_h) = if let Some(tex_name) = mat.tex_maps.first().map(|m| &m.texture_name) {
             bntxs
                 .iter()

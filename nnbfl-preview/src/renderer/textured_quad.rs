@@ -328,16 +328,6 @@ impl TexturedQuad {
             .map(|g| g.texture_name)
             .unwrap_or_else(|| tex_map.map(|m| m.texture_name.trim_end()).unwrap_or(""));
 
-        if glyph_override.is_none()
-            && tex_name.is_empty()
-            && mat.blend_mode.is_none()
-            && mat.alpha_compare.is_none()
-            && mat.tev_combiners.is_empty()
-            && mat.detailed_combiner.is_none()
-        {
-            return None;
-        }
-
         let texture_uvs = uv_sets_by_source(mat, pane_data.texture_uvs);
         let mut base_uvs = PaneNode::compute_uvs(&texture_uvs);
         let mut uvs = PaneNode::apply_srt_to_uvs(base_uvs, &mat.tex_srts);

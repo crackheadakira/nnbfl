@@ -182,6 +182,35 @@ const TEV_MODE_DARKEN: u32 = 10u;
 const TEV_MODE_INDIRECT: u32 = 11u;
 const TEV_MODE_BLEND_INDIRECT: u32 = 12u;
 const TEV_MODE_EACH_INDIRECT: u32 = 13u;
+const TEV_MODE_KEEP: u32 = 254u;
+
+fn three_texture_stage1(packed_mode: u32) -> u32 {
+    let mode = packed_mode & 0x00FFFFFFu;
+    var shader_mode = mode;
+
+    switch mode {
+        case TEV_MODE_ADD_SIGNED { shader_mode = TEV_MODE_SUBTRACT; }
+        case TEV_MODE_INTERPOLATE { shader_mode = TEV_MODE_ADD_MULTIPLICATE; }
+        case TEV_MODE_SUBTRACT { shader_mode = TEV_MODE_ADD_SIGNED; }
+        case TEV_MODE_ADD_MULTIPLICATE { shader_mode = TEV_MODE_KEEP; }
+        default {}
+    }
+
+    return (packed_mode & 0xFF000000u) | shader_mode;
+}
+
+fn three_texture_stage2(packed_mode: u32) -> u32 {
+    let mode = packed_mode & 0x00FFFFFFu;
+    var shader_mode = mode;
+
+    switch mode {
+        case TEV_MODE_INTERPOLATE { shader_mode = TEV_MODE_ADD_MULTIPLICATE; }
+        case TEV_MODE_ADD_MULTIPLICATE { shader_mode = TEV_MODE_KEEP; }
+        default {}
+    }
+
+    return (packed_mode & 0xFF000000u) | shader_mode;
+}
 
 fn combine_layer(base: vec4<f32>, tex: vec4<f32>, packed_mode: u32) -> vec4<f32> {
     let mode = packed_mode & 0x00FFFFFFu;
@@ -217,6 +246,7 @@ fn combine_layer(base: vec4<f32>, tex: vec4<f32>, packed_mode: u32) -> vec4<f32>
         }
         case TEV_MODE_LIGHTEN { out_rgb = max(base.rgb, tex.rgb); }
         case TEV_MODE_DARKEN { out_rgb = min(base.rgb, tex.rgb); }
+        case TEV_MODE_KEEP { out_rgb = base.rgb; }
         default { out_rgb = tex.rgb; }
     }
 
@@ -757,8 +787,8 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
                     mat.combine_mode2,
                 );
         } else {
-            let l1 = combine_layer(t[0], t[1], mat.combine_mode);
-            tex_color = combine_layer(l1, t[2], mat.combine_mode2);
+            let l1 = combine_layer(t[0], t[1], three_texture_stage1(mat.combine_mode));
+            tex_color = combine_layer(l1, t[2], three_texture_stage2(mat.combine_mode2));
         }
     }
 
