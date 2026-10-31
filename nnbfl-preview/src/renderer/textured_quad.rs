@@ -230,6 +230,7 @@ pub struct TexturedQuad {
 
     pub proj_scales: [[f32; 2]; 3],
     pub proj_translations: [[f32; 2]; 3],
+    pub projection_rect: Option<[f32; 4]>,
 
     pub indirect_rotation: f32,
     pub indirect_scale: Vector2f,
@@ -534,6 +535,7 @@ impl TexturedQuad {
             tex_srts: mat.tex_srts.clone(),
             proj_scales,
             proj_translations,
+            projection_rect: None,
             indirect_rotation,
             indirect_scale,
             material_idx: pane_data.material_idx,
@@ -1564,8 +1566,11 @@ impl PaneRenderer {
         layout_size: Vector2f,
         layer_idx: usize,
     ) -> [[f32; 4]; 2] {
-        let pane_cx = quad.x + quad.width * 0.5;
-        let pane_cy = quad.y + quad.height * 0.5;
+        let [pane_x, pane_y, pane_w, pane_h] =
+            quad.projection_rect
+                .unwrap_or([quad.x, quad.y, quad.width, quad.height]);
+        let pane_cx = pane_x + pane_w * 0.5;
+        let pane_cy = pane_y + pane_h * 0.5;
 
         let shift = layer_idx * 8;
         let packed = quad.standard_material.tex_gen_mode >> shift;
@@ -1583,7 +1588,7 @@ impl PaneRenderer {
         let (base_w, base_h) = if fitting_layout_size {
             (layout_size.x, layout_size.y)
         } else if fitting_pane_size {
-            (quad.width, quad.height)
+            (pane_w, pane_h)
         } else {
             let (tex_w, tex_h) =
                 Self::get_texture_size(quad, texture_cache, layer_idx).unwrap_or((0, 0));

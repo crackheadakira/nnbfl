@@ -50,7 +50,9 @@ use crate::{
             GlyphQuadOverride, MaterialPaneData, PaneQuadData, TexturedQuad,
             vertex_corners_color_to_corner_tints,
         },
-        window_quad::{calculate_scaled_frame_uvs, calculate_window_layout, derive_from_window},
+        window_quad::{
+            calculate_scaled_frame_uvs, calculate_window_layout, derive_from_window, window_rect,
+        },
     },
     traits::Displaying,
     ui::general::SUPPORTED_SARC_EXTENSIONS,
@@ -525,6 +527,7 @@ impl PaneNode {
                         tq.height = geom.height;
                         tq.corners = geom.corners;
                         tq.rotation = self.world_rotation;
+                        tq.projection_rect = Some(window_rect(corners.to_array()));
 
                         let Some(kind) = geom.frame_kind else {
                             continue;

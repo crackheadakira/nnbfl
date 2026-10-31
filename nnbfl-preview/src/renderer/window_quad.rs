@@ -450,6 +450,15 @@ pub fn calculate_window_layout(win: &WindowPane, corners: [[f32; 2]; 4]) -> Wind
     WindowLayoutGeometry { content, frames }
 }
 
+pub fn window_rect(corners: [[f32; 2]; 4]) -> [f32; 4] {
+    [
+        corners[0][0],
+        corners[0][1],
+        corners[1][0] - corners[0][0],
+        corners[2][1] - corners[0][1],
+    ]
+}
+
 pub fn derive_from_window(
     win: &WindowPane,
     material_list: &MaterialList,
@@ -627,6 +636,10 @@ pub fn derive_from_window(
         ) {
             out.push(tq);
         }
+    }
+
+    for tq in &mut out {
+        tq.projection_rect = Some(window_rect(corners));
     }
 
     out
