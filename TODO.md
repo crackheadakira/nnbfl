@@ -2,39 +2,40 @@
 
 - [ ] Better animation graph editor
     - [ ] Curve easing
-    - [ ] Adding / deleting keyframes
-    - [ ] Fix the graph editor zoom in resulting in the graph overlapping UI elements
-- [ ] Material creation
-    - [ ] Adding entries to material
-    - [ ] Allow modification of TexMap texture index
-    - [ ] Assigning materials to pane
-- [ ] Window pane support
-    - [ ] Fix window panes with one corner defined having incorrect UV anchor-point for bottom left & right
-    - [x] Smarter material upload
+    - [x] Adding / deleting keyframes
+    - [x] Fix the graph editor zoom in resulting in the graph overlapping UI elements
 - [ ] Config / options system
     - [ ] Zstd dictionary support
-    - [ ] Game-config system
+    - [x] Game-config system
 - [ ] Font rendering system for text box panes
     - [x] Bfttf / Bfotf parsing
-    - [ ] Bffnt / Bfcpx(?) support
+    - [x] Bfcpx support
+    - [ ] Bffnt support
     - [ ] Per character animations & rendering
-- [ ] Detailed pane editor (!!)
-    - [ ] User data editing (!!)
-    - [ ] PartsPane override editing
-- [ ] Texture uploading / replacing
+- [x] Texture uploading / replacing
     - [ ] BNTX texture setting editing
 - [ ] Intuitive selection
 - [ ] Pane tree view
     - [x] Fix 'draw only pane outlines'
     - [x] Fix 'draw pane outlines for textures'
-    - [ ] Adding new panes
+    - [x] Adding new panes
         - [ ] Importing PartsPanes
         - [ ] Creating a PartsPane layout
-    - [ ] Multi-select panes
+    - [x] Multi-select panes
     - [x] Reordering panes
 - [ ] Scissor pane support
 - [ ] Pop-up when loading from a SARC asking for which bflyt file to load
 - [ ] Add support for scaling by the handle's origin rather than center origin depending on shortcut pressed.
+- [x] Window pane support
+    - [x] Fix window panes with one corner defined having incorrect UV anchor-point for bottom left & right
+    - [x] Smarter material upload
+- [x] Detailed pane editor (!!)
+    - [x] User data editing (!!)
+    - [x] PartsPane override editing
+- [x] Material creation
+    - [x] Adding entries to material
+    - [x] Allow modification of TexMap texture index
+    - [x] Assigning materials to pane
 - [x] Animation group support
 - [x] Group editor
 - [x] Parent rotation affects children

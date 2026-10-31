@@ -614,6 +614,28 @@ fn section_fields(
         _ => false,
     };
 
+    if !matches!(
+        section,
+        BflytSection::PicturePane(_) | BflytSection::TextBoxPane(_) | BflytSection::WindowPane(_)
+    ) {
+        ui.add_enabled_ui(false, |ui| {
+            grid(ui, "no_material", |ui| {
+                row(ui, "Material", |ui| {
+                    egui::ComboBox::from_id_salt("no_material_combo")
+                        .selected_text("None")
+                        .show_ui(ui, |_| {});
+                    false
+                })
+            });
+        });
+
+        ui.weak(if matches!(section, BflytSection::PartsPane(_)) {
+            "A parts pane has no material of its own. Its content's materials are changed under Parts Overrides"
+        } else {
+            "Only Picture, Text Box and Window panes have a material"
+        });
+    }
+
     changed
 }
 
