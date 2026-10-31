@@ -252,6 +252,32 @@ pub fn build_indirect_matrices(rotation_deg: f32, scale: Vector2f) -> ([f32; 4],
     ([a0x, a1x, 0.0, tx], [a0y, a1y, 0.0, ty])
 }
 
+fn uv_sets_by_source(mat: &Material, texture_uvs: &[TextureUv]) -> Vec<TextureUv> {
+    let plain = TextureUv {
+        top_left: Vector2f::new(0.0, 0.0),
+        top_right: Vector2f::new(1.0, 0.0),
+        bottom_left: Vector2f::new(0.0, 1.0),
+        bottom_right: Vector2f::new(1.0, 1.0),
+    };
+
+    (0..3)
+        .map(|layer| {
+            let source = match mat.tex_coord_gens.get(layer).map(|g| g.tex_gen_source) {
+                Some(TexGenSrc::Tex1) => 1,
+                Some(TexGenSrc::Tex2) => 2,
+                Some(TexGenSrc::Tex0) => 0,
+                _ => layer,
+            };
+
+            texture_uvs
+                .get(source)
+                .or(texture_uvs.get(layer))
+                .cloned()
+                .unwrap_or_else(|| plain.clone())
+        })
+        .collect()
+}
+
 fn indirect_slots(combine_mode: u32) -> (bool, bool) {
     let mode = combine_mode & 0xFF;
     let each = mode == CombinerTevMode::EachIndirect as u32;
@@ -319,7 +345,8 @@ impl TexturedQuad {
             return None;
         }
 
-        let mut base_uvs = PaneNode::compute_uvs(pane_data.texture_uvs);
+        let texture_uvs = uv_sets_by_source(mat, pane_data.texture_uvs);
+        let mut base_uvs = PaneNode::compute_uvs(&texture_uvs);
         let mut uvs = PaneNode::apply_srt_to_uvs(base_uvs, &mat.tex_srts);
 
         if let Some(glyph) = &glyph_override {
