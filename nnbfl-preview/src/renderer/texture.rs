@@ -132,6 +132,8 @@ impl egui_wgpu::CallbackTrait for PreviewCallback {
 pub struct GpuTexture {
     pub _texture: wgpu::Texture,
     pub view: wgpu::TextureView,
+    /// Decoded only for sRGB formats
+    pub indirect_view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
 }
@@ -174,15 +176,21 @@ impl TextureCache {
             .filter(|tex| !self.textures.contains_key(&tex.name))
             .map(|tex| {
                 let res = decode_texture_rgba_with(tex, 0, ChannelResolve::Resolved);
-                (&tex.name, res)
+                let srgb = tex.info.format.raw() & 0xFF == 0x6;
+                (&tex.name, srgb, res)
             })
             .collect();
 
-        for (name, result) in decoded_textures {
+        for (name, srgb, result) in decoded_textures {
             match result {
-                Ok(rgba) => {
-                    self.insert_rgba(device, queue, name, &rgba.data, rgba.width, rgba.height)
-                }
+                Ok(rgba) => self.insert_rgba_as(
+                    device,
+                    queue,
+                    name,
+                    &rgba.data,
+                    (rgba.width, rgba.height),
+                    srgb,
+                ),
                 Err(e) => {
                     log::warn!("TextureCache: failed to decode '{name}': {e}");
                 }
@@ -203,6 +211,18 @@ impl TextureCache {
         width: u32,
         height: u32,
     ) {
+        self.insert_rgba_as(device, queue, name, data, (width, height), true);
+    }
+
+    pub fn insert_rgba_as(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        name: &str,
+        data: &[u8],
+        (width, height): (u32, u32),
+        srgb: bool,
+    ) {
         let _texture = device.create_texture_with_data(
             queue,
             &wgpu::TextureDescriptor {
@@ -217,17 +237,22 @@ impl TextureCache {
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
+                view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
             },
             wgpu::util::TextureDataOrder::LayerMajor,
             data,
         );
 
         let view = _texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let indirect_view = _texture.create_view(&wgpu::TextureViewDescriptor {
+            format: (!srgb).then_some(wgpu::TextureFormat::Rgba8Unorm),
+            ..Default::default()
+        });
 
         let gpu_tex = GpuTexture {
             _texture,
             view,
+            indirect_view,
             width,
             height,
         };
