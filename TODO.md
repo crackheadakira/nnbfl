@@ -10,8 +10,8 @@
 - [ ] Font rendering system for text box panes
     - [x] Bfttf / Bfotf parsing
     - [x] Bfcpx support
+    - [x] Per character animations & rendering
     - [ ] Bffnt support
-    - [ ] Per character animations & rendering
 - [x] Texture uploading / replacing
     - [ ] BNTX texture setting editing
 - [ ] Intuitive selection
@@ -26,6 +26,8 @@
 - [ ] Scissor pane support
 - [ ] Pop-up when loading from a SARC asking for which bflyt file to load
 - [ ] Add support for scaling by the handle's origin rather than center origin depending on shortcut pressed.
+- [ ] Render with the layout's own compiled shaders (bnsh)
+    - [ ] Look into [kirikae-maxwell](https://github.com/Cor3Duo/kirikae) for Maxwell -> SPIR-V translation
 - [x] Window pane support
     - [x] Fix window panes with one corner defined having incorrect UV anchor-point for bottom left & right
     - [x] Smarter material upload
