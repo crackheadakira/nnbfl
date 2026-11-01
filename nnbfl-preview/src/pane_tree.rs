@@ -41,6 +41,7 @@ use crate::{
         glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
         layout::{PlacedGlyph, TextLayout, place_glyph},
         library::FontIndex,
+        per_character::{CharTransform, CharValues, char_times},
     },
     renderer::{
         quad::Quad,
@@ -2991,16 +2992,29 @@ fn build_text_glyph_quads(
         box_height: box_h,
     };
 
-    let corner_tints = vertex_corners_color_to_corner_tints(
-        &txt.font_top_color,
-        &txt.font_top_color,
-        &txt.font_bottom_color,
-        &txt.font_bottom_color,
-    );
+    let laid_glyphs = layout.lay_out(&glyphs.fonts, &paragraphs);
 
+    let per_character = txt
+        .per_character_transform
+        .as_ref()
+        .filter(|_| txt.text_flags.is_per_character_transform)
+        .map(|pct| {
+            let advances: Vec<f32> = laid_glyphs.iter().map(|l| l.glyph.cell.advance).collect();
+            let times = char_times(
+                pct,
+                [pct.eval_time_offset, pct.eval_time_width],
+                &txt.text_flags,
+                &layout,
+                &advances,
+            );
+
+            (pct, times)
+        });
+
+    let anchor = layout.anchor();
     let mut next_piece_id: usize = 1;
 
-    for laid in layout.lay_out(&glyphs.fonts, &paragraphs) {
+    for (index, laid) in laid_glyphs.iter().enumerate() {
         let cell = &laid.glyph.cell;
         let bitmap = &cell.bitmap;
 
@@ -3009,35 +3023,53 @@ fn build_text_glyph_quads(
         }
 
         let row_height = cell.height * scale_y / cell.rows;
+        let cell_left = laid.x + cell.left * scale_x;
         let cell_top = laid.baseline - cell.top * scale_y;
+        let cell_width = cell.width * scale_x;
 
-        let local_left = (laid.x + cell.left * scale_x) * pane_scale.x;
-        let local_right = local_left + cell.width * scale_x * pane_scale.x;
-        let local_top = (cell_top + cell.bitmap_row * row_height) * pane_scale.y;
-        let local_bottom = local_top + bitmap.height * row_height * pane_scale.y;
+        let left = cell_left;
+        let right = left + cell_width;
+        let top = cell_top + cell.bitmap_row * row_height;
+        let bottom = top + bitmap.height * row_height;
 
-        let corners = [
-            Corners::rotate_point(
-                Vector2f::new(local_left, local_top),
-                world_center,
-                world_rotation,
-            ),
-            Corners::rotate_point(
-                Vector2f::new(local_right, local_top),
-                world_center,
-                world_rotation,
-            ),
-            Corners::rotate_point(
-                Vector2f::new(local_left, local_bottom),
-                world_center,
-                world_rotation,
-            ),
-            Corners::rotate_point(
-                Vector2f::new(local_right, local_bottom),
-                world_center,
-                world_rotation,
-            ),
-        ];
+        let mut points = [[left, top], [right, top], [left, bottom], [right, bottom]];
+        let mut top_color = txt.font_top_color;
+        let mut bottom_color = txt.font_bottom_color;
+
+        if let Some((pct, times)) = &per_character {
+            let transform = CharTransform::new(
+                &CharValues::evaluate(pct, times[index]),
+                [cell_left, cell_top, cell_width, cell.height * scale_y],
+                pct,
+                txt.text_flags.is_per_character_transform_origin_to_center,
+                anchor,
+            );
+
+            points = points.map(|p| transform.apply(p));
+            (top_color, bottom_color) = transform.tint(&top_color, &bottom_color);
+        }
+
+        let corner_tints = vertex_corners_color_to_corner_tints(
+            &top_color,
+            &top_color,
+            &bottom_color,
+            &bottom_color,
+        );
+
+        let points = points.map(|[x, y]| Vector2f::new(x * pane_scale.x, y * pane_scale.y));
+        let corners = points.map(|p| Corners::rotate_point(p, world_center, world_rotation));
+
+        let min = points
+            .iter()
+            .fold(Vector2f::new(f32::MAX, f32::MAX), |m, p| {
+                Vector2f::new(m.x.min(p.x), m.y.min(p.y))
+            });
+
+        let max = points
+            .iter()
+            .fold(Vector2f::new(f32::MIN, f32::MIN), |m, p| {
+                Vector2f::new(m.x.max(p.x), m.y.max(p.y))
+            });
 
         let piece_id = next_piece_id;
         next_piece_id += 1;
@@ -3052,8 +3084,8 @@ fn build_text_glyph_quads(
                 rotation: world_rotation,
             },
             mat,
-            Vector2f::new(local_left, local_top),
-            Vector2f::new(local_right - local_left, local_bottom - local_top),
+            min,
+            Vector2f::new(max.x - min.x, max.y - min.y),
             corners.map(|c| c.into()),
             is_visible,
             pane_idx,

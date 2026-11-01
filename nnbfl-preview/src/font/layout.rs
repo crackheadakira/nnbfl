@@ -71,6 +71,23 @@ pub struct LaidGlyph<'a> {
 }
 
 impl TextLayout {
+    pub fn anchor(&self) -> [f32; 2] {
+        [
+            self.box_left
+                + match self.position.horizontal {
+                    HorizontalPosition::Left => 0.0,
+                    HorizontalPosition::Center => self.box_width / 2.0,
+                    HorizontalPosition::Right => self.box_width,
+                },
+            self.box_top
+                + match self.position.vertical {
+                    VerticalPosition::Top => 0.0,
+                    VerticalPosition::Center => self.box_height / 2.0,
+                    VerticalPosition::Bottom => self.box_height,
+                },
+        ]
+    }
+
     pub fn lay_out<'a>(
         &self,
         fonts: &FontCache,
