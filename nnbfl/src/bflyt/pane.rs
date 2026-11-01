@@ -212,6 +212,27 @@ pub enum PerCharacterTransformLoopType {
     Loop,
 }
 
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
+#[repr(u8)]
+pub enum PerCharacterTransformOrigin {
+    #[default]
+    Center,
+    Bottom,
+}
+
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
+#[repr(u8)]
+pub enum HorizontalAlignment {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct LineTransform {
     pub line_offset: f32,
@@ -281,7 +302,7 @@ pub struct PerCharacterTransform {
     pub loop_type: PerCharacterTransformLoopType,
 
     /// Center of rotation
-    pub origin_v: VerticalPosition,
+    pub origin_v: PerCharacterTransformOrigin,
 
     /// Offset from the center of rotation
     pub origin_v_offset: f32,
@@ -290,7 +311,7 @@ pub struct PerCharacterTransform {
     pub fix_space_width: f32,
 
     /// Origin anchor for fixed character width or inserted whitespace
-    pub fix_space_or_insert_space_origin: HorizontalPosition,
+    pub fix_space_or_insert_space_origin: HorizontalAlignment,
 
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub anim_info: Option<AnimInfo>,
@@ -307,7 +328,7 @@ impl ReadWriteable for PerCharacterTransform {
 
         let mut origin_v_offset = 0.0;
         let mut fix_space_width = 0.0;
-        let mut fix_space_or_insert_space_origin = HorizontalPosition::Left;
+        let mut fix_space_or_insert_space_origin = HorizontalAlignment::Left;
 
         let is_extended =
             cursor.version.major > 8 || (cursor.version.major == 8 && cursor.version.minor >= 1);

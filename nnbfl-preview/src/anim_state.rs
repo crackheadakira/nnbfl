@@ -110,9 +110,7 @@ impl AnimInstance {
     pub fn curve(&self, track: &TimelineTrack) -> Option<&Curve> {
         let content = self.bflan.anim_info.contents.get(track.content_idx)?;
         let info = content.infos.get(track.info_idx)?;
-        let AnimInfo::Standard { targets, .. } = info else {
-            return None;
-        };
+        let AnimInfo::Standard { targets, .. } = info;
 
         Some(&targets.get(track.target_idx)?.curve)
     }
@@ -120,9 +118,7 @@ impl AnimInstance {
     pub fn curve_mut(&mut self, track: &TimelineTrack) -> Option<&mut Curve> {
         let content = self.bflan.anim_info.contents.get_mut(track.content_idx)?;
         let info = content.infos.get_mut(track.info_idx)?;
-        let AnimInfo::Standard { targets, .. } = info else {
-            return None;
-        };
+        let AnimInfo::Standard { targets, .. } = info;
 
         Some(&mut targets.get_mut(track.target_idx)?.curve)
     }
@@ -553,9 +549,7 @@ impl AnimationState {
                     let pane = state.panes.entry(pane_idx).or_default();
 
                     for info in &content.infos {
-                        let AnimInfo::Standard { targets, .. } = info else {
-                            continue;
-                        };
+                        let AnimInfo::Standard { targets, .. } = info;
 
                         for target in targets {
                             let value = eval_curve(&target.curve, frame);
@@ -597,9 +591,7 @@ impl AnimationState {
                     let material = state.materials.entry(name.to_string()).or_default();
 
                     for info in &content.infos {
-                        let AnimInfo::Standard { targets, .. } = info else {
-                            continue;
-                        };
+                        let AnimInfo::Standard { targets, .. } = info;
 
                         for target in targets {
                             let value = eval_curve(&target.curve, frame);

@@ -61,10 +61,7 @@ impl TimelineRow {
             let target_count: usize = content
                 .infos
                 .iter()
-                .map(|info| match info {
-                    AnimInfo::Standard { targets, .. } => targets.len(),
-                    _ => 0,
-                })
+                .map(|AnimInfo::Standard { targets, .. }| targets.len())
                 .sum();
 
             if target_count == 0 {
@@ -80,16 +77,14 @@ impl TimelineRow {
                 continue;
             }
 
-            for (info_idx, info) in content.infos.iter().enumerate() {
-                if let AnimInfo::Standard { targets, .. } = info {
-                    for (target_idx, target) in targets.iter().enumerate() {
-                        out.push(Self::Track(TimelineTrack {
-                            label: format!("{:?}", target.target),
-                            content_idx,
-                            info_idx,
-                            target_idx,
-                        }));
-                    }
+            for (info_idx, AnimInfo::Standard { targets, .. }) in content.infos.iter().enumerate() {
+                for (target_idx, target) in targets.iter().enumerate() {
+                    out.push(Self::Track(TimelineTrack {
+                        label: format!("{:?}", target.target),
+                        content_idx,
+                        info_idx,
+                        target_idx,
+                    }));
                 }
             }
         }

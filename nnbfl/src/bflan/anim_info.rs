@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     bflan::targets::AnimTarget,
-    core::{Cursor, FormatError, Placeholder32, ReadWriteable, Writer, tchar_code32},
+    core::{Cursor, FormatError, ReadWriteable, Writer, tchar_code32},
 };
 
 #[derive(
@@ -36,7 +36,9 @@ pub enum AnimInfoType {
     VectorGraphicsAnim = tchar_code32(b"FVGA"),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoPrimitive, FromPrimitive, Default)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoPrimitive, FromPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum AnimType {
     #[default]
@@ -52,10 +54,6 @@ pub enum AnimInfo {
     Standard {
         anim_type: AnimInfoType,
         targets: Vec<AnimTarget>,
-    },
-    ExtendedUserData {
-        anim_type: AnimInfoType,
-        data: Vec<ExtendedUserDataAnim>,
     },
 }
 
@@ -81,34 +79,21 @@ impl ReadWriteable for AnimInfo {
         let _reserve0 = cursor.read_u8()?;
         let _reserve1 = cursor.read_u16()?;
 
-        Ok(if magic == AnimInfoType::ExtendedUserDataAnim {
-            let mut data_array = Vec::with_capacity(anim_target_count as usize);
-            for _ in 0..anim_target_count {
-                let data = ExtendedUserDataAnim::parse(cursor)?;
-                data_array.push(data);
-            }
+        let mut target_offsets = Vec::with_capacity(anim_target_count as usize);
+        for _ in 0..anim_target_count {
+            target_offsets.push(cursor.read_u32()?);
+        }
 
-            Self::ExtendedUserData {
-                anim_type: magic,
-                data: data_array,
-            }
-        } else {
-            let mut target_offsets = Vec::with_capacity(anim_target_count as usize);
-            for _ in 0..anim_target_count {
-                target_offsets.push(cursor.read_u32()?);
-            }
+        let mut targets = Vec::with_capacity(anim_target_count as usize);
+        for offset in target_offsets {
+            cursor.section_start = Some(base_offset + offset as usize);
+            targets.push(AnimTarget::parse(cursor, &magic)?);
+            cursor.section_start = None;
+        }
 
-            let mut targets = Vec::with_capacity(anim_target_count as usize);
-            for offset in target_offsets {
-                cursor.section_start = Some(base_offset + offset as usize);
-                targets.push(AnimTarget::parse(cursor, &magic)?);
-                cursor.section_start = None;
-            }
-
-            Self::Standard {
-                anim_type: magic,
-                targets,
-            }
+        Ok(Self::Standard {
+            anim_type: magic,
+            targets,
         })
     }
 
@@ -141,93 +126,7 @@ impl ReadWriteable for AnimInfo {
                     writer.section_start = None;
                 }
             }
-            Self::ExtendedUserData { anim_type, data } => {
-                writer.write_u32((*anim_type).into());
-
-                writer.write_u8(data.len() as u8);
-                writer.write_u8(0);
-                writer.write_u16(0);
-
-                for ext_usd in data {
-                    ext_usd.write(writer);
-                }
-            }
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct ExtendedUserDataAnim {
-    pub header_size: u32,
-    pub unk_1: u16,
-    pub unk_2: u16,
-    pub base_count: u32,
-    pub unk_3: u32,
-
-    pub values: Vec<Vec<f32>>,
-
-    pub key: String,
-}
-
-impl ReadWriteable for ExtendedUserDataAnim {
-    fn parse(cursor: &mut Cursor) -> Result<Self, FormatError> {
-        let header_size = cursor.read_u32()?;
-        let unk_1 = cursor.read_u16()?;
-        let unk_2 = cursor.read_u16()?;
-
-        let base_count = cursor.read_u32()?;
-        let unk_3 = cursor.read_u32()?;
-
-        let mut values = Vec::with_capacity(3);
-        for _ in 0..3 {
-            let mut inner_values = Vec::with_capacity(base_count as usize);
-
-            for _ in 0..base_count {
-                inner_values.push(cursor.read_f32()?);
-            }
-
-            values.push(inner_values);
-        }
-
-        let string_start = cursor.pos + cursor.read_u32()? as usize;
-
-        cursor.seek(string_start)?;
-
-        let key = cursor.read_null_terminated_string()?;
-
-        Ok(Self {
-            header_size,
-            unk_1,
-            unk_2,
-            base_count,
-            unk_3,
-            values,
-
-            key,
-        })
-    }
-
-    fn write(&self, writer: &mut Writer) {
-        writer.mark("ExtendedUserDataAnim");
-
-        writer.write_u32(self.header_size);
-        writer.write_u16(self.unk_1);
-        writer.write_u16(self.unk_2);
-        writer.write_u32(self.base_count);
-        writer.write_u32(self.unk_3);
-
-        for vec in &self.values {
-            for val in vec {
-                writer.write_f32(*val);
-            }
-        }
-
-        let offset_pos = writer.write_placeholder_u32();
-        let string_start = writer.pos();
-        writer.write_null_terminated_string(&self.key);
-
-        let relative_offset = (string_start - offset_pos.0) as u32;
-        writer.patch_u32(offset_pos, relative_offset);
     }
 }
 
@@ -340,6 +239,15 @@ pub struct AnimContent {
     pub name: String,
     pub anim_type: AnimType,
     pub infos: Vec<AnimInfo>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_name: Option<String>,
+}
+
+impl AnimType {
+    fn has_target_name(&self) -> bool {
+        matches!(self, Self::User | Self::StateMachine)
+    }
 }
 
 impl ReadWriteable for AnimContent {
@@ -352,11 +260,18 @@ impl ReadWriteable for AnimContent {
         let anim_type: AnimType = cursor.read_u8()?.into();
         let _reserve0 = cursor.read_u16()?;
 
-        // Workaround for MiniGame_PictQuiz_00_MosaicNormal.bflan
-        if matches!(anim_type, AnimType::User) {
-            let info_array_offset = cursor.read_u32()?;
+        let mut target_name = None;
 
-            cursor.seek(base_offset + info_array_offset as usize)?;
+        if anim_type.has_target_name() {
+            let info_table_offset = cursor.read_u32()?;
+            let name_table_offset = base_offset + cursor.read_u32()? as usize;
+
+            cursor.seek(name_table_offset)?;
+            let name_offset = cursor.read_u32()?;
+            cursor.seek(name_table_offset + name_offset as usize)?;
+            target_name = Some(cursor.read_null_terminated_string()?);
+
+            cursor.seek(base_offset + info_table_offset as usize)?;
         }
 
         let mut info_offsets = Vec::with_capacity(anim_info_count as usize);
@@ -375,6 +290,7 @@ impl ReadWriteable for AnimContent {
             name,
             anim_type,
             infos,
+            target_name,
         })
     }
 
@@ -396,15 +312,15 @@ impl ReadWriteable for AnimContent {
         writer.write_u8(type_val);
         writer.write_u16(0);
 
-        let mut total_size_pos = Placeholder32(0);
+        let name_table_pos = if self.anim_type.has_target_name() {
+            let info_table_pos = writer.write_placeholder_u32();
+            let name_table_pos = writer.write_placeholder_u32();
 
-        // Workaround for MiniGame_PictQuiz_00_MosaicNormal.bflan
-        if matches!(self.anim_type, AnimType::User) {
-            let info_array_offset_pos = writer.write_placeholder_u32();
-            total_size_pos = writer.write_placeholder_u32();
-
-            writer.patch_u32(info_array_offset_pos, (writer.pos() - base_offset) as u32);
-        }
+            writer.patch_u32(info_table_pos, (writer.pos() - base_offset) as u32);
+            Some(name_table_pos)
+        } else {
+            None
+        };
 
         let mut info_offset_placeholders = Vec::with_capacity(self.infos.len());
         for _ in &self.infos {
@@ -424,20 +340,13 @@ impl ReadWriteable for AnimContent {
             writer.section_start = None;
         }
 
-        if matches!(self.anim_type, AnimType::User) {
-            let mut total_size = (writer.pos() - base_offset) as u32;
+        if let Some(name_table_pos) = name_table_pos {
+            let name_table = writer.pos();
+            writer.patch_u32(name_table_pos, (name_table - base_offset) as u32);
 
-            // this somehow works- don't question me
-            for info in &self.infos {
-                if let AnimInfo::ExtendedUserData { data, .. } = info {
-                    for anim in data {
-                        let string_overhead = 4 + anim.key.len() + 1;
-                        total_size -= string_overhead as u32;
-                    }
-                }
-            }
-
-            writer.patch_u32(total_size_pos, total_size);
+            let name_offset = writer.write_placeholder_u32();
+            writer.patch_u32(name_offset, (writer.pos() - name_table) as u32);
+            writer.write_null_terminated_string(self.target_name.as_deref().unwrap_or(""));
         }
 
         writer.align(4);

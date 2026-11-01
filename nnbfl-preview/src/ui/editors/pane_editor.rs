@@ -909,14 +909,14 @@ fn text_box_fields(ui: &mut egui::Ui, txt: &mut TextBoxPane, ctx: &PaneEditorCon
                     changed |= drag(ui, "Time Offset", &mut pct.eval_time_offset, 0.1);
                     changed |= drag(ui, "Time Width", &mut pct.eval_time_width, 0.1);
                     changed |= combo(ui, "Loop", &mut pct.loop_type, &["One Time", "Loop"]);
-                    changed |= combo(ui, "Origin Y", &mut pct.origin_v, VERTICAL);
+                    changed |= combo(ui, "Origin Y", &mut pct.origin_v, &["Center", "Bottom"]);
                     changed |= drag(ui, "Origin Y Offset", &mut pct.origin_v_offset, 0.1);
                     changed |= drag(ui, "Fixed Space Width", &mut pct.fix_space_width, 0.1);
                     changed |= combo(
                         ui,
                         "Space Origin",
                         &mut pct.fix_space_or_insert_space_origin,
-                        HORIZONTAL,
+                        &["Left", "Center", "Right"],
                     );
                     changed |= check(
                         ui,

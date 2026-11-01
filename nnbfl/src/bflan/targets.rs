@@ -87,6 +87,7 @@ pub enum TargetIndex {
     TexturePattern(TexturePatternTarget),
     BrickRepeat(BrickRepeatTarget),
     VectorGraphics(VectorGraphicsTarget),
+    ExtUserData(u8),
     #[default]
     Invalid,
 }
@@ -112,6 +113,7 @@ impl TargetIndex {
             Self::TexturePattern(t) => t.clone() as u8,
             Self::BrickRepeat(t) => t.clone() as u8,
             Self::VectorGraphics(t) => t.clone() as u8,
+            Self::ExtUserData(t) => *t,
             Self::Invalid => 255,
         }
     }
@@ -138,12 +140,15 @@ impl TargetIndex {
             AnimInfoType::TexturePatternAnim => Self::TexturePattern(raw.into()),
             AnimInfoType::BrickRepeatAnim => Self::BrickRepeat(raw.into()),
             AnimInfoType::VectorGraphicsAnim => Self::VectorGraphics(raw.into()),
+            AnimInfoType::ExtendedUserDataAnim => Self::ExtUserData(raw),
             _ => Self::Invalid,
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum PaneSrtTarget {
     #[default]
@@ -159,7 +164,9 @@ pub enum PaneSrtTarget {
     SizeY,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum FontShadowTarget {
     #[default]
@@ -172,7 +179,9 @@ pub enum FontShadowTarget {
     WhiteAlpha,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum PerCharacterTransformCurveTarget {
     #[default]
@@ -194,7 +203,9 @@ pub enum PerCharacterTransformCurveTarget {
     ScaleY,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum PerCharacterTransformTarget {
     #[default]
@@ -202,28 +213,36 @@ pub enum PerCharacterTransformTarget {
     EvalTimeWidth,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum TexturePatternTarget {
     #[default]
     Image,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum AlphaCompareTarget {
     #[default]
     CompareReference,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum VisibilityTarget {
     #[default]
     Visibility,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum VertexColorTarget {
     #[default]
@@ -246,7 +265,9 @@ pub enum VertexColorTarget {
     PaneAlpha,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum MaterialColorTarget {
     #[default]
@@ -280,7 +301,9 @@ pub enum MaterialColorTarget {
     Color4Alpha,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum TextureSrtTarget {
     #[default]
@@ -291,7 +314,9 @@ pub enum TextureSrtTarget {
     ScaleV,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum IndirectSrtTarget {
     #[default]
@@ -300,7 +325,9 @@ pub enum IndirectSrtTarget {
     ScaleV,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum BrickRepeatTarget {
     #[default]
@@ -313,7 +340,9 @@ pub enum BrickRepeatTarget {
     LocalRotate,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum WindowTarget {
     #[default]
@@ -323,14 +352,18 @@ pub enum WindowTarget {
     Right,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum VectorGraphicsTarget {
     #[default]
     Time,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum ProceduralShapeTarget {
     #[default]
@@ -398,14 +431,18 @@ pub enum ProceduralShapeTarget {
     OuterShadowSize,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum StateMachineTarget {
     #[default]
     PostToChild,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum MaskTextureTarget {
     #[default]
@@ -416,7 +453,9 @@ pub enum MaskTextureTarget {
     ScaleY,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, PartialEq, Eq, FromPrimitive, IntoPrimitive, Default,
+)]
 #[repr(u8)]
 pub enum DropShadowTarget {
     #[default]

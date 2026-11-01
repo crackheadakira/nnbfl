@@ -173,6 +173,7 @@ pub fn add_track(
                 name: target.name.clone(),
                 anim_type: target.anim_type.clone(),
                 infos: Vec::new(),
+                target_name: None,
             });
             info.contents.last_mut().unwrap()
         }
@@ -183,7 +184,6 @@ pub fn add_track(
     ) {
         Some(index) => match &mut content.infos[index] {
             AnimInfo::Standard { targets, .. } => targets,
-            AnimInfo::ExtendedUserData { .. } => unreachable!(),
         },
         None => {
             content.infos.push(AnimInfo::Standard {
@@ -193,7 +193,6 @@ pub fn add_track(
 
             match content.infos.last_mut().unwrap() {
                 AnimInfo::Standard { targets, .. } => targets,
-                AnimInfo::ExtendedUserData { .. } => unreachable!(),
             }
         }
     };
@@ -231,7 +230,6 @@ fn targets_mut<'a>(
         .get_mut(track.info_idx)?
     {
         AnimInfo::Standard { targets, .. } => Some(targets),
-        AnimInfo::ExtendedUserData { .. } => None,
     }
 }
 
@@ -357,6 +355,5 @@ pub fn track_info_type(info: &PaneAnimInfo, track: &TimelineTrack) -> Option<Ani
         .get(track.info_idx)?
     {
         AnimInfo::Standard { anim_type, .. } => Some(*anim_type),
-        AnimInfo::ExtendedUserData { .. } => None,
     }
 }

@@ -567,7 +567,6 @@ fn anims_changed(timeline: &mut TimelineState, tree: &mut PaneTree, reshaped: bo
 fn same_tracks(a: &PaneAnimInfo, b: &PaneAnimInfo) -> bool {
     let shape = |info: &AnimInfo| match info {
         AnimInfo::Standard { targets, .. } => targets.len(),
-        AnimInfo::ExtendedUserData { data, .. } => data.len(),
     };
 
     a.contents.len() == b.contents.len()

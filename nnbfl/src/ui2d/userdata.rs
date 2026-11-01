@@ -123,38 +123,22 @@ impl ReadWriteable for UserDataArray {
                     UserDataContent::SystemData(blocks) => {
                         writer.mark("SystemDataArray");
                         for block in blocks {
-                            let count = block.len();
+                            let block_start = writer.pos();
 
                             writer.write_u16(0);
-                            writer.write_u16(count as u16);
+                            writer.write_u16(block.len() as u16);
 
-                            let offset: u32 = if count > 1 { 0xC } else { 0x8 };
-                            writer.write_u32(offset);
+                            let offsets: Vec<_> = block
+                                .iter()
+                                .map(|_| writer.write_placeholder_u32())
+                                .collect();
 
-                            let size_ph = if count > 1 {
-                                Some(writer.write_placeholder_u32())
-                            } else {
-                                None
-                            };
+                            for (item, offset) in block.iter().zip(offsets) {
+                                writer.patch_u32(offset, (writer.pos() - block_start) as u32);
 
-                            let items_start = writer.pos();
-                            for item in block {
                                 match item {
                                     SystemData::Pane(pane) => pane.write(writer),
                                     SystemData::Layout(layout) => layout.write(writer),
-                                }
-                            }
-
-                            if let Some(ph) = size_ph {
-                                let items_written = writer.pos() - items_start;
-
-                                // rounding up to next 8 byte boundary
-                                let block_size = (items_written + 7) & !7;
-                                writer.patch_u32(ph, block_size as u32);
-
-                                let padding = block_size - items_written;
-                                for _ in 0..padding {
-                                    writer.write_u8(0);
                                 }
                             }
                         }
@@ -235,14 +219,17 @@ impl UserData {
 
                         let _reserve0 = cursor.read_u16()?;
                         let count = cursor.read_u16()?;
-                        let offset = cursor.read_u32()?;
-
-                        cursor.section_start = Some(cursor.pos);
-                        cursor.seek(base_offset + offset as usize)?;
+                        let offsets = (0..count)
+                            .map(|_| cursor.read_u32())
+                            .collect::<Result<Vec<_>, _>>()?;
 
                         let mut data_array = Vec::with_capacity(count as usize);
 
-                        for _ in 0..count {
+                        for offset in offsets {
+                            let item_start = base_offset + offset as usize;
+                            cursor.section_start = Some(item_start);
+                            cursor.seek(item_start)?;
+
                             let data = if cursor.last_was_pane {
                                 SystemData::Pane(PaneData::parse(cursor)?)
                             } else {
