@@ -78,6 +78,11 @@ pub struct StandardMaterial {
     pub proj_mtx0: [[f32; 4]; 2],
     pub proj_mtx1: [[f32; 4]; 2],
     pub proj_mtx2: [[f32; 4]; 2],
+
+    pub brick_base: [[f32; 4]; 3],
+    pub brick_transform: [[f32; 4]; 3],
+    pub brick_random: [[f32; 4]; 3],
+    pub brick_etc: [[f32; 4]; 3],
 }
 
 impl Default for StandardMaterial {
@@ -99,11 +104,60 @@ impl Default for StandardMaterial {
             proj_mtx0: [[1.0, 0.0, 0.0, 0.5], [0.0, 1.0, 0.0, 0.5]],
             proj_mtx1: [[1.0, 0.0, 0.0, 0.5], [0.0, 1.0, 0.0, 0.5]],
             proj_mtx2: [[1.0, 0.0, 0.0, 0.5], [0.0, 1.0, 0.0, 0.5]],
+            brick_base: [[0.0; 4]; 3],
+            brick_transform: [[0.0; 4]; 3],
+            brick_random: [[0.0; 4]; 3],
+            brick_etc: [[0.0; 4]; 3],
         }
     }
 }
 
 impl StandardMaterial {
+    fn set_brick_repeats(&mut self, mat: &Material, texture_count: usize) {
+        let bricks = mat
+            .tex_coord_gens
+            .iter()
+            .take(texture_count)
+            .enumerate()
+            .filter(|(_, coord_gen)| coord_gen.tex_gen_source == TexGenSrc::BrickRepeat)
+            .map(|(layer, _)| layer)
+            .zip(&mat.brick_repeat_shader_infos);
+
+        for (layer, brick) in bricks {
+            self.brick_base[layer] = [
+                brick.repeat_count.x,
+                brick.repeat_count.y,
+                brick.repeat_offset.x,
+                brick.repeat_offset.y,
+            ];
+
+            self.brick_transform[layer] =
+                [brick.scale.x, brick.scale.y, brick.rotate.to_radians(), 0.0];
+
+            let mut random = [0.0; 4];
+
+            if brick.flags.random_scale_offset {
+                let range = brick.random_scale_offset_range;
+                random[0] = range.x;
+                random[1] = range.y - range.x;
+            }
+
+            if brick.flags.random_rotate_offset {
+                let range = brick.random_rotate_offset_range;
+                random[2] = range.x.to_radians();
+                random[3] = (range.y - range.x).to_radians();
+            }
+
+            self.brick_random[layer] = random;
+            self.brick_etc[layer] = [
+                1.0,
+                f32::from(u8::from(brick.flags.random_rotate_direction)),
+                0.0,
+                0.0,
+            ];
+        }
+    }
+
     pub fn plain() -> Self {
         Self {
             is_plain: 1,
@@ -499,7 +553,7 @@ impl TexturedQuad {
         let packed_alpha_flags =
             compare_bits | (ref_value_bits << 3) | (tex_only_bit << 11) | (thresh_bit << 12);
 
-        let standard_material = StandardMaterial {
+        let mut standard_material = StandardMaterial {
             black_color: black_packed,
             white_color: white_packed,
             combine_mode,
@@ -512,6 +566,8 @@ impl TexturedQuad {
             indirect_mtx1,
             ..Default::default()
         };
+
+        standard_material.set_brick_repeats(mat, texture_count as usize);
 
         Some(TexturedQuad {
             x: position.x,

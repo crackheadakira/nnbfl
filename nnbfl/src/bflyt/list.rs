@@ -938,20 +938,101 @@ impl ReadWriteable for MaterialVectorTextureInfo {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct MaterialBrickRepeatFlags {
+    pub random_scale_offset: bool,
+    pub random_rotate_offset: bool,
+    pub random_rotate_direction: bool,
+}
+
+impl BitPackable<u8> for MaterialBrickRepeatFlags {
+    fn decode(raw: u8) -> Self {
+        Self {
+            random_scale_offset: (raw & 0x01) != 0,
+            random_rotate_offset: ((raw >> 1) & 0x01) != 0,
+            random_rotate_direction: ((raw >> 2) & 0x01) != 0,
+        }
+    }
+
+    fn encode(&self) -> u8 {
+        let mut raw = 0u8;
+
+        if self.random_scale_offset {
+            raw |= 0x01;
+        }
+
+        if self.random_rotate_offset {
+            raw |= 0x02;
+        }
+
+        if self.random_rotate_direction {
+            raw |= 0x04;
+        }
+
+        raw
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MaterialBrickRepeatShaderInfo {
-    pub data: Vec<u8>,
+    pub repeat_count: Vector2f,
+    pub repeat_offset: Vector2f,
+    pub scale: Vector2f,
+    pub rotate: f32,
+    pub random_scale_offset_range: Vector2f,
+    pub random_rotate_offset_range: Vector2f,
+    pub flags: MaterialBrickRepeatFlags,
 }
 
 impl ReadWriteable for MaterialBrickRepeatShaderInfo {
     fn parse(c: &mut Cursor) -> Result<Self, FormatError> {
-        let data = c.read_bytes(0x58)?.to_vec();
+        let repeat_count = Vector2f::parse(c)?;
+        let repeat_offset = Vector2f::parse(c)?;
+        let scale = Vector2f::parse(c)?;
+        let rotate = c.read_f32()?;
 
-        Ok(Self { data })
+        let _reserve0 = c.read_u32()?;
+        let _reserve1 = c.read_u64()?;
+        let _reserve2 = c.read_u64()?;
+
+        let random_scale_offset_range = Vector2f::parse(c)?;
+        let random_rotate_offset_range = Vector2f::parse(c)?;
+        let flags = MaterialBrickRepeatFlags::decode(c.read_u8()?);
+
+        let _reserve3 = c.read_bytes(3)?;
+        let _reserve4 = c.read_u32()?;
+        let _reserve5 = c.read_u64()?;
+        let _reserve6 = c.read_u64()?;
+
+        Ok(Self {
+            repeat_count,
+            repeat_offset,
+            scale,
+            rotate,
+            random_scale_offset_range,
+            random_rotate_offset_range,
+            flags,
+        })
     }
 
     fn write(&self, w: &mut Writer) {
-        w.write_bytes(&self.data);
+        self.repeat_count.write(w);
+        self.repeat_offset.write(w);
+        self.scale.write(w);
+        w.write_f32(self.rotate);
+
+        w.write_u32(0);
+        w.write_u64(0);
+        w.write_u64(0);
+
+        self.random_scale_offset_range.write(w);
+        self.random_rotate_offset_range.write(w);
+        w.write_u8(self.flags.encode());
+
+        w.write_bytes(&[0; 3]);
+        w.write_u32(0);
+        w.write_u64(0);
+        w.write_u64(0);
     }
 }
 

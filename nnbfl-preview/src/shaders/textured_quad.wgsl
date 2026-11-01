@@ -44,6 +44,11 @@ struct StandardMaterial {
     proj_mtx0: array<vec4<f32>, 2>,
     proj_mtx1: array<vec4<f32>, 2>,
     proj_mtx2: array<vec4<f32>, 2>,
+
+    brick_base: array<vec4<f32>, 3>,
+    brick_transform: array<vec4<f32>, 3>,
+    brick_random: array<vec4<f32>, 3>,
+    brick_etc: array<vec4<f32>, 3>,
 }
 
 //   stage_bits[6]
@@ -593,6 +598,63 @@ fn dc_run(
     return out;
 }
 
+fn brick_random(st: vec2<f32>) -> f32 {
+    return fract(sin(dot(st, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+}
+
+fn apply_brick_repeat(
+    uv: vec2<f32>,
+    base: vec4<f32>,
+    transform: vec4<f32>,
+    random: vec4<f32>,
+    etc: vec4<f32>,
+) -> vec2<f32> {
+    let repeat_uv = (uv - 0.5) * base.xy + 0.5;
+    let offset_uv = repeat_uv - floor(repeat_uv).yx * base.zw;
+    let local_uv = fract(offset_uv) - 0.5;
+
+    let random_value = brick_random(floor(offset_uv));
+    let scale = transform.xy + random.xx + vec2<f32>(random_value) * random.yy;
+
+    var angle = transform.z + random.z + random_value * random.w;
+    angle *= 1.0 - step(0.5, random_value) * 2.0 * etc.y;
+
+    let scaled = local_uv * scale;
+    let c = cos(angle);
+    let s = sin(angle);
+
+    return vec2<f32>(c * scaled.x - s * scaled.y, s * scaled.x + c * scaled.y) + 0.5;
+}
+
+fn tex_coord(layer: u32, uv: vec2<f32>, pos4: vec4<f32>, mat: StandardMaterial) -> vec2<f32> {
+    let mode = (mat.tex_gen_mode >> (layer * 8u)) & 0x3u;
+
+    if mode == 1u {
+        var proj = mat.proj_mtx0;
+        if layer == 1u {
+            proj = mat.proj_mtx1;
+        } else if layer == 2u {
+            proj = mat.proj_mtx2;
+        }
+
+        return vec2<f32>(dot(pos4, proj[0]), dot(pos4, proj[1]));
+    }
+
+    if mode == 2u {
+        let repeated = apply_brick_repeat(
+                uv,
+                mat.brick_base[layer],
+                mat.brick_transform[layer],
+                mat.brick_random[layer],
+                mat.brick_etc[layer],
+            );
+
+        return mix(uv, repeated, mat.brick_etc[layer].x);
+    }
+
+    return uv;
+}
+
 fn sample_textures(
     count: u32,
     uv0: vec2<f32>,
@@ -603,35 +665,18 @@ fn sample_textures(
 ) -> array<vec4<f32>, 3> {
     var t = array<vec4<f32>, 3>(vec4<f32>(1.0), vec4<f32>(1.0), vec4<f32>(1.0));
 
-    let bytes = (vec3<u32>(mat.tex_gen_mode) >> vec3<u32>(0u, 8u, 16u)) & vec3<u32>(0xFFu);
-
     let pos4 = vec4<f32>(pos_mesh, 0.0, 1.0);
 
     if count > 0u {
-        var uv = uv0;
-        if (bytes.x & 0x3u) != 0u {
-            uv = vec2<f32>(dot(pos4, mat.proj_mtx0[0]), dot(pos4, mat.proj_mtx0[1]));
-        }
-
-        t[0] = textureSample(t_texture0, s_sampler0, uv);
+        t[0] = textureSample(t_texture0, s_sampler0, tex_coord(0u, uv0, pos4, mat));
     }
 
     if count > 1u {
-        var uv = uv1;
-        if (bytes.y & 0x3u) != 0u {
-            uv = vec2<f32>(dot(pos4, mat.proj_mtx1[0]), dot(pos4, mat.proj_mtx1[1]));
-        }
-
-        t[1] = textureSample(t_texture1, s_sampler1, uv);
+        t[1] = textureSample(t_texture1, s_sampler1, tex_coord(1u, uv1, pos4, mat));
     }
 
     if count > 2u {
-        var uv = uv2;
-        if (bytes.z & 0x3u) != 0u {
-            uv = vec2<f32>(dot(pos4, mat.proj_mtx2[0]), dot(pos4, mat.proj_mtx2[1]));
-        }
-
-        t[2] = textureSample(t_texture2, s_sampler2, uv);
+        t[2] = textureSample(t_texture2, s_sampler2, tex_coord(2u, uv2, pos4, mat));
     }
 
     return t;
@@ -678,23 +723,9 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
     let use_texture_only = (mat.packed_alpha_flags >> 11u) & 1u;
     let use_thresholding_alpha_interpolation = (mat.packed_alpha_flags >> 12u) & 1u;
 
-    let byte0 = mat.tex_gen_mode & 0xFFu;
-    let byte1 = (mat.tex_gen_mode >> 8u) & 0xFFu;
     let pos4 = vec4<f32>(in.pos_mesh, 0.0, 1.0);
-
-    let is_proj0 = (byte0 & 0x3u) != 0u;
-    let uv0_indirect = select(
-            in.uv0,
-            vec2<f32>(dot(pos4, mat.proj_mtx0[0]), dot(pos4, mat.proj_mtx0[1])),
-            is_proj0,
-        );
-
-    let is_proj1 = (byte1 & 0x3u) != 0u;
-    let uv1_indirect = select(
-            in.uv0,
-            vec2<f32>(dot(pos4, mat.proj_mtx1[0]), dot(pos4, mat.proj_mtx1[1])),
-            is_proj1,
-        );
+    let uv0_indirect = tex_coord(0u, in.uv0, pos4, mat);
+    let uv1_indirect = tex_coord(1u, in.uv0, pos4, mat);
 
     if mat.debug_stage == 4u {
         return vec4<f32>(uv0_indirect, 0.0, 1.0);
@@ -829,12 +860,7 @@ fn fs_standard(in: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_detailed(in: VertexOutput) -> @location(0) vec4<f32> {
     let dc = u_detailed;
 
-    var dummy_mat: StandardMaterial;
-    dummy_mat.tex_gen_mode = u_standard.tex_gen_mode;
-    dummy_mat.indirect_mtx0 = u_standard.indirect_mtx0;
-    dummy_mat.indirect_mtx1 = u_standard.indirect_mtx1;
-
-    let t = sample_textures(dc.texture_count, in.uv0, in.uv1, in.uv2, in.pos_mesh, dummy_mat);
+    let t = sample_textures(dc.texture_count, in.uv0, in.uv1, in.uv2, in.pos_mesh, u_standard);
 
     let primary = in.tint;
 

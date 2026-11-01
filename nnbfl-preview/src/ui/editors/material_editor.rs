@@ -281,6 +281,7 @@ impl DrawUiWith<TexturePicker<'_>> for Material {
             let gens_parallel = self.tex_coord_gens.len() == tex_count;
             op.mirror(&mut self.tex_coord_gens, gens_parallel);
             op.mirror(&mut self.projection_tex_gens, false);
+            op.mirror(&mut self.brick_repeat_shader_infos, false);
         }
 
         let tex_count = self.tex_maps.len();
@@ -430,6 +431,71 @@ impl DrawUiWith<TexturePicker<'_>> for Material {
                 changed
             })
             .changed;
+
+        ui.separator();
+
+        changed |= ArrayEditor::new(
+            "brick_repeat_shader_infos",
+            &mut self.brick_repeat_shader_infos,
+        )
+        .title("Brick Repeat Texture Generators")
+        .max(tex_count)
+        .item_label(|i, _| format!("Brick Repeat {}", i + 1))
+        .show(ui, |ui, idx, brick| {
+            let mut changed = false;
+
+            changed |= brick.repeat_count.draw_with(ui, "Repeat Count");
+            ui.add_space(4.0);
+
+            changed |= brick.repeat_offset.draw_with(ui, "Repeat Offset");
+            ui.add_space(4.0);
+
+            changed |= brick.scale.draw_with(ui, "Scale");
+            ui.add_space(4.0);
+
+            egui::Grid::new(format!("brick_repeat_grid_{idx}"))
+                .num_columns(2)
+                .spacing([12.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label("Rotate");
+                    changed |= ui
+                        .add(egui::DragValue::new(&mut brick.rotate).speed(0.1))
+                        .changed();
+                    ui.end_row();
+                });
+            ui.add_space(4.0);
+
+            changed |= ui
+                .checkbox(&mut brick.flags.random_scale_offset, "Random Scale Offset")
+                .changed();
+
+            changed |= brick
+                .random_scale_offset_range
+                .draw_with(ui, "Random Scale Range");
+            ui.add_space(4.0);
+
+            changed |= ui
+                .checkbox(
+                    &mut brick.flags.random_rotate_offset,
+                    "Random Rotate Offset",
+                )
+                .changed();
+
+            changed |= brick
+                .random_rotate_offset_range
+                .draw_with(ui, "Random Rotate Range");
+            ui.add_space(4.0);
+
+            changed |= ui
+                .checkbox(
+                    &mut brick.flags.random_rotate_direction,
+                    "Random Rotate Direction",
+                )
+                .changed();
+
+            changed
+        })
+        .changed;
 
         ui.separator();
         changed |= ArrayEditor::new("tev_combiners", &mut self.tev_combiners)
