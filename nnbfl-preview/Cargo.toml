@@ -12,7 +12,7 @@ nnbfl = { path = "../nnbfl" }
 
 wgpu = "30"
 winit = "0.30"
-egui = "0.37"
+egui = { version = "0.37", features = ["default_fonts"] }
 egui-wgpu = "0.37"
 egui-winit = "0.37"
 bytemuck = { version = "1.16", features = ["derive"] }
