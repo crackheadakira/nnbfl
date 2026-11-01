@@ -505,6 +505,7 @@ impl PaneNode {
 
                     tq.corners = corners.to_array();
                     tq.rotation = self.world_rotation;
+                    tq.projection_origin = Some([center.x, center.y]);
                 }
 
                 if !self.window_quads.is_empty()
@@ -529,6 +530,7 @@ impl PaneNode {
                         tq.corners = geom.corners;
                         tq.rotation = self.world_rotation;
                         tq.projection_rect = Some(window_rect(corners.to_array()));
+                        tq.projection_origin = Some([center.x, center.y]);
 
                         let Some(kind) = geom.frame_kind else {
                             continue;
@@ -2741,6 +2743,10 @@ fn picture_quad(
         pane_idx,
         None,
     )
+    .map(|mut tq| {
+        tq.projection_origin = Some([placement.center.x, placement.center.y]);
+        tq
+    })
 }
 
 fn window_quads(
@@ -2761,14 +2767,20 @@ fn window_quads(
         placement.rotation,
     );
 
-    derive_from_window(
+    let mut quads = derive_from_window(
         win,
         material_list,
         corners.to_array(),
         placement.visible,
         pane_idx,
         sources.bntxs,
-    )
+    );
+
+    for tq in &mut quads {
+        tq.projection_origin = Some([placement.center.x, placement.center.y]);
+    }
+
+    quads
 }
 
 fn resolve_rect(

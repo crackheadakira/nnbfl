@@ -232,6 +232,8 @@ pub struct TexturedQuad {
     pub proj_translations: [[f32; 2]; 3],
     pub projection_rect: Option<[f32; 4]>,
 
+    pub projection_origin: Option<[f32; 2]>,
+
     pub indirect_rotation: f32,
     pub indirect_scale: Vector2f,
 
@@ -536,6 +538,7 @@ impl TexturedQuad {
             proj_scales,
             proj_translations,
             projection_rect: None,
+            projection_origin: None,
             indirect_rotation,
             indirect_scale,
             material_idx: pane_data.material_idx,
@@ -1569,8 +1572,9 @@ impl PaneRenderer {
         let [pane_x, pane_y, pane_w, pane_h] =
             quad.projection_rect
                 .unwrap_or([quad.x, quad.y, quad.width, quad.height]);
-        let pane_cx = pane_x + pane_w * 0.5;
-        let pane_cy = pane_y + pane_h * 0.5;
+        let [pane_cx, pane_cy] = quad
+            .projection_origin
+            .unwrap_or([pane_x + pane_w * 0.5, pane_y + pane_h * 0.5]);
 
         let shift = layer_idx * 8;
         let packed = quad.standard_material.tex_gen_mode >> shift;
