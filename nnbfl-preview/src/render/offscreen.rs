@@ -221,6 +221,7 @@ impl OffscreenRenderer {
             &self.queue,
             &self.texture_cache,
             layout,
+            glyphs,
             &FrameView {
                 selected: &[],
                 hidden: &HashSet::new(),

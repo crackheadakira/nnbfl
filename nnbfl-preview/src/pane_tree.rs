@@ -370,6 +370,7 @@ impl PaneNode {
                 self.world_size,
                 self.world_rotation,
                 self.visible,
+                self.animation.per_character,
                 self.pane_idx,
                 font_list,
                 fonts,
@@ -748,6 +749,8 @@ pub struct PaneTree {
 impl PaneTree {
     pub fn set_animation(&mut self, mut state: AnimationState) -> DirtyFlags {
         let mut changes = DirtyFlags::empty();
+        let mut retimed = Vec::new();
+
         self.for_each_mut(|node| {
             let next = state.panes.remove(&node.pane_idx).unwrap_or_default();
 
@@ -758,11 +761,19 @@ impl PaneTree {
                 changes.insert(DirtyFlags::TRANSFORM);
             }
 
+            if matches!(node.section, BflytSection::TextBoxPane(_))
+                && node.animation.per_character != next.per_character
+            {
+                retimed.push(node.pane_idx);
+            }
+
             if node.animation != next {
                 node.animation = next;
                 changes.insert(DirtyFlags::VERTICES);
             }
         });
+
+        self.material_dirty.extend(retimed);
 
         if self.material_animations != state.materials {
             self.material_animations = state.materials;
@@ -860,6 +871,17 @@ impl PaneTree {
 
     pub fn recompute_dirty(&mut self /*fonts: &mut FontCache, atlas: &mut GlyphAtlas*/) {
         puffin::profile_function!();
+
+        let moved_text: Vec<PaneId> = self
+            .iter()
+            .filter(|node| {
+                matches!(node.section, BflytSection::TextBoxPane(_))
+                    && node.dirty.contains(DirtyFlags::TRANSFORM)
+            })
+            .map(|node| node.pane_idx)
+            .collect();
+
+        self.material_dirty.extend(moved_text);
         let layout_center = Vector2f {
             x: self.layout_size.x * 0.5,
             y: self.layout_size.y * 0.5,
@@ -880,15 +902,6 @@ impl PaneTree {
         });
 
         self.roots = roots;
-
-        /*
-        let font_list = self.font_list.as_ref();
-        let material_list = self.material_list.as_ref();
-
-        for root in &mut self.roots {
-            root.recompute_glyphs(font_list, material_list, fonts, atlas);
-        }
-        */
     }
 
     pub fn rebuild_text(&mut self, glyphs: &mut GlyphData) {
@@ -921,6 +934,10 @@ impl PaneTree {
                 self.material_dirty.insert(pane);
             }
         }
+    }
+
+    pub fn has_dirty_visuals(&self) -> bool {
+        !self.material_dirty.is_empty() || !self.parts_dirty.is_empty()
     }
 
     pub fn mark_pane_dirty(&mut self, pane: PaneId) {
@@ -981,6 +998,7 @@ impl PaneTree {
             center: node.world_center,
             rotation: node.world_rotation,
             visible: node.visible,
+            per_character: node.animation.per_character,
         };
 
         let visuals = build_pane_visuals(&node.section, &placement, pane, &sources, glyphs);
@@ -1521,6 +1539,7 @@ impl PaneTree {
             center: Vector2f::default(),
             rotation: Vector3f::default(),
             visible: true,
+            per_character: [None; 2],
         };
 
         let mut node = assemble_node(
@@ -1892,6 +1911,7 @@ impl<'a> Builder<'a> {
             center,
             rotation: base.rotation,
             visible: is_visible,
+            per_character: [None; 2],
         };
 
         let visuals = build_pane_visuals(section, &placement, pane_idx, &sources, self.glyphs);
@@ -2342,6 +2362,7 @@ impl Builder<'_> {
             center: node.world_center,
             rotation: node.world_rotation,
             visible: node.visible,
+            per_character: node.animation.per_character,
         };
 
         let visuals = build_pane_visuals(
@@ -2501,6 +2522,7 @@ pub struct PanePlacement {
     pub center: Vector2f,
     pub rotation: Vector3f,
     pub visible: bool,
+    pub per_character: [Option<f32>; 2],
 }
 
 pub(crate) fn remap_section_materials(
@@ -2661,6 +2683,7 @@ pub fn build_pane_visuals(
                 placement.size,
                 placement.rotation,
                 placement.visible,
+                placement.per_character,
                 pane_idx,
                 sources.font_list,
                 sources.fonts,
@@ -2904,6 +2927,7 @@ fn build_text_glyph_quads(
     world_size: Vector2f,
     world_rotation: Vector3f,
     is_visible: bool,
+    per_character_time: [Option<f32>; 2],
     pane_idx: PaneId,
     font_list: Option<&FontList>,
     fonts: &FontIndex,
@@ -2913,7 +2937,12 @@ fn build_text_glyph_quads(
     puffin::profile_function!();
     let mut quads = Vec::new();
 
-    let Some(text) = txt.text.as_deref().filter(|t| !t.is_empty()) else {
+    let Some(text) = txt
+        .text
+        .as_deref()
+        .and_then(|t| t.split('\0').next())
+        .filter(|t| !t.is_empty())
+    else {
         return quads;
     };
 
@@ -3002,7 +3031,10 @@ fn build_text_glyph_quads(
             let advances: Vec<f32> = laid_glyphs.iter().map(|l| l.glyph.cell.advance).collect();
             let times = char_times(
                 pct,
-                [pct.eval_time_offset, pct.eval_time_width],
+                [
+                    per_character_time[0].unwrap_or(pct.eval_time_offset),
+                    per_character_time[1].unwrap_or(pct.eval_time_width),
+                ],
                 &txt.text_flags,
                 &layout,
                 &advances,

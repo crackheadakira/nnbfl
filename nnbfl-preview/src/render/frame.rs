@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use crate::{
     LayoutData,
+    font::glyph_atlas::GlyphData,
     pane_tree::PaneId,
     renderer::{texture::TextureCache, textured_quad::PaneRenderer},
     ui::general::PaneVisibilityFlags,
@@ -19,10 +20,16 @@ pub fn prepare_frame(
     queue: &wgpu::Queue,
     cache: &TextureCache,
     layout: &mut LayoutData,
+    glyphs: &mut GlyphData,
     view: &FrameView,
 ) {
     puffin::profile_function!();
     layout.timeline.anim_player.apply(&mut layout.tree);
+
+    if layout.tree.has_dirty_visuals() {
+        layout.tree.recompute_dirty_materials(glyphs);
+        layout.tree.update_animation_visuals();
+    }
 
     let layout_size = layout.tree.layout_size;
 

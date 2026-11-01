@@ -345,7 +345,8 @@ impl GpuState {
                 .apply_slope_edit(&pending_slope_edit);
         }
 
-        if let Some(layout) = ctx.layout_tabs.active_mut() {
+        let tabs = &mut ctx.layout_tabs;
+        if let Some(layout) = tabs.items.get_mut(tabs.active_index) {
             puffin::profile_scope!("pane_renderer_logic");
 
             render::prepare_frame(
@@ -354,6 +355,7 @@ impl GpuState {
                 &self.queue,
                 &self.texture_cache,
                 layout,
+                &mut tabs.glyphs,
                 &render::FrameView {
                     selected: &ctx.ui_state.pane_tree_view.selection,
                     hidden: &ctx.ui_state.pane_tree_view.hidden_panes,

@@ -453,6 +453,7 @@ pub struct PaneAnimation {
     pub visible: Option<bool>,
     pub alpha: Option<f32>,
     pub corner_colors: [[Option<f32>; 4]; 4],
+    pub per_character: [Option<f32>; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -567,6 +568,10 @@ impl AnimationState {
                                     PaneSrtTarget::SizeX => pane.size[0] = Some(value),
                                     PaneSrtTarget::SizeY => pane.size[1] = Some(value),
                                 },
+                                TargetIndex::PerCharacterTransform(channel) => {
+                                    pane.per_character[channel.clone() as usize] = Some(value);
+                                }
+
                                 TargetIndex::Visibility(_) => {
                                     pane.visible =
                                         Some(eval_curve_step_u16(&target.curve, frame) != 0);
