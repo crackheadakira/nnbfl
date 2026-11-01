@@ -17,8 +17,8 @@ use nnbfl::{
         },
         pane::{
             BasePaneUsageFlags, HorizontalPosition, MaterialUsageFlags, PANE_NAME_LEN, Pane,
-            PartsPane, PartsPaneBasicInfo, PartsProperty, PicturePane, TextAlignment, TextBoxPane,
-            TextureUv, VerticalPosition, WindowPane,
+            PartsPane, PartsPaneBasicInfo, PartsProperty, PicturePane, TextBoxPane, TextureUv,
+            VerticalPosition, WindowPane,
         },
     },
     core::FileReadWriteable,
@@ -30,7 +30,6 @@ use nnbfl::{
 };
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use tomolib::formats::bntx::Bntx;
-use ttf_parser::GlyphId;
 
 use crate::{
     anim_state::{
@@ -39,9 +38,9 @@ use crate::{
     archive_browser::{ArchiveEntry, resolve_nested_package_bytes},
     decompress_if_needed, extract_all_files_recursive,
     font::{
-        glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphCell, GlyphData},
+        glyph_atlas::{GLYPH_ATLAS_TEXTURE_NAME, GlyphData},
+        layout::{PlacedGlyph, TextLayout, place_glyph},
         library::FontIndex,
-        resolve::{FontCache, MemberMetrics},
     },
     renderer::{
         quad::Quad,
@@ -2944,7 +2943,7 @@ fn build_text_glyph_quads(
     let scale_x = font_size.x / metrics.width.max(1.0);
     let scale_y = font_size.y / metrics.height.max(1.0);
 
-    let lines: Vec<Vec<Option<PlacedGlyph>>> = text
+    let paragraphs: Vec<Vec<Option<PlacedGlyph>>> = text
         .split('\n')
         .map(|line| {
             line.chars()
@@ -2953,36 +2952,44 @@ fn build_text_glyph_quads(
         })
         .collect();
 
-    let font_cache = &glyphs.fonts;
-    let line_height = metrics.line_feed * scale_y + txt.line_space;
+    let box_w = txt.base.size.x;
+    let box_h = txt.base.size.y;
 
-    let box_w = world_size.x;
-    let box_h = world_size.y;
-    let box_lx = match txt.base.position.position_x {
-        HorizontalPosition::Center => -box_w * 0.5,
-        HorizontalPosition::Left => 0.0,
-        HorizontalPosition::Right => -box_w,
-    };
-    let box_ly = match txt.base.position.position_y {
-        VerticalPosition::Center => -box_h * 0.5,
-        VerticalPosition::Top => 0.0,
-        VerticalPosition::Bottom => -box_h,
-    };
+    let pane_scale = Vector2f::new(
+        if box_w != 0.0 {
+            world_size.x / box_w
+        } else {
+            1.0
+        },
+        if box_h != 0.0 {
+            world_size.y / box_h
+        } else {
+            1.0
+        },
+    );
 
-    let line_widths: Vec<_> = lines
-        .iter()
-        .map(|line| line_width(font_cache, line, scale_x, txt.character_space))
-        .collect();
-
-    let total_text_height =
-        line_height * lines.len().saturating_sub(1) as f32 + metrics.height * scale_y;
-
-    let start_y = box_ly
-        + match txt.text_origin.vertical {
+    let layout = TextLayout {
+        scale_x,
+        character_space: txt.character_space,
+        line_height: metrics.line_feed * scale_y + txt.line_space,
+        font_height: metrics.height * scale_y,
+        ascent: metrics.ascent * scale_y,
+        position: txt.text_origin,
+        alignment: txt.text_alignment,
+        center_ceiling: txt.text_flags.is_enable_center_ceiling,
+        box_left: match txt.base.position.position_x {
+            HorizontalPosition::Center => -box_w * 0.5,
+            HorizontalPosition::Left => 0.0,
+            HorizontalPosition::Right => -box_w,
+        },
+        box_top: match txt.base.position.position_y {
+            VerticalPosition::Center => -box_h * 0.5,
             VerticalPosition::Top => 0.0,
-            VerticalPosition::Center => (box_h - total_text_height) * 0.5,
-            VerticalPosition::Bottom => box_h - total_text_height,
-        };
+            VerticalPosition::Bottom => -box_h,
+        },
+        box_width: box_w,
+        box_height: box_h,
+    };
 
     let corner_tints = vertex_corners_color_to_corner_tints(
         &txt.font_top_color,
@@ -2993,178 +3000,78 @@ fn build_text_glyph_quads(
 
     let mut next_piece_id: usize = 1;
 
-    for (line_idx, line) in lines.iter().enumerate() {
-        let mut pen_x = box_lx
-            + match txt.text_alignment {
-                TextAlignment::Left | TextAlignment::Synchronous => 0.0,
-                TextAlignment::Center => (box_w - line_widths[line_idx]) * 0.5,
-                TextAlignment::Right => box_w - line_widths[line_idx],
-            };
+    for laid in layout.lay_out(&glyphs.fonts, &paragraphs) {
+        let cell = &laid.glyph.cell;
+        let bitmap = &cell.bitmap;
 
-        let baseline = start_y + line_idx as f32 * line_height + metrics.ascent * scale_y;
-        let mut prev: Option<&PlacedGlyph> = None;
+        if bitmap.width <= 0.0 || bitmap.height <= 0.0 {
+            continue;
+        }
 
-        for placed in line {
-            let Some(placed) = placed else {
-                prev = None;
-                continue;
-            };
+        let row_height = cell.height * scale_y / cell.rows;
+        let cell_top = laid.baseline - cell.top * scale_y;
 
-            if let Some(prev) = prev {
-                pen_x += txt.character_space + kerning(font_cache, prev, placed) * scale_x;
-            }
+        let local_left = (laid.x + cell.left * scale_x) * pane_scale.x;
+        let local_right = local_left + cell.width * scale_x * pane_scale.x;
+        let local_top = (cell_top + cell.bitmap_row * row_height) * pane_scale.y;
+        let local_bottom = local_top + bitmap.height * row_height * pane_scale.y;
 
-            let cell = &placed.cell;
-            let bitmap = &cell.bitmap;
+        let corners = [
+            Corners::rotate_point(
+                Vector2f::new(local_left, local_top),
+                world_center,
+                world_rotation,
+            ),
+            Corners::rotate_point(
+                Vector2f::new(local_right, local_top),
+                world_center,
+                world_rotation,
+            ),
+            Corners::rotate_point(
+                Vector2f::new(local_left, local_bottom),
+                world_center,
+                world_rotation,
+            ),
+            Corners::rotate_point(
+                Vector2f::new(local_right, local_bottom),
+                world_center,
+                world_rotation,
+            ),
+        ];
 
-            if bitmap.width > 0.0 && bitmap.height > 0.0 {
-                // The cell's texture rows, from the ascent line down, stretch over its scaled height
-                let row_height = cell.height * scale_y / cell.rows;
-                let cell_top = baseline - cell.top * scale_y;
+        let piece_id = next_piece_id;
+        next_piece_id += 1;
 
-                let local_left = pen_x + cell.left * scale_x;
-                let local_right = local_left + cell.width * scale_x;
-                let local_top = cell_top + cell.bitmap_row * row_height;
-                let local_bottom = local_top + bitmap.height * row_height;
-
-                let corners = [
-                    Corners::rotate_point(
-                        Vector2f::new(local_left, local_top),
-                        world_center,
-                        world_rotation,
-                    ),
-                    Corners::rotate_point(
-                        Vector2f::new(local_right, local_top),
-                        world_center,
-                        world_rotation,
-                    ),
-                    Corners::rotate_point(
-                        Vector2f::new(local_left, local_bottom),
-                        world_center,
-                        world_rotation,
-                    ),
-                    Corners::rotate_point(
-                        Vector2f::new(local_right, local_bottom),
-                        world_center,
-                        world_rotation,
-                    ),
-                ];
-
-                let piece_id = next_piece_id;
-                next_piece_id += 1;
-
-                if let Some(tq) = TexturedQuad::derive_from_material(
-                    MaterialPaneData {
-                        base_section: &txt.base,
-                        corner_tints,
-                        piece_id,
-                        material_idx: txt.material_index,
-                        texture_uvs: &[],
-                        rotation: world_rotation,
-                    },
-                    mat,
-                    Vector2f::new(local_left, local_top),
-                    Vector2f::new(local_right - local_left, local_bottom - local_top),
-                    corners.map(|c| c.into()),
-                    is_visible,
-                    pane_idx,
-                    Some(GlyphQuadOverride {
-                        texture_name: GLYPH_ATLAS_TEXTURE_NAME,
-                        uvs: [
-                            bitmap.uv_min,
-                            [bitmap.uv_max[0], bitmap.uv_min[1]],
-                            [bitmap.uv_min[0], bitmap.uv_max[1]],
-                            bitmap.uv_max,
-                        ],
-                    }),
-                ) {
-                    quads.push(tq);
-                }
-            }
-
-            pen_x += cell.advance * scale_x;
-            prev = Some(placed);
+        if let Some(tq) = TexturedQuad::derive_from_material(
+            MaterialPaneData {
+                base_section: &txt.base,
+                corner_tints,
+                piece_id,
+                material_idx: txt.material_index,
+                texture_uvs: &[],
+                rotation: world_rotation,
+            },
+            mat,
+            Vector2f::new(local_left, local_top),
+            Vector2f::new(local_right - local_left, local_bottom - local_top),
+            corners.map(|c| c.into()),
+            is_visible,
+            pane_idx,
+            Some(GlyphQuadOverride {
+                texture_name: GLYPH_ATLAS_TEXTURE_NAME,
+                uvs: [
+                    bitmap.uv_min,
+                    [bitmap.uv_max[0], bitmap.uv_min[1]],
+                    [bitmap.uv_min[0], bitmap.uv_max[1]],
+                    bitmap.uv_max,
+                ],
+            }),
+        ) {
+            quads.push(tq);
         }
     }
 
     quads
-}
-
-struct PlacedGlyph {
-    face: usize,
-    glyph: GlyphId,
-    member: MemberMetrics,
-    size: f32,
-    cell: GlyphCell,
-}
-
-fn place_glyph(
-    glyphs: &mut GlyphData,
-    font: usize,
-    ch: char,
-    fallback_size: f32,
-) -> Option<PlacedGlyph> {
-    let (face_id, member) = glyphs.fonts.face_for(font, ch)?;
-    let glyph = glyphs.fonts.face(face_id).glyph_id_for_char(ch)?;
-
-    let size = match member.base_size {
-        0 => (fallback_size + 0.5).floor().max(1.0),
-        size => size as f32,
-    };
-
-    let ascent = glyphs.fonts.cell_ascent(font, member, face_id, size);
-    let face = glyphs.fonts.face(face_id);
-    let cell = glyphs
-        .atlas
-        .cell(face, face_id, glyph, size, ascent, &member)?;
-
-    Some(PlacedGlyph {
-        face: face_id,
-        glyph,
-        member,
-        size,
-        cell,
-    })
-}
-
-fn kerning(fonts: &FontCache, prev: &PlacedGlyph, next: &PlacedGlyph) -> f32 {
-    let fixed = |m: &MemberMetrics| m.override_bearing || m.char_width.is_some();
-
-    if prev.face != next.face || fixed(&prev.member) || fixed(&next.member) {
-        return 0.0;
-    }
-
-    (fonts
-        .face(next.face)
-        .kerning(prev.glyph, next.glyph, next.size)
-        * next.member.width_scale)
-        .trunc()
-}
-
-fn line_width(
-    fonts: &FontCache,
-    line: &[Option<PlacedGlyph>],
-    scale_x: f32,
-    character_space: f32,
-) -> f32 {
-    let mut width = 0.0;
-    let mut prev: Option<&PlacedGlyph> = None;
-
-    for placed in line {
-        let Some(placed) = placed else {
-            prev = None;
-            continue;
-        };
-
-        if let Some(prev) = prev {
-            width += character_space + kerning(fonts, prev, placed) * scale_x;
-        }
-
-        width += placed.cell.advance * scale_x;
-        prev = Some(placed);
-    }
-
-    width.max(0.0)
 }
 
 pub fn material_name_error(

@@ -136,8 +136,8 @@ impl FontIndex {
 
         let mut keys = vec![name.clone()];
 
-        if let Some(stem) = name.strip_suffix(".bfcpx") {
-            keys.push(format!("{stem}.fcpx"));
+        if let Some((stem, ext)) = name.rsplit_once(".bf") {
+            keys.push(format!("{stem}.f{ext}"));
         }
 
         if let Some((_, firmware)) = DUMP_NAMES.iter().find(|(dump, _)| *dump == name) {

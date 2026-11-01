@@ -24,6 +24,7 @@ pub struct FontEnvironment {
     pub profile: Option<GameProfile>,
     pub system_font_dir: Option<PathBuf>,
     pub language: Language,
+    pub extra_fonts: Vec<PathBuf>,
 }
 
 impl FontEnvironment {
@@ -45,6 +46,7 @@ impl FontEnvironment {
             language: config.language,
             profile,
             system_font_dir: config.system_font_dir.clone(),
+            extra_fonts: Vec::new(),
         }
     }
 }
@@ -283,6 +285,7 @@ pub struct FontCache {
     fonts: Vec<ResolvedFont>,
     font_ids: HashMap<(u64, String), usize>,
     env: FontEnvironment,
+    extra: Vec<Arc<FontIndex>>,
     profile: Vec<Arc<FontIndex>>,
     system: Option<Arc<FontIndex>>,
     indices: HashMap<PathBuf, Arc<FontIndex>>,
@@ -315,6 +318,27 @@ impl FontCache {
                     .entry(path.clone())
                     .or_insert_with(|| {
                         let index = FontIndex::from_paths(std::slice::from_ref(&path));
+                        log::info!("Indexed {} fonts in {}", index.len(), path.display());
+                        Arc::new(index)
+                    })
+                    .clone()
+            })
+            .collect();
+
+        self.extra = env
+            .extra_fonts
+            .iter()
+            .map(|path| {
+                self.indices
+                    .entry(path.clone())
+                    .or_insert_with(|| {
+                        let files = if path.is_dir() {
+                            list_files(path, false)
+                        } else {
+                            vec![path.clone()]
+                        };
+
+                        let index = FontIndex::from_paths(&files);
                         log::info!("Indexed {} fonts in {}", index.len(), path.display());
                         Arc::new(index)
                     })
@@ -719,6 +743,7 @@ impl FontCache {
             .map(|(stem, ext)| format!("{stem}_{}.{ext}", self.env.language.code_str()));
 
         let sources = std::iter::once(archive)
+            .chain(self.extra.iter().map(Arc::as_ref))
             .chain(self.profile.iter().map(Arc::as_ref))
             .chain(self.system.as_deref());
 

@@ -78,6 +78,10 @@ struct RenderArgs {
     #[arg(long, value_enum)]
     gamma: Option<OutputGamma>,
 
+    /// Font files, folders or archives to look fonts up in when the layout's archive lacks them
+    #[arg(long = "fonts", value_name = "PATH")]
+    font_sources: Vec<PathBuf>,
+
     /// Leaves text box glyphs out
     #[arg(long)]
     no_text: bool,
@@ -234,13 +238,18 @@ fn list(file: &Path) -> i32 {
 
 fn render(args: &RenderArgs) -> i32 {
     let config = AppConfig::load();
-    let fonts = FontEnvironment::from_config(&config, args.profile.as_deref());
+    let fonts = FontEnvironment {
+        extra_fonts: args.font_sources.clone(),
+        ..FontEnvironment::from_config(&config, args.profile.as_deref())
+    };
+
     let gamma = args.gamma.unwrap_or_else(|| {
         fonts
             .profile
             .as_ref()
             .map_or(config.output_gamma, |p| p.output_gamma)
     });
+
     let layout_dir = args.layout_dir.clone().or_else(|| {
         fonts
             .profile

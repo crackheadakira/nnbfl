@@ -189,8 +189,8 @@ pub struct TextPosition {
 impl BitPackable<u8> for TextPosition {
     fn decode(raw: u8) -> Self {
         Self {
-            horizontal: ((raw >> 2) & 0x03).into(),
-            vertical: (raw & 0x03).into(),
+            horizontal: (raw & 0x03).into(),
+            vertical: ((raw >> 2) & 0x03).into(),
         }
     }
 
@@ -198,7 +198,7 @@ impl BitPackable<u8> for TextPosition {
         let h: u8 = self.horizontal.into();
         let v: u8 = self.vertical.into();
 
-        (h << 2) | (v & 0x03)
+        (h & 0x03) | (v << 2)
     }
 }
 
